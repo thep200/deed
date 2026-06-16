@@ -1,0 +1,19 @@
+# Build & packaging output
+/build/
+/dist/
+
+# vcpkg manifest mode (rebuilt tu vcpkg.json)
+/vcpkg_installed/
+
+# Local caches (ccache theo mise.toml)
+/.cache/
+/.claude/
+
+/docs/
+
+# CMake per-machine (khong vao VCS)
+CMakeUserPresets.json
+
+# macOS
+.DS_Store
+.env

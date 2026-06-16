@@ -1,0 +1,31 @@
+# mise quan ly HOST BUILD TOOLS (khong quan ly thu vien C++ -> do vcpkg lo).
+# `mise install` de keo dung version da pin; env duoi tu dong ap khi cd vao repo.
+#
+# Luu y: KHONG dat "pkgconf" o day - mise registry khong co shorthand do, va vcpkg
+# da tu kem pkgconf noi bo cho cac port can no -> khong can pkg-config he thong.
+
+[tools]
+cmake = "latest"
+ninja = "latest"
+
+[env]
+# vcpkg dat o vi tri co dinh, dung chung nhieu project (bootstrap mot lan - xem SETUP.md).
+VCPKG_ROOT = "{{env.HOME}}/vcpkg"
+
+# Build voi Ninja.
+CMAKE_GENERATOR = "Ninja"
+
+# Apple Silicon -> arm64-osx ; Intel -> doi thanh "x64-osx".
+VCPKG_DEFAULT_TRIPLET = "arm64-osx"
+
+# Day song song khi vcpkg build deps tu nguon (gRPC rat nang lan dau).
+# Bo comment neu muon ep so job (mac dinh = so core).
+# VCPKG_MAX_CONCURRENCY = "8"
+
+# (TUY CHON) ccache tang toc build lai CODE CUA BAN. Phan deps nang (gRPC...) da
+# duoc vcpkg binary cache lo, nen ccache khong bat buoc. Muon dung:
+#   brew install ccache          # hoac thu: mise use aqua:ccache/ccache
+# roi bo comment 3 dong duoi:
+# CMAKE_C_COMPILER_LAUNCHER   = "ccache"
+# CMAKE_CXX_COMPILER_LAUNCHER = "ccache"
+# CCACHE_DIR                  = "{{config_root}}/.cache/ccache"

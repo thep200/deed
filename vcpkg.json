@@ -1,0 +1,10 @@
+{
+  "name": "api-client",
+  "version-string": "0.1.0",
+  "description": "Lightweight REST + gRPC API client (Core C++ + macOS AppKit adapter)",
+  "dependencies": [
+    "cpr",
+    "nlohmann-json",
+    "grpc"
+  ]
+}
