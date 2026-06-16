@@ -271,12 +271,19 @@ Environment envFromJson(const json& j) {
 }
 
 json toJson(const AppConfig& c) {
-    return json{{"defaultTimeoutMs", c.defaultTimeoutMs}, {"verifyTls", c.verifyTls}};
+    return json{{"defaultTimeoutMs", c.defaultTimeoutMs},
+                {"verifyTls", c.verifyTls},
+                {"lastCollectionRoot", c.lastCollectionRoot},
+                {"fontName", c.fontName},
+                {"fontSize", c.fontSize}};
 }
 AppConfig appConfigFromJson(const json& j) {
     AppConfig c;
     c.defaultTimeoutMs = getInt(j, "defaultTimeoutMs", 30000);
     c.verifyTls = getBool(j, "verifyTls", true);
+    c.lastCollectionRoot = getStr(j, "lastCollectionRoot");
+    c.fontName = getStr(j, "fontName");
+    c.fontSize = getInt(j, "fontSize", 11);
     return c;
 }
 

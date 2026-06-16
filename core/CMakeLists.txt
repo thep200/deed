@@ -15,6 +15,7 @@ add_library(core STATIC
   src/engine.cpp
   src/shell_tokenize.cpp
   src/curl_importer.cpp
+  src/curl_export.cpp
   src/grpc_importer.cpp
 )
 

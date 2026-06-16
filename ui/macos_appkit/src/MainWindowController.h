@@ -16,4 +16,5 @@
 - (void)openFolder:(id)sender;
 - (void)saveRequest:(id)sender;
 - (void)sendRequest:(id)sender;
+- (void)copyAsCurl:(id)sender;
 @end

@@ -10,6 +10,7 @@
 
 #include "core/engine.hpp"
 #include "core/field_codec.hpp"
+#include "core/importer.hpp"
 #include "core/stores.hpp"
 #include "core/types.hpp"
 
@@ -120,11 +121,13 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
     // (1)(2) tree
     OS9BevelButton *_openButton;
+    OS9SerratedInset *_treeInset;
     NSScrollView *_treeScroll;
     DeedOutlineView *_tree;
     NSMutableArray<TreeItem *> *_roots;
 
     // (3) request editor
+    OS9SerratedInset *_reqInset;
     NSScrollView *_reqScroll;
     NSTextView *_reqText;
     NSMutableArray<NSString *> *_reqBuffers;
@@ -133,6 +136,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     NSInteger _activeReqTab;
 
     // (4) response
+    OS9SerratedInset *_respInset;
     NSScrollView *_respScroll;
     NSTextView *_respText;
     NSMutableArray<NSString *> *_respBuffers;
@@ -141,11 +145,12 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     NSInteger _activeRespTab;
     OS9BevelButton *_prettyButton;
     NSInteger _prettyMode; // 0=Pretty 1=Raw 2=Encode 3=Decode
+    OS9BevelButton *_curlButton;      // copy request hiện tại as cURL
     core::ApiResponse _lastResp;
     BOOL _hasResp;
 
     // status line (trên panes, dưới tab buttons)
-    OS9InsetView *_statusBar;
+    OS9SerratedInset *_statusBar;
     NSTextField *_statusLabel;
 
     // toolbar
@@ -155,7 +160,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     OS9BevelButton *_cancelButton;
     OS9BevelButton *_protoButton;
     OS9PopupButton *_methodPopup;
-    OS9InsetView *_urlInset;   // khung inset vuông retro bọc ô URL
+    OS9SerratedInset *_urlInset; // khung input răng cưa retro bọc ô URL
     NSTextField *_urlField;
 
     // dividers + bề rộng pane
@@ -163,6 +168,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     OS9Divider *_divResp;
     CGFloat _treeW;
     CGFloat _reqW;
+    NSRect _preZoomFrame; // lưu frame trước khi phóng to (để thu nhỏ lại)
 
     // toast
     NSTextField *_toast;
@@ -183,6 +189,9 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
 - (void)showWindow {
     DeedConfig *cfg = [DeedConfig shared];
+    // Font hiển thị lấy từ Settings (app-support) — set TRƯỚC khi dựng widget.
+    { core::AppConfigStore a; core::AppConfig c = a.load();
+      [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize]; }
     NSRect frame = NSMakeRect(0, 0, [cfg floatFor:@"WINDOW_WIDTH" def:1040], [cfg floatFor:@"WINDOW_HEIGHT" def:680]);
     _window = [[NSWindow alloc] initWithContentRect:frame
                                           styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
@@ -229,6 +238,19 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     [_window center];
     [_window makeKeyAndOrderFront:nil];
     [self updateStatus:@""];
+    [self restoreLastCollection];
+}
+
+// Mở lại thư mục collection gần nhất (lưu ở app-support). Bỏ qua nếu chạy chế độ test.
+- (void)restoreLastCollection {
+    if (getenv("APICLIENT_OPEN")) return; // affordance test sẽ tự mở folder khác
+    core::AppConfigStore appCfg;           // mặc định: ~/Library/Application Support/deed/config.json
+    std::string last = appCfg.load().lastCollectionRoot;
+    if (last.empty()) return;
+    NSString *p = N(last);
+    BOOL isDir = NO;
+    if ([[NSFileManager defaultManager] fileExistsAtPath:p isDirectory:&isDir] && isDir)
+        [self openCollectionRoot:p];
 }
 
 - (void)buildChrome {
@@ -236,6 +258,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _titleBar.title = @"";
     _titleBar.closeTarget = self;
     _titleBar.closeAction = @selector(closeWindow:);
+    _titleBar.zoomTarget = self;
+    _titleBar.zoomAction = @selector(zoomToggle:);
     [_window.contentView addSubview:_titleBar];
 }
 
@@ -255,18 +279,26 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 }
 
 - (void)styleScroller:(NSScrollView *)sc {
-    BOOL overlay = [[DeedConfig shared] floatFor:@"SCROLLER_OVERLAY" def:1] != 0;
-    sc.scrollerStyle = overlay ? NSScrollerStyleOverlay : NSScrollerStyleLegacy;
+    // OVERLAY: ẩn, chỉ hiện khi có event scroll rồi tự ẩn. OS9Scroller luôn vẽ thumb
+    // ĐỦ BỀ RỘNG (không phụ thuộc hover) nên không bị "mảnh -> phình khi hover".
+    sc.scrollerStyle = NSScrollerStyleOverlay;
     sc.autohidesScrollers = YES;
+    sc.scrollerKnobStyle = NSScrollerKnobStyleDefault;
+    sc.hasVerticalScroller = YES;
+    sc.verticalScroller = [[OS9Scroller alloc] initWithFrame:NSMakeRect(0, 0, 16, 100)];
+    if (sc.hasHorizontalScroller)
+        sc.horizontalScroller = [[OS9Scroller alloc] initWithFrame:NSMakeRect(0, 0, 100, 16)];
 }
 
 - (void)buildTree {
     _openButton = [[OS9BevelButton alloc] initWithTitle:@"Open Folder…" target:self action:@selector(openFolder:)];
     [_mainPane addSubview:_openButton];
 
+    _treeInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
+    [_mainPane addSubview:_treeInset];
     _treeScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     _treeScroll.hasVerticalScroller = YES;
-    _treeScroll.borderType = NSBezelBorder;
+    _treeScroll.borderType = NSNoBorder;        // viền răng cưa do OS9SerratedInset vẽ
     [self styleScroller:_treeScroll];
     _treeScroll.backgroundColor = [NSColor whiteColor];
 
@@ -285,14 +317,14 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     __weak MainWindowController *weakSelf = self;
     _tree.menuProvider = ^NSMenu *(NSInteger row) { return [weakSelf contextMenuForRow:row]; };
     _treeScroll.documentView = _tree;
-    [_mainPane addSubview:_treeScroll];
+    [_treeInset addSubview:_treeScroll];
     _roots = [NSMutableArray array];
 }
 
 - (NSScrollView *)makeEditorScroll:(NSTextView *__strong *)outText editable:(BOOL)editable {
     NSScrollView *sc = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     sc.hasVerticalScroller = YES;
-    sc.borderType = NSBezelBorder;
+    sc.borderType = NSNoBorder;        // viền răng cưa do OS9SerratedInset vẽ
     [self styleScroller:sc];
     NSTextView *tv = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100)];
     tv.font = [OS9Theme monoFont];
@@ -316,16 +348,25 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 }
 
 - (void)buildEditors {
+    _reqInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
+    [_mainPane addSubview:_reqInset];
     _reqScroll = [self makeEditorScroll:&_reqText editable:YES];
-    [_mainPane addSubview:_reqScroll];
+    [_reqInset addSubview:_reqScroll];
     _reqBuffers = [NSMutableArray array];
     _reqTabButtons = [NSMutableArray array];
 
+    _respInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
+    [_mainPane addSubview:_respInset];
     _respScroll = [self makeEditorScroll:&_respText editable:NO];
-    [_mainPane addSubview:_respScroll];
+    [_respInset addSubview:_respScroll];
     _respBuffers = [NSMutableArray array];
     _respTabButtons = [NSMutableArray array];
     _prettyMode = 0;
+
+    // Pane trái: nút cURL (Format JSON chuyển sang menu chuột phải trong editor).
+    _curlButton = [[OS9BevelButton alloc] initWithTitle:@"cURL" target:self action:@selector(copyAsCurl:)];
+    _curlButton.toolTip = @"Copy request hiện tại dạng cURL";
+    [_mainPane addSubview:_curlButton];
 }
 
 // Nhãn + biến đổi body theo chế độ hiện tại của nút pretty.
@@ -340,15 +381,19 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 }
 
 - (void)buildStatusBar {
-    _statusBar = [[OS9InsetView alloc] initWithFrame:NSZeroRect];
+    _statusBar = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     [_mainPane addSubview:_statusBar];
     _statusLabel = OS9Label(@"");
+    _statusLabel.alignment = NSTextAlignmentCenter;   // căn giữa text status
     [_mainPane addSubview:_statusLabel];
 }
 
 - (void)buildToolbar {
-    _settingButton = [[OS9BevelButton alloc] initWithTitle:@"Setting" target:self action:@selector(settingClicked:)];
+    _settingButton = [[OS9BevelButton alloc] initWithTitle:@"" target:self action:@selector(settingClicked:)];
+    _settingButton.icon = OS9GearImage(16);   // bánh răng cổ điển thay cho chữ "Setting"
+    _settingButton.toolTip = @"Settings";
     _envButton = [[OS9BevelButton alloc] initWithTitle:@"Global" target:self action:@selector(envClicked:)];
+    _envButton.dropdown = YES;   // hiển thị mũi tên dropdown như method
     _sendButton = [[OS9BevelButton alloc] initWithTitle:@"Send  ⌘↩" target:self action:@selector(sendRequest:)];
     _sendButton.isDefault = YES;
     _cancelButton = [[OS9BevelButton alloc] initWithTitle:@"Cancel" target:self action:@selector(cancelClicked:)];
@@ -357,8 +402,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _methodPopup = [[OS9PopupButton alloc] initWithItems:@[ @"GET", @"POST", @"PUT", @"PATCH", @"DELETE", @"HEAD", @"OPTIONS" ]
                                                   target:self action:@selector(methodChanged:)];
 
-    // Ô URL: KHÔNG bezel native (tránh góc bo/3D) -> tự bọc trong OS9InsetView vuông.
-    _urlInset = [[OS9InsetView alloc] initWithFrame:NSZeroRect];
+    // Ô URL: KHÔNG bezel native -> bọc trong OS9SerratedInset (góc răng cưa retro).
+    _urlInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     _urlField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     _urlField.font = [OS9Theme monoFont];
     _urlField.placeholderString = @"localhost:8000/api/deed";
@@ -463,23 +508,28 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     CGFloat divRespX = reqX + _reqW;
     CGFloat respX = divRespX + dw;
 
-    // (1) Open + (2) tree (CRUD qua chuột phải, không còn nút ⋯)
+    // (1) Open + (2) tree (CRUD qua chuột phải, không còn nút ⋯) — bọc viền răng cưa
     _openButton.frame = NSMakeRect(treeX, top, _treeW, tabH);
-    _treeScroll.frame = NSMakeRect(treeX, statusY, _treeW, panesBottom - statusY);
+    _treeInset.frame = NSMakeRect(treeX, statusY, _treeW, panesBottom - statusY);
+    _treeScroll.frame = NSInsetRect(_treeInset.bounds, 2, 2);
 
     // dividers (cao suốt vùng panes)
     _divTree.frame = NSMakeRect(divTreeX, statusY, dw, panesBottom - statusY);
     _divResp.frame = NSMakeRect(divRespX, panesY, dw, panesBottom - panesY);
 
-    // (3) request tabs + editor
-    [self layoutTabButtons:_reqTabButtons atX:reqX y:top width:_reqW height:tabH extra:0];
-    _reqScroll.frame = NSMakeRect(reqX, panesY, _reqW, panesBottom - panesY);
+    // (3) request tabs + [cURL] ở mép phải hàng tab + editor
+    CGFloat curlW = 46;
+    [self layoutTabButtons:_reqTabButtons atX:reqX y:top width:(_reqW - curlW - 4) height:tabH extra:0];
+    _curlButton.frame = NSMakeRect(reqX + _reqW - curlW, top, curlW, tabH);
+    _reqInset.frame = NSMakeRect(reqX, panesY, _reqW, panesBottom - panesY);
+    _reqScroll.frame = NSInsetRect(_reqInset.bounds, 2, 2);
 
     // (4) response tabs (+ pretty) + editor
     CGFloat prettyW = 70;
     [self layoutTabButtons:_respTabButtons atX:respX y:top width:(respW - prettyW - 4) height:tabH extra:0];
     _prettyButton.frame = NSMakeRect(respX + respW - prettyW, top, prettyW, tabH);
-    _respScroll.frame = NSMakeRect(respX, panesY, respW, panesBottom - panesY);
+    _respInset.frame = NSMakeRect(respX, panesY, respW, panesBottom - panesY);
+    _respScroll.frame = NSInsetRect(_respInset.bounds, 2, 2);
 
     // status line (span req + resp)
     CGFloat slX = reqX, slW = (respX + respW) - reqX;
@@ -574,6 +624,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     }
     _prettyButton = [[OS9BevelButton alloc] initWithTitle:[self prettyTitle]
                                                    target:self action:@selector(prettyToggle:)];
+    _prettyButton.toolTip = @"Pretty/Raw/Encode/Decode — áp cho pane đang có con trỏ";
     [_mainPane addSubview:_prettyButton];
     _activeReqTab = 0;
     _activeRespTab = 0;
@@ -603,6 +654,9 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _engine = std::make_unique<core::Engine>(cfg);
     _bridge = std::make_unique<UiDelegateBridge>(self);
     _envVC = [[EnvWindowController alloc] initWithEngine:_engine.get()];
+    // Ghi nhớ thư mục này vào app-support để lần sau mở lại đúng nó.
+    try { core::AppConfig ac = _engine->appConfig().load(); ac.lastCollectionRoot = _root;
+          _engine->appConfig().save(ac); } catch (...) {}
     _openButton.title = [self abbreviatePath:path];
     _openButton.toolTip = path;
     [self setHasRequest:NO];
@@ -739,8 +793,10 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 }
 
 - (void)stashActiveReqBuffer {
+    // [copy] BẮT BUỘC: NSTextView.string trả tham chiếu tới text storage SỐNG;
+    // không copy -> buffer các tab cùng trỏ 1 chuỗi đang đổi -> giá trị lẫn vào nhau.
     if (_activeReqTab >= 0 && _activeReqTab < (NSInteger)_reqBuffers.count)
-        _reqBuffers[_activeReqTab] = _reqText.string ?: @"";
+        _reqBuffers[_activeReqTab] = [(_reqText.string ?: @"") copy];
 }
 
 // Trả NO nếu JSON sai (báo toast + chọn tab). silent=YES -> không đổi tab/không toast (autosave).
@@ -806,7 +862,86 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 - (void)prettyToggle:(id)sender {
     _prettyMode = (_prettyMode + 1) % 4;   // Pretty -> Raw -> Encode -> Decode -> ...
     _prettyButton.title = [self prettyTitle];
-    if (_hasResp) [self rebuildResponseBuffers];
+    [self applyPrettyToFocusedPane];
+}
+
+// Áp chế độ hiện tại lên Ô ĐANG CÓ CON TRỎ: editor request (tab đang mở), setting,
+// hoặc (mặc định) pane response. Nút bevel không nhận focus nên firstResponder giữ nguyên.
+- (void)applyPrettyToFocusedPane {
+    id fr = _window.firstResponder;
+    NSTextView *target = nil;
+    if (fr == _reqText) target = _reqText;
+    else if (fr == _settingText) target = _settingText;
+    if (target) {
+        target.string = [self applyView:S(target.string)];
+        if (target == _reqText) [self stashActiveReqBuffer]; // đồng bộ buffer tab
+        return;
+    }
+    if (_hasResp) [self rebuildResponseBuffers]; // mặc định: pane response
+}
+
+// Format JSON tab đang mở (chỗ con trỏ) — qua menu chuột phải của editor.
+- (NSMenu *)textView:(NSTextView *)tv menu:(NSMenu *)menu forEvent:(NSEvent *)e atIndex:(NSUInteger)i {
+    if (tv != _reqText) return menu;
+    [menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *fmt = [[NSMenuItem alloc] initWithTitle:@"Format JSON" action:nil keyEquivalent:@""];
+    NSMenu *sub = [[NSMenu alloc] init];
+    NSArray *titles = @[ @"Pretty", @"Minify", @"Encode → string", @"Decode ← string" ];
+    for (NSInteger k = 0; k < (NSInteger)titles.count; k++) {
+        NSMenuItem *it = [sub addItemWithTitle:titles[k] action:@selector(reqFormatPick:) keyEquivalent:@""];
+        it.target = self; it.tag = k;
+    }
+    fmt.submenu = sub;
+    [menu addItem:fmt];
+    return menu;
+}
+- (void)reqFormatPick:(NSMenuItem *)item {
+    std::string t = S(_reqText.string);
+    NSString *out;
+    switch (item.tag) {
+        case 1: out = N(core::fieldcodec::formatJson(t, false)); break;
+        case 2: out = N(core::fieldcodec::jsonEncodeString(t)); break;
+        case 3: out = N(core::fieldcodec::jsonDecodeString(t)); break;
+        default: out = N(core::fieldcodec::formatJson(t, true)); break;
+    }
+    _reqText.string = out;
+    [self stashActiveReqBuffer];
+}
+
+// Copy request hiện tại dạng cURL (HTTP) / grpcurl (gRPC) vào clipboard.
+- (void)copyAsCurl:(id)sender {
+    if (!_hasRequest || !_engine) return;
+    if (![self syncModelFromEditors:NO]) return;
+    core::ResolvedRequest rr = _engine->resolveRequest(_model);
+    std::string curl = core::toCurl(rr.model);
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    [pb clearContents];
+    [pb setString:N(curl) forType:NSPasteboardTypeString];
+    [self toast:@"Đã copy cURL"];
+}
+
+// Zoom toggle thủ công (performZoom đôi khi không thu nhỏ lại được).
+- (void)zoomToggle:(id)sender {
+    NSScreen *sc = _window.screen ?: [NSScreen mainScreen];
+    NSRect vis = sc.visibleFrame;
+    if (NSEqualRects(_window.frame, vis)) {
+        if (!NSIsEmptyRect(_preZoomFrame)) [_window setFrame:_preZoomFrame display:YES animate:YES];
+    } else {
+        _preZoomFrame = _window.frame;
+        [_window setFrame:vis display:YES animate:YES];
+    }
+}
+
+// Áp font cấu hình (từ Settings) cho mọi ô chữ + vẽ lại.
+- (void)applyConfiguredFontAndRefresh {
+    core::AppConfigStore a; core::AppConfig c = a.load();
+    [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize];
+    NSFont *mono = [OS9Theme monoFont];
+    _reqText.font = mono; _respText.font = mono; _settingText.font = mono; _urlField.font = mono;
+    _tree.font = [OS9Theme uiFont];
+    [_tree reloadData];
+    for (TreeItem *r in _roots) [_tree expandItem:r expandChildren:YES];
+    [_window.contentView setNeedsDisplay:YES];
 }
 
 #pragma mark Editing
@@ -815,7 +950,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     // Live-stash: ô đang sửa -> buffer của tab hiện tại luôn đồng bộ.
     // Fix lỗi: rời tab rồi quay lại không còn hiển thị nhầm giá trị tab trước.
     if (note.object == _reqText && _activeReqTab >= 0 && _activeReqTab < (NSInteger)_reqBuffers.count)
-        _reqBuffers[_activeReqTab] = _reqText.string ?: @"";
+        _reqBuffers[_activeReqTab] = [(_reqText.string ?: @"") copy]; // copy: tránh lẫn giá trị giữa tab
 }
 - (void)controlTextDidChange:(NSNotification *)note { }
 - (void)methodChanged:(id)sender { }
@@ -849,9 +984,10 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     }
     _sending = YES;
     _sendButton.enabledState = NO;
+    _sendButton.title = @"Sending…";   // trạng thái nằm ngay trên nút Send
     _cancelButton.enabledState = YES;
     [self relayout];
-    [self updateStatus:@"⟳ Sending…"];
+    [self updateStatus:@""];
     _currentHandle = _engine->send(_model, _bridge.get());
 }
 
@@ -886,6 +1022,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 - (void)finishSending {
     _sending = NO;
     _sendButton.enabledState = _hasRequest;
+    _sendButton.title = @"Send  ⌘↩";
     _cancelButton.enabledState = NO;
     [self relayout];
 }
@@ -940,6 +1077,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     }
     [m addItem:[NSMenuItem separatorItem]];
     [[m addItemWithTitle:@"Manage…" action:@selector(manageEnv:) keyEquivalent:@""] setTarget:self];
+    OS9StyleMenu(m);
     [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0, _envButton.frame.size.height) inView:_envButton];
 }
 - (void)pickEnv:(NSMenuItem *)item {
@@ -973,8 +1111,9 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
         if (_envVC.view) _envVC.view.hidden = YES;
         _settingScroll.hidden = NO;
         core::AppConfig c = _engine->appConfig().load();
-        _settingText.string = [NSString stringWithFormat:@"{\n  \"defaultTimeoutMs\": %d,\n  \"verifyTls\": %@\n}",
-                               c.defaultTimeoutMs, c.verifyTls ? @"true" : @"false"];
+        _settingText.string = [NSString stringWithFormat:
+            @"{\n  \"defaultTimeoutMs\": %d,\n  \"verifyTls\": %@,\n  \"fontName\": \"%s\",\n  \"fontSize\": %d\n}",
+            c.defaultTimeoutMs, c.verifyTls ? @"true" : @"false", c.fontName.c_str(), c.fontSize];
     }
     _configMode = YES;
     _mainPane.hidden = YES;
@@ -994,7 +1133,10 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
                 core::AppConfig c = _engine->appConfig().load();
                 if (dict[@"defaultTimeoutMs"]) c.defaultTimeoutMs = [dict[@"defaultTimeoutMs"] intValue];
                 if (dict[@"verifyTls"]) c.verifyTls = [dict[@"verifyTls"] boolValue];
+                if (dict[@"fontName"]) c.fontName = [dict[@"fontName"] UTF8String];
+                if (dict[@"fontSize"]) c.fontSize = [dict[@"fontSize"] intValue];
                 _engine->appConfig().save(c);
+                [self applyConfiguredFontAndRefresh];
             } else {
                 [self toastWarn:@"Setting JSON sai — bỏ qua"];
             }
@@ -1016,6 +1158,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     [[m addItemWithTitle:@"Reflection (mặc định)" action:@selector(protoReflection:) keyEquivalent:@""] setTarget:self];
     [[m addItemWithTitle:@"Chọn .proto…" action:@selector(protoFiles:) keyEquivalent:@""] setTarget:self];
     [[m addItemWithTitle:@"Chọn descriptorSet…" action:@selector(protoDescSet:) keyEquivalent:@""] setTarget:self];
+    OS9StyleMenu(m);
     [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0, _protoButton.frame.size.height) inView:_protoButton];
 }
 - (void)protoReflection:(id)s {

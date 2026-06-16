@@ -265,12 +265,39 @@ static void test_field_codec() {
     CHECK_EQ(fieldcodec::jsonDecodeString(enc), body, "decode(encode(x)) == x");
 }
 
+static void test_curl_export() {
+    std::printf("[curl_export]\n");
+    RequestModel m;
+    m.type = RequestType::Http;
+    m.http.method = "POST";
+    m.http.url = "https://api.test/users";
+    m.http.headers.push_back({"Content-Type", "application/json", true});
+    m.http.headers.push_back({"X-Token", "abc123", true});
+    m.http.params.push_back({"q", "hello", true});
+    m.http.body.mode = "json";
+    m.http.body.json = "{\"a\":1}";
+    std::string c = toCurl(m);
+    CHECK(c.find("curl -X POST") != std::string::npos, "có method");
+    CHECK(c.find("api.test/users") != std::string::npos, "có url");
+    CHECK(c.find("--data") != std::string::npos, "có body");
+    CHECK(c.find("X-Token: abc123") != std::string::npos, "có header X-Token");
+    CHECK(c.find("q=hello") != std::string::npos, "có param q");
+
+    GrpcRequest& g = m.grpc;
+    m.type = RequestType::Grpc;
+    g.target = "localhost:50051"; g.service = "pkg.Svc"; g.method = "M"; g.message = "{\"id\":\"1\"}";
+    std::string gc = toCurl(m);
+    CHECK(gc.find("grpcurl") != std::string::npos, "grpc -> grpcurl");
+    CHECK(gc.find("pkg.Svc/M") != std::string::npos, "có service/method");
+}
+
 int main() {
     std::string root = makeTempRoot();
     std::printf("Temp root: %s\n", root.c_str());
 
     test_variable_resolver();
     test_field_codec();
+    test_curl_export();
     test_collection_store(root);
     test_session_store(root);
     test_env_and_secret(root);

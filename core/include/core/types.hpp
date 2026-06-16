@@ -196,6 +196,9 @@ struct Environment {
 struct AppConfig {
     int defaultTimeoutMs = 30000;
     bool verifyTls = true;
+    std::string lastCollectionRoot; // thư mục collection mở gần nhất (mở lại khi khởi động)
+    std::string fontName;           // font hiển thị (rỗng = mặc định); lấy từ Settings
+    int fontSize = 11;
 };
 
 // ---- Session app-state ----

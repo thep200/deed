@@ -24,6 +24,9 @@ public:
     virtual ImportResult parse(const std::string& input) const = 0;
 };
 
+// Xuất request hiện tại thành lệnh cURL (HTTP) / grpcurl (gRPC). Nên truyền model ĐÃ resolve.
+std::string toCurl(const RequestModel& resolved);
+
 // cURL: tokenizing dòng lệnh shell + map cờ -> field.
 class CurlImporter : public IImporter {
 public:

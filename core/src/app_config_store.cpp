@@ -7,7 +7,7 @@
 namespace core {
 
 AppConfigStore::AppConfigStore()
-    : path_(fsutil::join(fsutil::appSupportDir("ApiClient"), "config.json")) {}
+    : path_(fsutil::join(fsutil::appSupportDir("deed"), "config.json")) {}
 
 AppConfigStore::AppConfigStore(std::string path) : path_(std::move(path)) {}
 
