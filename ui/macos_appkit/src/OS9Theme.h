@@ -18,8 +18,13 @@
 // Cấu hình font từ Settings (rỗng -> mặc định). size<=0 -> 11.
 + (void)setConfiguredFontName:(NSString *)name size:(CGFloat)size;
 
-// Vẽ nút bevel: highlight trên-trái, shadow dưới-phải, viền đen. pressed = lõm.
+// Vẽ nút bevel CŨ (button.svg): góc răng cưa, #DDDDDD, viền đen. pressed = lõm.
 + (void)drawBevelInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
+// Vẽ nút MỚI (btn-new.svg): góc vuông, #CCCCCC, viền #484848, bevel trắng/xám.
++ (void)drawNewBevelInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
+// Bộ chọn kiểu nút (dùng cho mọi button). Mặc định kiểu MỚI; đổi qua .env BUTTON_STYLE=classic.
++ (void)setClassicButtonStyle:(BOOL)classic;
++ (void)drawButtonInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
 // Vẽ viền inset (sunken) cho ô nhập: tối trên-trái, sáng dưới-phải.
 + (void)drawInsetInRect:(NSRect)r;
 // Vẽ title bar kẻ sọc platinum.

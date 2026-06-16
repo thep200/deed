@@ -22,7 +22,7 @@
 - (BOOL)acceptsFirstResponder { return NO; } // không nhận focus -> không có viền focus
 
 - (void)drawRect:(NSRect)dirty {
-    [OS9Theme drawBevelInRect:self.bounds pressed:_pressed isDefault:_isDefault];
+    [OS9Theme drawButtonInRect:self.bounds pressed:_pressed isDefault:_isDefault];
     if (_icon) {
         NSSize is = _icon.size;
         NSRect ir = NSMakeRect(floor((self.bounds.size.width - is.width) / 2),
@@ -103,7 +103,7 @@
 }
 
 - (void)drawRect:(NSRect)dirty {
-    [OS9Theme drawBevelInRect:self.bounds pressed:_pressed isDefault:NO];
+    [OS9Theme drawButtonInRect:self.bounds pressed:_pressed isDefault:NO];
     NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont],
                             NSForegroundColorAttributeName : [NSColor blackColor]};
     NSString *t = self.selectedTitle;

@@ -173,6 +173,7 @@ struct TreeNode {
     std::string relPath;    // đường dẫn tương đối so với gốc collection
     bool isFolder = false;
     // chỉ có khi !isFolder:
+    std::string id;         // id ổn định của request (sống sót qua rename/move)
     RequestType requestType = RequestType::Http;
     std::string methodOrType; // HTTP method, hoặc gRPC methodType, để hiển thị badge
     std::vector<TreeNode> children;

@@ -48,6 +48,36 @@ static CGFloat gFontSize = 11;
     return p;
 }
 
+static BOOL gClassicButtons = NO; // mặc định: nút kiểu MỚI (btn-new.svg)
++ (void)setClassicButtonStyle:(BOOL)classic { gClassicButtons = classic; }
++ (void)drawButtonInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault {
+    if (gClassicButtons) [self drawBevelInRect:r pressed:pressed isDefault:isDefault];
+    else [self drawNewBevelInRect:r pressed:pressed isDefault:isDefault];
+}
+
+// btn-new.svg: nền #CCCCCC, góc vuông, viền #484848 1px, bevel trắng (trên-trái) / #808080 (dưới-phải).
++ (void)drawNewBevelInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault {
+    NSRect inner = NSInsetRect(r, 0.5, 0.5);
+    [(pressed ? G(0.70) : G(0.80)) set]; // #CCCCCC
+    NSRectFill(inner);
+
+    NSRect bz = NSInsetRect(inner, 1, 1);
+    NSColor *tl = pressed ? G(0.5) : [NSColor whiteColor];
+    NSColor *br = pressed ? [NSColor whiteColor] : G(0.5); // #808080
+    CGFloat x0 = bz.origin.x, x1 = NSMaxX(bz), y0 = bz.origin.y, y1 = NSMaxY(bz);
+    [tl set];
+    NSRectFill(NSMakeRect(x0, y1 - 2, bz.size.width, 2));   // top (non-flipped: maxY = trên)
+    NSRectFill(NSMakeRect(x0, y0, 2, bz.size.height));       // left
+    [br set];
+    NSRectFill(NSMakeRect(x0, y0, bz.size.width, 2));        // bottom
+    NSRectFill(NSMakeRect(x1 - 2, y0, 2, bz.size.height));   // right
+
+    [G(0.282) set]; // viền #484848
+    NSBezierPath *p = [NSBezierPath bezierPathWithRect:inner];
+    p.lineWidth = isDefault ? 2.0 : 1.0;
+    [p stroke];
+}
+
 + (void)drawBevelInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault {
     NSBezierPath *path = [self steppedPathInRect:NSInsetRect(r, 0.5, 0.5)];
 
@@ -55,18 +85,28 @@ static CGFloat gFontSize = 11;
     [(pressed ? G(0.62) : [self buttonFace]) set];
     [path fill];
 
-    // bevel trong: highlight trên-trái, shadow dưới-phải (đảo khi nhấn)
-    [NSGraphicsContext saveGraphicsState];
-    [path addClip];
+    // bevel trong: vẽ theo PATH RĂNG CƯA (inset) nên góc — kể cả góc trái-trên — cũng có răng cưa.
+    // highlight trên-trái, shadow dưới-phải; mỗi nửa cắt theo tam giác chéo.
     NSColor *tl = pressed ? [self shadow] : [NSColor whiteColor];
     NSColor *br = pressed ? [NSColor whiteColor] : [self shadow];
+    NSBezierPath *inner = [self steppedPathInRect:NSInsetRect(r, 2.0, 2.0)];
+    inner.lineWidth = 1.0;
     CGFloat x0 = r.origin.x, x1 = NSMaxX(r), y0 = r.origin.y, y1 = NSMaxY(r);
-    [tl set];
-    NSRectFill(NSMakeRect(x0, y1 - 3, r.size.width, 2));   // top
-    NSRectFill(NSMakeRect(x0 + 1, y0, 2, r.size.height));   // left
-    [br set];
-    NSRectFill(NSMakeRect(x0, y0 + 1, r.size.width, 2));    // bottom
-    NSRectFill(NSMakeRect(x1 - 3, y0, 2, r.size.height));   // right
+
+    [NSGraphicsContext saveGraphicsState];
+    NSBezierPath *tlTri = [NSBezierPath bezierPath];     // nửa trên-trái
+    [tlTri moveToPoint:NSMakePoint(x0, y0)]; [tlTri lineToPoint:NSMakePoint(x0, y1)];
+    [tlTri lineToPoint:NSMakePoint(x1, y1)]; [tlTri closePath];
+    [tlTri addClip];
+    [tl set]; [inner stroke];
+    [NSGraphicsContext restoreGraphicsState];
+
+    [NSGraphicsContext saveGraphicsState];
+    NSBezierPath *brTri = [NSBezierPath bezierPath];     // nửa dưới-phải
+    [brTri moveToPoint:NSMakePoint(x0, y0)]; [brTri lineToPoint:NSMakePoint(x1, y0)];
+    [brTri lineToPoint:NSMakePoint(x1, y1)]; [brTri closePath];
+    [brTri addClip];
+    [br set]; [inner stroke];
     [NSGraphicsContext restoreGraphicsState];
 
     // viền đen (2px theo svg; nút default đậm hơn)

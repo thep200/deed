@@ -73,6 +73,14 @@ static void test_collection_store(const std::string& root) {
     CHECK_EQ(m.name, std::string("Get Users"), "name giữ nguyên");
     CHECK(m.type == RequestType::Http, "type = http");
     CHECK(!m.id.empty(), "có id");
+    // id duy nhất + tìm theo id (sửa bug xoá nhầm do trùng id/đường dẫn).
+    std::string r2 = store.createRequest("", RequestType::Http, "Another");
+    RequestModel ma = store.loadRequest(r2);
+    CHECK(!ma.id.empty() && ma.id != m.id, "2 request có id khác nhau");
+    CHECK_EQ(store.findRelPathById(m.id), rel, "findRelPathById trả đúng path");
+    CHECK(store.findRelPathById("req_nope").empty(), "id không có -> rỗng");
+    store.remove(r2);
+
     CHECK(m.http.headers.size() >= 5, "HTTP request mới có header mặc định");
     bool hasContentType = false;
     for (const auto& h : m.http.headers) if (h.key == "Content-Type") hasContentType = true;

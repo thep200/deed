@@ -2,6 +2,7 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <random>
 #include <stdexcept>
 
@@ -26,11 +27,18 @@ bool isConfigFile(const std::string& name) {
 }
 bool isHidden(const std::string& name) { return !name.empty() && name[0] == '.'; }
 
+// Sinh id ngẫu nhiên nhẹ (không thư viện ngoài): RNG seed MỘT LẦN rồi tiến trạng thái
+// mỗi lần gọi -> không trùng dù gọi liên tiếp trong cùng mili-giây.
 std::string genId() {
-    using namespace std::chrono;
-    auto now = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-    std::mt19937_64 rng(static_cast<uint64_t>(now));
+    static std::mutex mu;
+    static std::mt19937_64 rng([] {
+        std::random_device rd;
+        uint64_t s = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+        s ^= static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+        return s;
+    }());
     static const char* alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford-ish
+    std::lock_guard<std::mutex> lk(mu);
     std::string s = "req_";
     for (int i = 0; i < 12; ++i) s += alphabet[rng() % 32];
     return s;
@@ -86,6 +94,7 @@ TreeNode CollectionStore::scanTree() const {
                         auto j = codec::json::parse(txt);
                         if (j.contains("name") && j["name"].is_string())
                             leaf.name = j["name"].get<std::string>();
+                        leaf.id = j.value("id", std::string());
                         std::string t = j.value("type", "http");
                         parseRequestType(t, leaf.requestType);
                         if (leaf.requestType == RequestType::Http)
@@ -106,7 +115,24 @@ RequestModel CollectionStore::loadRequest(const std::string& relPath) const {
     std::string txt;
     if (!fsutil::readFile(fsutil::join(root_, relPath), txt))
         throw std::runtime_error("không đọc được request: " + relPath);
-    return codec::requestFromJson(codec::json::parse(txt));
+    RequestModel m = codec::requestFromJson(codec::json::parse(txt));
+    if (m.id.empty()) {                 // file cũ chưa có id -> gán + ghi lại (migrate 1 lần)
+        m.id = genId();
+        try { saveRequest(relPath, m); } catch (...) {}
+    }
+    return m;
+}
+
+std::string CollectionStore::findRelPathById(const std::string& id) const {
+    if (id.empty()) return "";
+    std::string found;
+    std::function<void(const TreeNode&)> walk = [&](const TreeNode& n) {
+        if (!found.empty()) return;
+        if (!n.isFolder && n.id == id) { found = n.relPath; return; }
+        for (const auto& c : n.children) walk(c);
+    };
+    walk(scanTree());
+    return found;
 }
 
 void CollectionStore::saveRequest(const std::string& relPath, const RequestModel& m) const {

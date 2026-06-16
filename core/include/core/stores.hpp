@@ -34,6 +34,9 @@ public:
     // Di chuyển request/folder vào folder đích (drag-drop). Trả relPath mới.
     std::string move(const std::string& relPath, const std::string& destFolderRel) const;
 
+    // Tìm relPath của request theo id ổn định (quét cây). Rỗng nếu không thấy.
+    std::string findRelPathById(const std::string& id) const;
+
     // Đảm bảo .gitignore có entry cho .session/ và .secrets/ (app tự quản — README §6.3).
     void ensureGitignore() const;
 

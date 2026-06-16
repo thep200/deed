@@ -19,8 +19,10 @@
 @interface TreeItem : NSObject
 @property(nonatomic, copy) NSString *name;
 @property(nonatomic, copy) NSString *relPath;
+@property(nonatomic, copy) NSString *requestId;   // id ổn định của request
 @property(nonatomic) BOOL isFolder;
 @property(nonatomic, copy) NSString *badge;
+@property(nonatomic, copy) NSString *mark;   // mốc đầu dòng: HTTP method, hoặc "gRPC"
 @property(nonatomic) BOOL grpc;
 @property(nonatomic, strong) NSMutableArray<TreeItem *> *children;
 @end
@@ -42,6 +44,8 @@ static NSString *const kTreeDragType = @"com.example.deed.request";
     NSInteger row = [self rowAtPoint:p];
     return self.menuProvider ? self.menuProvider(row) : nil;
 }
+// Bỏ mũi tên fold (disclosure triangle) — folder luôn mở sẵn.
+- (NSRect)frameOfOutlineCellAtRow:(NSInteger)row { return NSZeroRect; }
 @end
 
 static TreeItem *BuildTree(const core::TreeNode &n) {
@@ -49,10 +53,13 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     it.name = N(n.name);
     it.relPath = N(n.relPath);
     it.isFolder = n.isFolder;
+    it.requestId = N(n.id);
     it.children = [NSMutableArray array];
     if (!n.isFolder) {
         it.grpc = (n.requestType == core::RequestType::Grpc);
         it.badge = [NSString stringWithFormat:@"%s %s", core::toString(n.requestType).c_str(), n.methodOrType.c_str()];
+        // HTTP -> tên method (GET/POST...); gRPC -> "gRPC".
+        it.mark = it.grpc ? @"gRPC" : N(n.methodOrType);
     }
     for (const auto &c : n.children) [it.children addObject:BuildTree(c)];
     return it;
@@ -69,34 +76,34 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 - (BOOL)isFlipped { return YES; }
 - (void)drawRect:(NSRect)d {
     CGFloat h = self.bounds.size.height;
-    NSRect icon = NSMakeRect(2, floor((h - 11) / 2), 15, 11);
+    NSRect icon = NSMakeRect(0, floor((h - 14) / 2), 17, 14);
     if (_isFolder) {
-        // Folder retro: tab nhỏ + thân, viền đen 1px (kiểu OS9).
-        NSColor *manila = [NSColor colorWithCalibratedRed:0.84 green:0.76 blue:0.52 alpha:1.0];
-        [manila set];
-        NSRectFill(NSMakeRect(icon.origin.x, icon.origin.y, 6, 3));               // tab
-        NSRectFill(NSMakeRect(icon.origin.x, icon.origin.y + 2, icon.size.width, icon.size.height - 2));
-        [[NSColor blackColor] set];
-        NSFrameRect(NSMakeRect(icon.origin.x, icon.origin.y + 2, icon.size.width, icon.size.height - 2));
-        NSFrameRect(NSMakeRect(icon.origin.x, icon.origin.y, 6, 3));
-    } else {
-        // Doc retro: trang trắng, góc trên-phải gập, viền đen.
-        NSRect doc = NSMakeRect(icon.origin.x + 2, icon.origin.y, 11, 11);
+        // Theo folder.svg: THÂN là hình chữ nhật kín + TAB nhỏ nhô lên ở phía trên-trái
+        // (thụt vào khỏi mép trái, hai cạnh xiên). Nền trắng, viền đen 1px.
+        CGFloat x = icon.origin.x, y = icon.origin.y;   // flipped: y = trên
+        CGFloat bt = y + 3;                              // mép trên thân
+        NSRect body = NSMakeRect(x, bt, 16, 11);         // thân 16x11
         [[NSColor whiteColor] set];
-        NSRectFill(doc);
+        NSRectFill(body);
+        NSRectFill(NSMakeRect(x, y, 9, 4));              // vùng tab (trắng) từ mép trái
         [[NSColor blackColor] set];
-        NSFrameRect(doc);
-        [[OS9Theme shadow] set];
-        NSBezierPath *fold = [NSBezierPath bezierPath];
-        [fold moveToPoint:NSMakePoint(NSMaxX(doc) - 4, doc.origin.y)];
-        [fold lineToPoint:NSMakePoint(NSMaxX(doc), doc.origin.y + 4)];
-        [fold lineToPoint:NSMakePoint(NSMaxX(doc) - 4, doc.origin.y + 4)];
-        [fold closePath];
-        [fold fill];
+        NSBezierPath *bp = [NSBezierPath bezierPathWithRect:NSMakeRect(x + 0.5, bt + 0.5, 15, 10)];
+        bp.lineWidth = 1.0;
+        [bp stroke];
+        // tab bump: cạnh trái THẲNG ĐỨNG trùng mép trái thân; chỉ cạnh phải xiên.
+        NSBezierPath *tab = [NSBezierPath bezierPath];
+        [tab moveToPoint:NSMakePoint(x + 0.5, bt)];       // chân trái = mép trái thân
+        [tab lineToPoint:NSMakePoint(x + 0.5, y + 1.5)];  // cạnh trái thẳng đứng
+        [tab lineToPoint:NSMakePoint(x + 6.5, y + 1.5)];  // đỉnh tab
+        [tab lineToPoint:NSMakePoint(x + 8.0, bt)];       // dốc phải xuống mép thân
+        tab.lineWidth = 1.0;
+        [tab stroke];
     }
+    // request: bỏ icon -> text sát lề trái; folder: text sau icon.
     NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor blackColor]};
     NSSize sz = [(_text ?: @"") sizeWithAttributes:attrs];
-    [(_text ?: @"") drawAtPoint:NSMakePoint(22, floor((h - sz.height) / 2)) withAttributes:attrs];
+    CGFloat tx = _isFolder ? 18 : 0;
+    [(_text ?: @"") drawAtPoint:NSMakePoint(tx, floor((h - sz.height) / 2)) withAttributes:attrs];
 }
 @end
 
@@ -109,6 +116,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     core::RequestModel _model;
     std::string _root;
     std::string _currentRel;
+    std::string _currentId;   // id request đang mở (định danh ổn định)
     uint64_t _currentHandle;
     BOOL _hasRequest;
 
@@ -125,6 +133,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     NSScrollView *_treeScroll;
     DeedOutlineView *_tree;
     NSMutableArray<TreeItem *> *_roots;
+    NSMutableSet<NSString *> *_expandedFolders; // relPath các folder đang mở (giữ qua reload)
+    BOOL _treeExpandInit;                        // lần nạp đầu -> mở hết
 
     // (3) request editor
     OS9SerratedInset *_reqInset;
@@ -192,6 +202,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     // Font hiển thị lấy từ Settings (app-support) — set TRƯỚC khi dựng widget.
     { core::AppConfigStore a; core::AppConfig c = a.load();
       [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize]; }
+    // Kiểu nút: new (btn-new.svg) mặc định, hoặc classic (button.svg) qua .env.
+    [OS9Theme setClassicButtonStyle:[[cfg stringFor:@"BUTTON_STYLE" def:@"new"] isEqualToString:@"classic"]];
     NSRect frame = NSMakeRect(0, 0, [cfg floatFor:@"WINDOW_WIDTH" def:1040], [cfg floatFor:@"WINDOW_HEIGHT" def:680]);
     _window = [[NSWindow alloc] initWithContentRect:frame
                                           styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
@@ -309,9 +321,13 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _tree.outlineTableColumn = col;
     _tree.headerView = nil;
     _tree.rowHeight = 18;
+    _tree.indentationPerLevel = 9;         // thụt ít -> sát lề trái hơn
     _tree.allowsMultipleSelection = YES;   // chọn nhiều để xoá cùng lúc
     _tree.dataSource = self;
     _tree.delegate = self;
+    _tree.target = self;
+    _tree.action = @selector(treeClicked:); // click folder -> fold/unfold
+    _expandedFolders = [NSMutableSet set];
     _tree.backgroundColor = [NSColor whiteColor];
     [_tree registerForDraggedTypes:@[ kTreeDragType ]]; // kéo-thả di chuyển
     __weak MainWindowController *weakSelf = self;
@@ -487,9 +503,9 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     CGFloat dw = 6;
 
     CGFloat top = pad;
-    CGFloat statusY = top + tabH + 4;
-    CGFloat panesY = statusY + statusH + 4;
-    CGFloat panesBottom = MH - toolH - pad;
+    CGFloat statusY = top + tabH + 2;
+    CGFloat panesY = statusY + statusH + 2;            // sát status hơn -> pane cao lên trên
+    CGFloat panesBottom = MH - toolH - 2;              // sát toolbar hơn -> pane dài xuống dưới
 
     // clamp bề rộng panes
     CGFloat minTree = 140, minReq = 200, minResp = 220;
@@ -634,7 +650,10 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _hasRequest = has;
     _reqText.editable = has;
     _sendButton.enabledState = has && !_sending;
-    if (!has) { _reqText.string = @""; _respText.string = @""; _urlField.stringValue = @""; }
+    if (!has) {
+        _reqText.string = @""; _respText.string = @""; _urlField.stringValue = @"";
+        _currentRel.clear(); _currentId.clear();
+    }
     [self updateTitle];
 }
 
@@ -649,6 +668,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
 - (void)openCollectionRoot:(NSString *)path {
     [self autosaveCurrent];
+    [_expandedFolders removeAllObjects];   // collection mới: reset trạng thái fold
+    _treeExpandInit = NO;
     _root = path.UTF8String;
     core::EngineConfig cfg; cfg.collectionRoot = _root;
     _engine = std::make_unique<core::Engine>(cfg);
@@ -682,7 +703,46 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
     }
     [_tree reloadData];
-    for (TreeItem *r in _roots) [_tree expandItem:r expandChildren:YES];
+    [self applyTreeExpansion];
+}
+
+// Mở/thu folder theo trạng thái đã lưu; lần đầu mở hết.
+- (void)applyTreeExpansion {
+    if (!_treeExpandInit) {
+        for (TreeItem *r in _roots) [_tree expandItem:r expandChildren:YES];
+        [self collectAllFolders:_roots];
+        _treeExpandInit = YES;
+        return;
+    }
+    [self restoreExpansion:_roots];
+}
+- (void)collectAllFolders:(NSArray<TreeItem *> *)items {
+    for (TreeItem *t in items)
+        if (t.isFolder) { [_expandedFolders addObject:t.relPath]; [self collectAllFolders:t.children]; }
+}
+- (void)restoreExpansion:(NSArray<TreeItem *> *)items {
+    for (TreeItem *t in items) {
+        if (!t.isFolder) continue;
+        if ([_expandedFolders containsObject:t.relPath]) [_tree expandItem:t];
+        [self restoreExpansion:t.children];
+    }
+}
+// Click vào folder -> fold/unfold.
+- (void)treeClicked:(id)sender {
+    NSInteger row = _tree.clickedRow;
+    if (row < 0) return;
+    TreeItem *t = [_tree itemAtRow:row];
+    if (!t.isFolder) return;
+    if ([_tree isItemExpanded:t]) [_tree collapseItem:t];
+    else [_tree expandItem:t];
+}
+- (void)outlineViewItemDidExpand:(NSNotification *)n {
+    TreeItem *t = n.userInfo[@"NSObject"];
+    if (t.relPath) [_expandedFolders addObject:t.relPath];
+}
+- (void)outlineViewItemDidCollapse:(NSNotification *)n {
+    TreeItem *t = n.userInfo[@"NSObject"];
+    if (t.relPath) [_expandedFolders removeObject:t.relPath];
 }
 
 - (NSInteger)outlineView:(NSOutlineView *)ov numberOfChildrenOfItem:(id)item {
@@ -701,7 +761,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
         cell.translatesAutoresizingMaskIntoConstraints = YES;
     }
     cell.isFolder = t.isFolder;
-    cell.text = t.isFolder ? t.name : [NSString stringWithFormat:@"%@  [%@]", t.name, t.badge ?: @""];
+    cell.text = t.isFolder ? t.name : [NSString stringWithFormat:@"%@  %@", t.mark ?: @"", t.name];
     [cell setNeedsDisplay:YES];
     return cell;
 }
@@ -754,6 +814,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     try {
         _model = _engine->collection().loadRequest(rel.UTF8String);
         _currentRel = rel.UTF8String;
+        _currentId = _model.id;          // theo dõi request đang mở bằng id ổn định
         _hasRequest = YES;
         _hasResp = NO;
         [self setRequestType:_model.type];
@@ -830,12 +891,22 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     return YES;
 }
 
+// Nếu request đang mở nằm trong danh sách item bị xoá -> ĐÓNG editor để autosave KHÔNG tạo lại file.
+// So khớp theo id ổn định (fallback relPath).
+- (void)closeEditorIfDeleted:(NSArray<TreeItem *> *)deleted {
+    for (TreeItem *t in deleted) {
+        BOOL match = (_currentId.size() && t.requestId.length && S(t.requestId) == _currentId) ||
+                     (S(t.relPath) == _currentRel && !_currentRel.empty());
+        if (match) { _currentRel.clear(); _currentId.clear(); [self setHasRequest:NO]; return; }
+    }
+}
+
 // Tự lưu mọi thay đổi (không hỏi). JSON sai -> bỏ qua + cảnh báo nhẹ.
 - (void)autosaveCurrent {
     if (!_hasRequest || !_engine || _currentRel.empty()) return;
     if (![self syncModelFromEditors:YES]) { [self toastWarn:@"Không tự lưu được: JSON chưa hợp lệ"]; return; }
     try { _engine->collection().saveRequest(_currentRel, _model); [_tree reloadData];
-          for (TreeItem *r in _roots) [_tree expandItem:r expandChildren:YES]; }
+          [self applyTreeExpansion]; }
     catch (...) {}
 }
 
@@ -940,7 +1011,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _reqText.font = mono; _respText.font = mono; _settingText.font = mono; _urlField.font = mono;
     _tree.font = [OS9Theme uiFont];
     [_tree reloadData];
-    for (TreeItem *r in _roots) [_tree expandItem:r expandChildren:YES];
+    [self applyTreeExpansion];
     [_window.contentView setNeedsDisplay:YES];
 }
 
@@ -1225,17 +1296,18 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 }
 
 - (void)deleteSelectedMulti:(id)sender {
-    NSMutableArray<NSString *> *paths = [NSMutableArray array];
+    NSMutableArray<TreeItem *> *items = [NSMutableArray array];
     [_tree.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
         TreeItem *t = [_tree itemAtRow:idx];
-        if (t.relPath.length) [paths addObject:t.relPath];
+        if (t.relPath.length) [items addObject:t];
     }];
-    if (paths.count == 0) return;
+    if (items.count == 0) return;
     NSAlert *a = [[NSAlert alloc] init];
-    a.messageText = [NSString stringWithFormat:@"Xoá %lu mục đã chọn?", (unsigned long)paths.count];
+    a.messageText = [NSString stringWithFormat:@"Xoá %lu mục đã chọn?", (unsigned long)items.count];
     [a addButtonWithTitle:@"Delete"]; [a addButtonWithTitle:@"Cancel"];
     if ([a runModal] != NSAlertFirstButtonReturn) return;
-    for (NSString *p in paths) { try { _engine->collection().remove(p.UTF8String); } catch (...) {} }
+    [self closeEditorIfDeleted:items];    // tránh autosave tạo lại file vừa xoá
+    for (TreeItem *t in items) { try { _engine->collection().remove(t.relPath.UTF8String); } catch (...) {} }
     [self reloadTree];
 }
 - (std::string)selectedFolderRel {
@@ -1292,6 +1364,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     a.messageText = [NSString stringWithFormat:@"Xoá %@?", t.name];
     [a addButtonWithTitle:@"Delete"]; [a addButtonWithTitle:@"Cancel"];
     if ([a runModal] != NSAlertFirstButtonReturn) return;
+    [self closeEditorIfDeleted:@[ t ]];   // tránh autosave tạo lại file vừa xoá
     try { _engine->collection().remove(t.relPath.UTF8String); [self reloadTree]; }
     catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
