@@ -37,5 +37,6 @@ endif()
 
 option(BUILD_MACOS_UI "Build the macOS AppKit app (Phase 2)" ON)
 if(BUILD_MACOS_UI AND APPLE)
-  add_subdirectory(ui/macos_appkit) # Phase 2: AppKit + Objective-C++ (.mm)
+  add_subdirectory(third_party)      # Scintilla + Lexilla (editor cho 2 pane)
+  add_subdirectory(ui/macos_appkit)  # Phase 2: AppKit + Objective-C++ (.mm)
 endif()

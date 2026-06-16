@@ -17,3 +17,6 @@ CMakeUserPresets.json
 # macOS
 .DS_Store
 .env
+
+third_party/lexilla
+third_party/scintilla

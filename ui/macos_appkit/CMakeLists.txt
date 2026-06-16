@@ -16,13 +16,14 @@ add_executable(ApiClientApp MACOSX_BUNDLE
   src/DeedConfig.mm
   src/OS9Theme.mm
   src/OS9Widgets.mm
+  src/SciTextView.mm
   ${DEED_ENV_SRC}
 )
 
 # .env -> Contents/Resources/.env
 set_source_files_properties(${DEED_ENV_SRC} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 
-target_link_libraries(ApiClientApp PRIVATE core "-framework Cocoa")
+target_link_libraries(ApiClientApp PRIVATE core scintilla "-framework Cocoa" "-framework QuartzCore")
 
 # ARC cho Objective-C++ (quản lý retain/release + __weak trong CoreBridge).
 target_compile_options(ApiClientApp PRIVATE -fobjc-arc -fobjc-weak)

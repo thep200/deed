@@ -4,6 +4,7 @@
 #import "EnvWindowController.h"
 #import "OS9Theme.h"
 #import "OS9Widgets.h"
+#import "SciTextView.h"
 
 #include <memory>
 #include <string>
@@ -138,8 +139,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
     // (3) request editor
     OS9SerratedInset *_reqInset;
-    NSScrollView *_reqScroll;
-    NSTextView *_reqText;
+    SciTextView *_reqText;   // editor request (Scintilla)
     NSMutableArray<NSString *> *_reqBuffers;
     NSMutableArray<OS9BevelButton *> *_reqTabButtons;
     NSArray<NSString *> *_reqTabTitles;
@@ -147,8 +147,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
     // (4) response
     OS9SerratedInset *_respInset;
-    NSScrollView *_respScroll;
-    NSTextView *_respText;
+    SciTextView *_respText;  // editor response (Scintilla, read-only)
     NSMutableArray<NSString *> *_respBuffers;
     NSMutableArray<OS9BevelButton *> *_respTabButtons;
     NSArray<NSString *> *_respTabTitles;
@@ -337,44 +336,22 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _roots = [NSMutableArray array];
 }
 
-- (NSScrollView *)makeEditorScroll:(NSTextView *__strong *)outText editable:(BOOL)editable {
-    NSScrollView *sc = [[NSScrollView alloc] initWithFrame:NSZeroRect];
-    sc.hasVerticalScroller = YES;
-    sc.borderType = NSNoBorder;        // viền răng cưa do OS9SerratedInset vẽ
-    [self styleScroller:sc];
-    NSTextView *tv = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100)];
-    tv.font = [OS9Theme monoFont];
-    tv.richText = NO;
-    tv.automaticQuoteSubstitutionEnabled = NO;
-    tv.automaticDashSubstitutionEnabled = NO;
-    tv.editable = editable;
-    tv.delegate = self;                 // live-stash để buffer luôn đúng
-    tv.drawsBackground = YES;
-    tv.backgroundColor = [NSColor whiteColor];
-    tv.textColor = [NSColor blackColor];
-    tv.insertionPointColor = [NSColor blackColor];
-    tv.minSize = NSMakeSize(0, 0);
-    tv.maxSize = NSMakeSize(FLT_MAX, FLT_MAX);
-    tv.verticallyResizable = YES;
-    tv.horizontallyResizable = NO;
-    tv.textContainer.widthTracksTextView = YES;
-    sc.documentView = tv;
-    *outText = tv;
-    return sc;
-}
-
 - (void)buildEditors {
+    __weak MainWindowController *weakSelf = self;
+    // (3) request: editor Scintilla sửa được, live-stash khi user gõ.
     _reqInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     [_mainPane addSubview:_reqInset];
-    _reqScroll = [self makeEditorScroll:&_reqText editable:YES];
-    [_reqInset addSubview:_reqScroll];
+    _reqText = [[SciTextView alloc] initEditable:YES];
+    _reqText.onTextChanged = ^{ [weakSelf reqTextChanged]; };
+    [_reqInset addSubview:_reqText];
     _reqBuffers = [NSMutableArray array];
     _reqTabButtons = [NSMutableArray array];
 
+    // (4) response: editor Scintilla read-only.
     _respInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     [_mainPane addSubview:_respInset];
-    _respScroll = [self makeEditorScroll:&_respText editable:NO];
-    [_respInset addSubview:_respScroll];
+    _respText = [[SciTextView alloc] initEditable:NO];
+    [_respInset addSubview:_respText];
     _respBuffers = [NSMutableArray array];
     _respTabButtons = [NSMutableArray array];
     _prettyMode = 0;
@@ -538,14 +515,14 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     [self layoutTabButtons:_reqTabButtons atX:reqX y:top width:(_reqW - curlW - 4) height:tabH extra:0];
     _curlButton.frame = NSMakeRect(reqX + _reqW - curlW, top, curlW, tabH);
     _reqInset.frame = NSMakeRect(reqX, panesY, _reqW, panesBottom - panesY);
-    _reqScroll.frame = NSInsetRect(_reqInset.bounds, 2, 2);
+    _reqText.frame = NSInsetRect(_reqInset.bounds, 2, 2);
 
     // (4) response tabs (+ pretty) + editor
     CGFloat prettyW = 70;
     [self layoutTabButtons:_respTabButtons atX:respX y:top width:(respW - prettyW - 4) height:tabH extra:0];
     _prettyButton.frame = NSMakeRect(respX + respW - prettyW, top, prettyW, tabH);
     _respInset.frame = NSMakeRect(respX, panesY, respW, panesBottom - panesY);
-    _respScroll.frame = NSInsetRect(_respInset.bounds, 2, 2);
+    _respText.frame = NSInsetRect(_respInset.bounds, 2, 2);
 
     // status line (span req + resp)
     CGFloat slX = reqX, slW = (respX + respW) - reqX;
@@ -939,44 +916,19 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 // Áp chế độ hiện tại lên Ô ĐANG CÓ CON TRỎ: editor request (tab đang mở), setting,
 // hoặc (mặc định) pane response. Nút bevel không nhận focus nên firstResponder giữ nguyên.
 - (void)applyPrettyToFocusedPane {
+    // request editor (Scintilla) đang giữ con trỏ?
+    if ([_reqText hasFocus]) {
+        _reqText.string = [self applyView:S(_reqText.string)];
+        [self stashActiveReqBuffer];
+        return;
+    }
+    // setting editor (NSTextView) đang focus?
     id fr = _window.firstResponder;
-    NSTextView *target = nil;
-    if (fr == _reqText) target = _reqText;
-    else if (fr == _settingText) target = _settingText;
-    if (target) {
-        target.string = [self applyView:S(target.string)];
-        if (target == _reqText) [self stashActiveReqBuffer]; // đồng bộ buffer tab
+    if (fr == _settingText) {
+        _settingText.string = [self applyView:S(_settingText.string)];
         return;
     }
     if (_hasResp) [self rebuildResponseBuffers]; // mặc định: pane response
-}
-
-// Format JSON tab đang mở (chỗ con trỏ) — qua menu chuột phải của editor.
-- (NSMenu *)textView:(NSTextView *)tv menu:(NSMenu *)menu forEvent:(NSEvent *)e atIndex:(NSUInteger)i {
-    if (tv != _reqText) return menu;
-    [menu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *fmt = [[NSMenuItem alloc] initWithTitle:@"Format JSON" action:nil keyEquivalent:@""];
-    NSMenu *sub = [[NSMenu alloc] init];
-    NSArray *titles = @[ @"Pretty", @"Minify", @"Encode → string", @"Decode ← string" ];
-    for (NSInteger k = 0; k < (NSInteger)titles.count; k++) {
-        NSMenuItem *it = [sub addItemWithTitle:titles[k] action:@selector(reqFormatPick:) keyEquivalent:@""];
-        it.target = self; it.tag = k;
-    }
-    fmt.submenu = sub;
-    [menu addItem:fmt];
-    return menu;
-}
-- (void)reqFormatPick:(NSMenuItem *)item {
-    std::string t = S(_reqText.string);
-    NSString *out;
-    switch (item.tag) {
-        case 1: out = N(core::fieldcodec::formatJson(t, false)); break;
-        case 2: out = N(core::fieldcodec::jsonEncodeString(t)); break;
-        case 3: out = N(core::fieldcodec::jsonDecodeString(t)); break;
-        default: out = N(core::fieldcodec::formatJson(t, true)); break;
-    }
-    _reqText.string = out;
-    [self stashActiveReqBuffer];
 }
 
 // Copy request hiện tại dạng cURL (HTTP) / grpcurl (gRPC) vào clipboard.
@@ -1008,7 +960,9 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     core::AppConfigStore a; core::AppConfig c = a.load();
     [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize];
     NSFont *mono = [OS9Theme monoFont];
-    _reqText.font = mono; _respText.font = mono; _settingText.font = mono; _urlField.font = mono;
+    [_reqText setFontName:N(c.fontName) size:c.fontSize];
+    [_respText setFontName:N(c.fontName) size:c.fontSize];
+    _settingText.font = mono; _urlField.font = mono;
     _tree.font = [OS9Theme uiFont];
     [_tree reloadData];
     [self applyTreeExpansion];
@@ -1017,11 +971,11 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
 #pragma mark Editing
 
-- (void)textDidChange:(NSNotification *)note {
-    // Live-stash: ô đang sửa -> buffer của tab hiện tại luôn đồng bộ.
-    // Fix lỗi: rời tab rồi quay lại không còn hiển thị nhầm giá trị tab trước.
-    if (note.object == _reqText && _activeReqTab >= 0 && _activeReqTab < (NSInteger)_reqBuffers.count)
-        _reqBuffers[_activeReqTab] = [(_reqText.string ?: @"") copy]; // copy: tránh lẫn giá trị giữa tab
+// Live-stash: user gõ trong editor request -> buffer tab hiện tại luôn đồng bộ
+// (SciTextView.onTextChanged gọi cái này; tránh lẫn giá trị khi đổi tab).
+- (void)reqTextChanged {
+    if (_activeReqTab >= 0 && _activeReqTab < (NSInteger)_reqBuffers.count)
+        _reqBuffers[_activeReqTab] = [(_reqText.string ?: @"") copy];
 }
 - (void)controlTextDidChange:(NSNotification *)note { }
 - (void)methodChanged:(id)sender { }

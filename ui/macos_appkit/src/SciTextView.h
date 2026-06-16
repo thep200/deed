@@ -1,0 +1,13 @@
+// SciTextView — wrapper mỏng quanh ScintillaView (docs/RENDERING_AND_ASSETS.md §3.6).
+// Giấu API SCI_* khỏi phần còn lại; dùng cho cả pane request (sửa được) lẫn response (read-only).
+#import <Cocoa/Cocoa.h>
+
+@interface SciTextView : NSView
+@property(nonatomic, copy) NSString *string;          // get/set toàn bộ text
+@property(nonatomic) BOOL editable;                   // bật/tắt sửa (response = NO)
+@property(nonatomic, copy) void (^onTextChanged)(void); // gọi khi NGƯỜI DÙNG sửa (không gọi khi set bằng code)
+
+- (instancetype)initEditable:(BOOL)editable;          // tạo + cấu hình JSON + theme Platinum
+- (void)setFontName:(NSString *)name size:(CGFloat)size;
+- (BOOL)hasFocus;                                     // editor đang giữ con trỏ?
+@end
