@@ -172,9 +172,10 @@
 }
 
 // close BÊN TRÁI; collapse (hide) + zoom (phóng to) BÊN PHẢI (như Mac OS 9).
-- (NSRect)closeRect    { return NSMakeRect(8, (self.bounds.size.height - 14) / 2, 14, 14); }
-- (NSRect)zoomRect     { return NSMakeRect(self.bounds.size.width - 8 - 14, (self.bounds.size.height - 14) / 2, 14, 14); }
-- (NSRect)collapseRect { return NSMakeRect(self.bounds.size.width - 8 - 14 - 18, (self.bounds.size.height - 14) / 2, 14, 14); }
+// Icon to hơn (18px) cho dễ nhìn/bấm.
+- (NSRect)closeRect    { CGFloat s = 18; return NSMakeRect(8, (self.bounds.size.height - s) / 2, s, s); }
+- (NSRect)zoomRect     { CGFloat s = 18; return NSMakeRect(self.bounds.size.width - 8 - s, (self.bounds.size.height - s) / 2, s, s); }
+- (NSRect)collapseRect { CGFloat s = 18; return NSMakeRect(self.bounds.size.width - 8 - s - 22, (self.bounds.size.height - s) / 2, s, s); }
 
 - (void)mouseDown:(NSEvent *)e {
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
@@ -251,22 +252,39 @@ NSImage *OS9GearImage(CGFloat size) {
                           flipped:NO
                    drawingHandler:^BOOL(NSRect r) {
         CGFloat cx = size / 2, cy = size / 2;
-        CGFloat rOut = size * 0.48, rIn = size * 0.34;
-        int teeth = 8, steps = teeth * 2;
+        CGFloat rOut = size * 0.46;   // đỉnh răng
+        CGFloat rRoot = size * 0.32;  // chân răng (vành)
+        int teeth = 8;
+        CGFloat pitch = 2 * M_PI / teeth;
+        CGFloat tipHalf = pitch * 0.24;   // nửa bề rộng góc của đỉnh răng (răng vuông, rõ)
+
+        // Răng vuông (flat-top) quanh vành -> bánh răng rõ ràng thay vì hình sao.
         NSBezierPath *gear = [NSBezierPath bezierPath];
-        for (int i = 0; i <= steps; i++) {
-            CGFloat ang = (CGFloat)i / steps * 2 * M_PI;
-            CGFloat rad = (i % 2 == 0) ? rOut : rIn;
-            NSPoint pt = NSMakePoint(cx + rad * cos(ang), cy + rad * sin(ang));
-            if (i == 0) [gear moveToPoint:pt]; else [gear lineToPoint:pt];
+        for (int i = 0; i < teeth; i++) {
+            CGFloat a = i * pitch;
+            NSPoint p1 = NSMakePoint(cx + rRoot * cos(a - tipHalf), cy + rRoot * sin(a - tipHalf));
+            NSPoint p2 = NSMakePoint(cx + rOut  * cos(a - tipHalf), cy + rOut  * sin(a - tipHalf));
+            NSPoint p3 = NSMakePoint(cx + rOut  * cos(a + tipHalf), cy + rOut  * sin(a + tipHalf));
+            NSPoint p4 = NSMakePoint(cx + rRoot * cos(a + tipHalf), cy + rRoot * sin(a + tipHalf));
+            if (i == 0) [gear moveToPoint:p1]; else [gear lineToPoint:p1];
+            [gear lineToPoint:p2];
+            [gear lineToPoint:p3];
+            [gear lineToPoint:p4];
         }
         [gear closePath];
-        // lỗ trục ở giữa (even-odd -> đục lỗ)
-        CGFloat hr = size * 0.16;
-        [gear appendBezierPath:[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(cx - hr, cy - hr, hr * 2, hr * 2)]];
-        gear.windingRule = NSWindingRuleEvenOdd;
+
+        // Kiểu "viền": vẽ nét bao (outline) đậm thay vì tô đặc.
+        CGFloat lw = MAX(1.0, floor(size * 0.09));
+        gear.lineWidth = lw;
+        gear.lineJoinStyle = NSLineJoinStyleMiter;
         [[NSColor blackColor] set];
-        [gear fill];
+        [gear stroke];
+
+        // lỗ trục ở giữa (vòng tròn viền)
+        CGFloat hr = size * 0.15;
+        NSBezierPath *hole = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(cx - hr, cy - hr, hr * 2, hr * 2)];
+        hole.lineWidth = lw;
+        [hole stroke];
         return YES;
     }];
 }
@@ -391,6 +409,36 @@ void OS9StyleMenu(NSMenu *menu) {
 
 NSTextField *OS9Label(NSString *text) {
     NSTextField *l = [NSTextField labelWithString:text ?: @""];
+    l.font = [OS9Theme uiFont];
+    l.textColor = [NSColor blackColor];
+    l.backgroundColor = [NSColor clearColor];
+    l.drawsBackground = NO;
+    return l;
+}
+
+// Cell tự căn giữa text theo chiều dọc trong bounds.
+@interface OS9VCenterCell : NSTextFieldCell
+@end
+@implementation OS9VCenterCell
+- (NSRect)titleRectForBounds:(NSRect)rect {
+    NSRect tr = [super titleRectForBounds:rect];
+    CGFloat th = [self.attributedStringValue size].height;
+    if (th > 0 && th < rect.size.height) {
+        tr.origin.y = rect.origin.y + (rect.size.height - th) / 2.0;
+        tr.size.height = th;
+    }
+    return tr;
+}
+- (void)drawInteriorWithFrame:(NSRect)frame inView:(NSView *)v {
+    [super drawInteriorWithFrame:[self titleRectForBounds:frame] inView:v];
+}
+@end
+
+NSTextField *OS9CenteredLabel(NSString *text) {
+    NSTextField *l = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    OS9VCenterCell *cell = [[OS9VCenterCell alloc] initTextCell:text ?: @""];
+    cell.bezeled = NO; cell.editable = NO; cell.selectable = NO;
+    l.cell = cell;
     l.font = [OS9Theme uiFont];
     l.textColor = [NSColor blackColor];
     l.backgroundColor = [NSColor clearColor];

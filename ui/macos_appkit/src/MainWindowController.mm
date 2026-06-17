@@ -373,7 +373,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 }
 
 // Nhãn + biến đổi body theo chế độ hiện tại của nút pretty.
-- (NSString *)prettyTitle { return @[ @"{ } Pretty", @"{} Raw", @"\" \" Encode", @"\" \" Decode" ][_prettyMode]; }
+- (NSString *)prettyTitle { return @[ @"Pretty", @"Raw", @"Encode", @"Decode" ][_prettyMode]; }
 - (NSString *)applyView:(const std::string &)body {
     switch (_prettyMode) {
         case 1: return N(core::fieldcodec::formatJson(body, false));
@@ -386,8 +386,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 - (void)buildStatusBar {
     _statusBar = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     [_mainPane addSubview:_statusBar];
-    _statusLabel = OS9Label(@"");
-    _statusLabel.alignment = NSTextAlignmentCenter;   // căn giữa text status
+    _statusLabel = OS9CenteredLabel(@"");
+    _statusLabel.alignment = NSTextAlignmentCenter;   // căn giữa ngang + dọc
     [_mainPane addSubview:_statusLabel];
 }
 

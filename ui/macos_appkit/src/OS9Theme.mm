@@ -164,9 +164,10 @@ static BOOL gClassicButtons = NO; // mặc định: nút kiểu MỚI (btn-new.s
     if (glyph == 1) { // collapse: vạch ngang giữa
         [dark set];
         NSRectFill(NSMakeRect(ib.origin.x, floor(NSMidY(ib)) - 1, ib.size.width, 2));
-    } else if (glyph == 2) { // zoom: ô vuông nhỏ góc trên-trái
+    } else if (glyph == 2) { // zoom: ô vuông nhỏ góc trên-trái (tỉ lệ theo hộp)
         [dark set];
-        NSFrameRect(NSMakeRect(ib.origin.x, NSMaxY(ib) - 6, 6, 6));
+        CGFloat g = floor(ib.size.width * 0.55);
+        NSFrameRect(NSMakeRect(ib.origin.x, NSMaxY(ib) - g, g, g));
     }
 }
 
