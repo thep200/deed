@@ -5,6 +5,7 @@
 
 #include "core/import_export/importer.hpp"
 #include "import_export/shell_tokenize.hpp"
+#include "infra/url_util.hpp"
 
 namespace core {
 
@@ -209,6 +210,9 @@ ImportResult CurlImporter::parse(const std::string& input) const {
         res.error = "no URL found in cURL command";
         return res;
     }
+
+    // Query sau '?' -> tách vào params (decode), url còn lại là raw.
+    urlutil::splitUrlQuery(h.url, h.params);
 
     res.ok = true;
     res.model = std::move(m);

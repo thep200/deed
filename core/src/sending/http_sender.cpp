@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include "codec/json_codec.hpp"
+#include "infra/url_util.hpp"
 
 namespace core {
 
@@ -98,12 +99,18 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
     cpr::Session session;
 
     std::string url = applyPathVariables(h.url, h.pathVariables);
+    // Người dùng có thể tự gõ query vào URL -> tách ra (decode) để gửi đúng, url còn raw.
+    std::vector<KeyValue> urlQuery;
+    urlutil::splitUrlQuery(url, urlQuery);
     session.SetUrl(cpr::Url{url});
 
-    // Query params
+    // Query params (từ tab Query + query lẫn trong URL). cpr tự encode lại.
     cpr::Parameters params;
     for (const auto& p : h.params) {
         if (p.enabled && !p.key.empty()) params.Add({p.key, p.value});
+    }
+    for (const auto& p : urlQuery) {
+        if (!p.key.empty()) params.Add({p.key, p.value});
     }
     session.SetParameters(params);
 

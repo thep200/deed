@@ -145,6 +145,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     OS9SerratedInset *_treeInset;
     NSScrollView *_treeScroll;
     DeedOutlineView *_tree;
+    NSTextField *_renameField;   // ô rename inline trên cây (overlay)
+    TreeItem *_renameItem;
     NSMutableArray<TreeItem *> *_roots;
     NSMutableSet<NSString *> *_expandedFolders; // relPath các folder đang mở (giữ qua reload)
     BOOL _treeExpandInit;                        // lần nạp đầu -> mở hết
@@ -368,7 +370,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _tree.dataSource = self;
     _tree.delegate = self;
     _tree.target = self;
-    _tree.action = @selector(treeClicked:); // click folder -> fold/unfold
+    _tree.action = @selector(treeClicked:);          // click folder -> fold/unfold
+    _tree.doubleAction = @selector(treeDoubleClicked:); // dbl: vùng trống -> new HTTP; trên row -> rename
     _expandedFolders = [NSMutableSet set];
     _tree.backgroundColor = [NSColor whiteColor];
     [_tree registerForDraggedTypes:@[ kTreeDragType ]]; // kéo-thả di chuyển
@@ -637,7 +640,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 - (void)setRequestType:(core::RequestType)t {
     _model.type = t;
     if (t == core::RequestType::Http) {
-        _reqTabTitles = @[ @"Body", @"Params", @"Headers", @"Auth" ];  // Body ngoài cùng trái
+        _reqTabTitles = @[ @"Body", @"Query", @"Headers", @"Auth" ];  // "Query" (tránh nhầm với path params); Body ngoài cùng trái
         _respTabTitles = @[ @"Response", @"Headers", @"Request", @"Cookie" ];
     } else {
         _reqTabTitles = @[ @"Message", @"Metadata", @"Auth" ];
@@ -727,6 +730,16 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     } catch (...) {}
 }
 
+// Đồng bộ _currentRel theo id ổn định trước khi ghi: sau rename/move, đường dẫn cũ đã đổi
+// -> tránh save ghi vào path cũ tạo file "ma". Trả NO nếu request đang mở đã bị xoá.
+- (BOOL)resyncCurrentRelById {
+    if (_currentId.empty() || !_engine) return !_currentRel.empty();
+    std::string rel = _engine->collection().findRelPathById(_currentId);
+    if (rel.empty()) return NO;          // không còn trên đĩa (đã xoá) -> đừng tái tạo
+    _currentRel = rel;
+    return YES;
+}
+
 - (void)reloadTree {
     [_roots removeAllObjects];
     if (_engine) {
@@ -768,6 +781,61 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     if (!t.isFolder) return;
     if ([_tree isItemExpanded:t]) [_tree collapseItem:t];
     else [_tree expandItem:t];
+}
+
+// Double-click: vùng TRỐNG -> tạo nhanh HTTP request; trên 1 row -> rename inline.
+- (void)treeDoubleClicked:(id)sender {
+    NSInteger row = _tree.clickedRow;
+    if (row < 0) { [self newHttp:nil]; return; }   // khoảng trống
+    [self beginInlineRenameRow:row];
+}
+
+#pragma mark Inline rename (sửa tên ngay trên cây, không popup)
+
+- (void)beginInlineRenameRow:(NSInteger)row {
+    if (row < 0 || !_engine) return;
+    TreeItem *t = [_tree itemAtRow:row];
+    if (!t || t.relPath.length == 0) return;
+    [self commitInlineRename:nil];   // đóng ô đang mở (nếu có)
+    // Đặt ô rename trên contentView (không nhét vào NSOutlineView vì nó tự quản subview).
+    NSView *content = _window.contentView;
+    NSRect cell = [_tree frameOfCellAtColumn:0 row:row];
+    NSRect inWin = [_tree convertRect:cell toView:content];
+    CGFloat tx = inWin.origin.x + 20;  // chừa icon thư mục/doc
+    NSRect fr = NSMakeRect(tx, inWin.origin.y, NSMaxX(inWin) - tx - 2, inWin.size.height);
+    _renameField = [[NSTextField alloc] initWithFrame:fr];
+    _renameField.stringValue = t.name;
+    _renameField.font = [OS9Theme uiFont];
+    _renameField.bezeled = YES;
+    _renameField.editable = YES;
+    _renameField.drawsBackground = YES;
+    _renameField.focusRingType = NSFocusRingTypeNone;
+    _renameField.target = self;
+    _renameField.action = @selector(commitInlineRename:);  // Enter -> commit
+    _renameField.delegate = self;                          // blur -> commit (controlTextDidEndEditing)
+    _renameItem = t;
+    [content addSubview:_renameField positioned:NSWindowAbove relativeTo:nil];
+    [_window makeFirstResponder:_renameField];
+    [_renameField selectText:nil];
+}
+
+// Commit cả khi Enter lẫn khi mất focus. Nil _renameField TRƯỚC để tránh re-entry.
+- (void)commitInlineRename:(id)sender {
+    NSTextField *f = _renameField;
+    TreeItem *t = _renameItem;
+    if (!f || !t) return;
+    _renameField = nil; _renameItem = nil;
+    NSString *newName = [f.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    [f removeFromSuperview];
+    if (!newName.length || [newName isEqualToString:t.name]) return;   // không đổi
+    [self autosaveCurrent];
+    BOOL wasCurrent = (!_currentId.empty() && t.requestId.length && S(t.requestId) == _currentId);
+    try {
+        std::string newRel = _engine->collection().rename(t.relPath.UTF8String, newName.UTF8String);
+        if (wasCurrent) { _currentRel = newRel; [self updateTitle]; } // giữ con trỏ request đang mở
+        [self reloadTree];
+        [self toastOk:@"Renamed"];
+    } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 - (void)outlineViewItemDidExpand:(NSNotification *)n {
     TreeItem *t = n.userInfo[@"NSObject"];
@@ -942,6 +1010,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 // Tự lưu mọi thay đổi (không hỏi). JSON sai -> bỏ qua + cảnh báo nhẹ.
 - (void)autosaveCurrent {
     if (!_hasRequest || !_engine || _currentRel.empty()) return;
+    if (![self resyncCurrentRelById]) return;     // request đã bị xoá/đổi path -> không ghi lại path cũ
     if (![self syncModelFromEditors:YES]) { [self toastWarn:@"Autosave failed: invalid JSON"]; return; }
     try { _engine->collection().saveRequest(_currentRel, _model); [_tree reloadData];
           [self applyTreeExpansion]; }
@@ -1177,7 +1246,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         [self restoreUrlField];
         return;
     }
-    [self createFromImport:r.model];
+    [self applyImport:r.model];
 }
 
 // Hiện preview xác nhận; nếu OK -> tạo request mới trong tree + mở editor.
@@ -1190,12 +1259,12 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         return;
     }
     NSAlert *a = [[NSAlert alloc] init];
-    a.messageText = isGrpc ? @"Phát hiện lệnh grpcurl" : @"Phát hiện lệnh cURL";
+    a.messageText = isGrpc ? @"grpcurl command detected" : @"cURL command detected";
     a.informativeText = [self importSummary:r.model unknown:r.unknown grpc:isGrpc];
-    [a addButtonWithTitle:@"Tạo request"];
+    [a addButtonWithTitle:(_hasRequest ? @"Replace current" : @"Create request")];
     [a addButtonWithTitle:@"Cancel"];
     if ([a runModal] == NSAlertFirstButtonReturn) {
-        [self createFromImport:r.model];
+        [self applyImport:r.model];
     } else {
         [self restoreUrlField];   // bỏ: trả ô URL về giá trị request đang mở
     }
@@ -1217,7 +1286,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
             (unsigned long)h.headers.size(), h.body.mode.c_str(), h.auth.type.c_str()];
     }
     if (!unknown.empty()) {
-        [s appendString:@"\nbỏ qua:"];
+        [s appendString:@"\nskipped:"];
         for (const auto &u : unknown) [s appendFormat:@" %s", u.c_str()];
     }
     return s;
@@ -1235,14 +1304,36 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     return [NSString stringWithFormat:@"%s %@", m.http.method.c_str(), last];
 }
 
-- (void)createFromImport:(const core::RequestModel &)m {
-    [self autosaveCurrent];   // lưu request đang mở trước khi chuyển (app autosave, không hỏi)
-    NSString *name = [self deriveImportName:m];
+// REPLACE request đang mở bằng model import (giữ id/name/file, thay type + payload).
+// Không có request nào đang mở -> tạo mới (fallback).
+- (void)applyImport:(const core::RequestModel &)m {
+    if (!_hasRequest || _currentRel.empty() || ![self resyncCurrentRelById]) {
+        NSString *name = [self deriveImportName:m];   // fallback: chưa mở request -> tạo mới
+        try {
+            std::string rel = _engine->collection().createRequestFromModel([self selectedFolderRel], m, name.UTF8String);
+            [self reloadTree];
+            [self loadRequestAtRel:N(rel)];
+            [self toastOk:[NSString stringWithFormat:@"Imported & created: %@", name]];
+        } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
+        return;
+    }
+    // Replace tại chỗ: giữ id + name của request hiện tại; URL/target hiện giá trị đã parse.
+    core::RequestModel n = m;
+    n.id = _model.id;
+    n.name = _model.name;
+    _model = n;
+    _hasResp = NO;
+    [self setRequestType:_model.type];   // rebuild tab theo type mới (http <-> grpc)
+    [self populateEditorsFromModel];
+    [self setHasRequest:YES];
+    _respText.string = @"";              // xoá response cũ
+    [self updateTitle];
+    [self relayout];
     try {
-        std::string rel = _engine->collection().createRequestFromModel([self selectedFolderRel], m, name.UTF8String);
+        _engine->collection().saveRequest(_currentRel, _model);   // lưu ngay tại chỗ
         [self reloadTree];
-        [self loadRequestAtRel:N(rel)];   // ô URL/target hiện giá trị đã parse
-        [self toastOk:[NSString stringWithFormat:@"Imported & created request: %@", name]];
+        [self toastOk:[NSString stringWithFormat:@"Replaced current request (%@)",
+                       _model.type == core::RequestType::Grpc ? @"gRPC" : @"HTTP"]];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 
@@ -1254,9 +1345,52 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     _urlPrevLen = u.length;
 }
 
-- (void)controlTextDidEndEditing:(NSNotification *)note { }
+- (void)controlTextDidEndEditing:(NSNotification *)note {
+    if (note.object == _renameField) [self commitInlineRename:nil];   // rời ô rename -> lưu
+}
 - (void)methodChanged:(id)sender { }
-- (void)urlCommitted:(id)sender { }
+- (void)urlCommitted:(id)sender { [self parseUrlQueryIntoQueryTab]; }   // Enter ở ô URL -> tách query
+
+// Decode 1 thành phần query: '+' -> space, %XX -> byte (khớp Core urlutil::urlDecode).
+- (NSString *)urlDecodeComponent:(NSString *)s {
+    NSString *plus = [s stringByReplacingOccurrencesOfString:@"+" withString:@" "];
+    return [plus stringByRemovingPercentEncoding] ?: plus;
+}
+
+// Nếu ô URL có '?...': tách query (decode) -> nối vào tab Query, ô URL còn raw.
+// Dùng khi user tự gõ query vào URL rồi Enter/Send (giống hành vi import cURL).
+- (void)parseUrlQueryIntoQueryTab {
+    NSInteger qi = [_reqTabTitles indexOfObject:@"Query"];
+    if (qi == NSNotFound || qi >= (NSInteger)_reqBuffers.count) return;   // gRPC: không có Query
+    NSString *u = _urlField.stringValue ?: @"";
+    NSRange qr = [u rangeOfString:@"?"];
+    if (qr.location == NSNotFound) return;                                // không có query
+    NSString *raw = [u substringToIndex:qr.location];
+    NSString *query = [u substringFromIndex:qr.location + 1];
+    NSRange hr = [query rangeOfString:@"#"];
+    if (hr.location != NSNotFound) query = [query substringToIndex:hr.location];
+
+    [self stashActiveReqBuffer];   // buffer tab Query hiện tại là mới nhất trước khi nối thêm
+
+    // Lấy các entry sẵn có trong tab Query (JSON array) rồi nối entry parse được.
+    NSMutableArray *items = [NSMutableArray array];
+    NSData *cur = [(_reqBuffers[qi] ?: @"[]") dataUsingEncoding:NSUTF8StringEncoding];
+    id arr = cur ? [NSJSONSerialization JSONObjectWithData:cur options:0 error:nil] : nil;
+    if ([arr isKindOfClass:[NSArray class]]) [items addObjectsFromArray:arr];
+    for (NSString *seg in [query componentsSeparatedByString:@"&"]) {
+        if (!seg.length) continue;
+        NSRange eq = [seg rangeOfString:@"="];
+        NSString *k = (eq.location == NSNotFound) ? seg : [seg substringToIndex:eq.location];
+        NSString *v = (eq.location == NSNotFound) ? @"" : [seg substringFromIndex:eq.location + 1];
+        [items addObject:@{@"key" : [self urlDecodeComponent:k],
+                           @"value" : [self urlDecodeComponent:v], @"enabled" : @YES}];
+    }
+    NSData *out = [NSJSONSerialization dataWithJSONObject:items options:NSJSONWritingPrettyPrinted error:nil];
+    if (out) _reqBuffers[qi] = [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding];
+
+    _urlField.stringValue = raw; _urlPrevLen = raw.length;       // ô URL còn raw
+    if (_activeReqTab == qi) _reqText.string = _reqBuffers[qi];   // đang xem tab Query -> refresh
+}
 
 - (void)updateTitle {
     // Title CHỈ là tên request (rỗng nếu chưa chọn). Không còn dấu dirty.
@@ -1268,6 +1402,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
 
 - (void)saveRequest:(id)sender {
     if (!_hasRequest || !_engine) return;
+    if (![self resyncCurrentRelById]) { [self toastWarn:@"Request no longer exists"]; return; }
     if (![self syncModelFromEditors:NO]) return;
     try {
         _engine->collection().saveRequest(_currentRel, _model);
@@ -1280,6 +1415,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
 
 - (void)sendRequest:(id)sender {
     if (!_hasRequest || !_engine || _sending) return;
+    [self parseUrlQueryIntoQueryTab];   // user gõ query vào URL -> tách vào tab Query trước khi sync
     if (![self syncModelFromEditors:NO]) return;
     if (_model.type == core::RequestType::Grpc && _model.grpc.methodType != "unary") {
         [self toastWarn:@"POC supports unary gRPC only"]; return;
@@ -1567,45 +1703,38 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     if (t.isFolder) return t.relPath.UTF8String;
     return [t.relPath stringByDeletingLastPathComponent].UTF8String;
 }
-- (NSString *)promptName:(NSString *)title default:(NSString *)def {
-    NSAlert *a = [[NSAlert alloc] init];
-    a.messageText = title;
-    NSTextField *tf = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 240, 24)];
-    tf.stringValue = def ?: @"";
-    a.accessoryView = tf;
-    [a addButtonWithTitle:@"OK"]; [a addButtonWithTitle:@"Cancel"];
-    return ([a runModal] == NSAlertFirstButtonReturn) ? tf.stringValue : nil;
-}
-- (void)newHttp:(id)s { [self createRequest:core::RequestType::Http]; }
-- (void)newGrpc:(id)s { [self createRequest:core::RequestType::Grpc]; }
-- (void)createRequest:(core::RequestType)t {
-    NSString *name = [self promptName:@"Tên request" default:@"New Request"];
-    if (!name) return;
+- (void)newHttp:(id)s { [self createRequest:core::RequestType::Http name:@"New Request"]; }
+- (void)newGrpc:(id)s { [self createRequest:core::RequestType::Grpc name:@"New RPC"]; }
+// Tên mặc định, KHÔNG popup. Đổi tên sau bằng inline-rename trên cây. loadRequestAtRel
+// tự autosave request đang mở trước khi chuyển.
+- (void)createRequest:(core::RequestType)t name:(NSString *)name {
+    if (!_engine) { [self toastWarn:@"Open a collection folder first"]; return; }
     try {
         std::string rel = _engine->collection().createRequest([self selectedFolderRel], t, name.UTF8String);
         [self reloadTree];
         [self loadRequestAtRel:N(rel)];
+        [self toastOk:[NSString stringWithFormat:@"Created: %@", name]];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 - (void)newFolder:(id)s {
-    NSString *name = [self promptName:@"Tên folder" default:@"New Folder"];
-    if (!name) return;
-    try { _engine->collection().createFolder([self selectedFolderRel], name.UTF8String); [self reloadTree]; }
+    if (!_engine) { [self toastWarn:@"Open a collection folder first"]; return; }
+    try { _engine->collection().createFolder([self selectedFolderRel], "New Folder"); [self reloadTree]; }
     catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
+// Rename: chỉnh ngay trên cây (inline), không popup.
 - (void)renameSel:(id)s {
-    NSInteger row = _tree.selectedRow; if (row < 0) return;
-    TreeItem *t = [_tree itemAtRow:row];
-    NSString *name = [self promptName:@"Tên mới" default:t.name];
-    if (!name) return;
-    try { _engine->collection().rename(t.relPath.UTF8String, name.UTF8String); [self reloadTree]; }
-    catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
+    [self beginInlineRenameRow:_tree.selectedRow];
 }
 - (void)dupSel:(id)s {
     NSInteger row = _tree.selectedRow; if (row < 0) return;
     TreeItem *t = [_tree itemAtRow:row];
-    try { _engine->collection().duplicate(t.relPath.UTF8String); [self reloadTree]; }
-    catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
+    [self autosaveCurrent];   // flush edits hiện tại trước (tránh trạng thái treo)
+    try {
+        std::string dupRel = _engine->collection().duplicate(t.relPath.UTF8String);
+        [self reloadTree];
+        if (!t.isFolder) [self loadRequestAtRel:N(dupRel)];   // mở bản sao -> _currentRel đúng
+        [self toastOk:@"Duplicated"];
+    } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 - (void)deleteSel:(id)s {
     NSInteger row = _tree.selectedRow; if (row < 0) return;
