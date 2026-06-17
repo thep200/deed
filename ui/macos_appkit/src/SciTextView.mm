@@ -1,5 +1,6 @@
 #import "SciTextView.h"
 #import "OS9Theme.h"
+#import "JsonEditorBehavior.h"
 
 #import <ScintillaView.h>
 #include <Scintilla.h>
@@ -12,6 +13,7 @@
 @implementation SciTextView {
     ScintillaView *_sci;
     BOOL _programmatic; // đang set text bằng code -> KHÔNG bắn onTextChanged
+    JsonEditorBehavior *_behavior; // hành vi soạn JSON; nil cho ô read-only
 }
 
 - (instancetype)initEditable:(BOOL)editable {
@@ -57,6 +59,12 @@
         sv.hasVerticalScroller = YES;
         sv.autohidesScrollers = YES;
     }
+
+    // Hành vi soạn JSON (auto-close / auto-indent / brace-match): chỉ ô SOẠN.
+    if (_editable) {
+        _behavior = [[JsonEditorBehavior alloc] initWithScintillaView:_sci];
+        [_behavior applyHighlightStyles];
+    }
 }
 
 - (void)applyPlatinumTheme {
@@ -92,6 +100,7 @@
     if (size > 0) [self msg:SCI_STYLESETSIZE w:STYLE_DEFAULT l:(sptr_t)size];
     [self msg:SCI_STYLECLEARALL w:0 l:0];
     [self applyPlatinumTheme];
+    [_behavior applyHighlightStyles];   // STYLECLEARALL xoá -> set lại màu brace
 }
 
 #pragma mark text get/set
@@ -134,10 +143,20 @@
 #pragma mark Scintilla notifications
 
 - (void)notification:(SCNotification *)n {
-    if (_programmatic) return;
-    if (n->nmhdr.code == SCN_MODIFIED &&
-        (n->modificationType & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) {
-        if (_onTextChanged) _onTextChanged();
+    switch (n->nmhdr.code) {
+        case SCN_CHARADDED:                          // (b)(c) auto-close/indent/skip-over
+            if (!_programmatic) [_behavior handleCharAdded:(unsigned)n->ch];
+            break;
+        case SCN_UPDATEUI:                           // (f) brace-match (no-op nếu _behavior nil)
+            [_behavior updateBraceMatch];
+            break;
+        case SCN_MODIFIED:
+            if (!_programmatic &&
+                (n->modificationType & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) {
+                if (_onTextChanged) _onTextChanged();
+            }
+            break;
+        default: break;
     }
 }
 

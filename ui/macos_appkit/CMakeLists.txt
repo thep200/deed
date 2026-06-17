@@ -17,6 +17,7 @@ add_executable(ApiClientApp MACOSX_BUNDLE
   src/OS9Theme.mm
   src/OS9Widgets.mm
   src/SciTextView.mm
+  src/JsonEditorBehavior.mm
   ${DEED_ENV_SRC}
 )
 
