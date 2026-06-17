@@ -10,6 +10,7 @@
 #include "core/sending/i_request_sender.hpp"
 #include "core/variables/variable_resolver.hpp"
 #include "infra/fs_util.hpp"
+#include "sending/grpc_descriptors.hpp"
 #include "sending/grpc_sender.hpp"
 #include "sending/http_sender.hpp"
 #include "codec/json_codec.hpp"
@@ -144,6 +145,20 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
         resolveKv(g.metadata, vars);
     }
     return rr;
+}
+
+std::vector<GrpcMethodInfo> Engine::listGrpcMethods(const GrpcRequest& grpc,
+                                                    std::string& error) const {
+    // Resolve {{var}} cho target để reflection trỏ đúng host:port.
+    GrpcRequest g = grpc;
+    g.target = resolveStr(g.target, activeVars());
+
+    grpcdesc::DescriptorContext ctx;
+    if (!grpcdesc::buildDescriptors(g, ctx)) {
+        error = ctx.error;
+        return {};
+    }
+    return grpcdesc::listMethods(ctx);
 }
 
 RequestHandle Engine::send(const RequestModel& model, IUiDelegate* delegate) {

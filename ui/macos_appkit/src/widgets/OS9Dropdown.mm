@@ -33,6 +33,7 @@
     NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont]};
     CGFloat w = a.size.width;
     for (NSString *t in items) w = MAX(w, [t sizeWithAttributes:attrs].width + 34);
+    w = MIN(w, 360);                          // chặn trần -> tên dài bị cắt "…" (xem drawRect)
     CGFloat h = items.count * _rowH + 2;
 
     CGFloat downY = NSMaxY(a) + 1;           // ngay dưới anchor
@@ -51,6 +52,20 @@
                                        options:(NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways)
                                          owner:self userInfo:nil];
     [self addTrackingArea:_ta];
+
+    // Tooltip mỗi hàng: hover hiện tên đầy đủ (kể cả khi đã cắt "…" trong drawRect).
+    [self removeAllToolTips];
+    for (NSInteger i = 0; i < (NSInteger)_items.count; i++) {
+        NSRect row = NSMakeRect(_listRect.origin.x, _listRect.origin.y + 1 + i * _rowH,
+                                _listRect.size.width, _rowH);
+        [self addToolTipRect:row owner:self userData:NULL];
+    }
+}
+
+- (NSString *)view:(NSView *)view stringForToolTipTag:(NSToolTipTag)tag point:(NSPoint)point
+          userData:(void *)data {
+    NSInteger r = [self rowAt:point];
+    return (r >= 0 && r < (NSInteger)_items.count) ? _items[r] : @"";
 }
 
 - (NSInteger)rowAt:(NSPoint)p {
@@ -95,8 +110,16 @@
         NSDictionary *attrs = hot ? hi : norm;
         if (i == _selected)
             [@"✓" drawAtPoint:NSMakePoint(row.origin.x + 7, row.origin.y + (_rowH - 12) / 2) withAttributes:attrs];
+        // Cắt "…" theo bề rộng hàng; tên đầy đủ xem ở tooltip.
+        NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
+        ps.lineBreakMode = NSLineBreakByTruncatingTail;
+        NSMutableDictionary *trAttrs = [attrs mutableCopy];
+        trAttrs[NSParagraphStyleAttributeName] = ps;
+        CGFloat textX = row.origin.x + 22;
         NSSize sz = [_items[i] sizeWithAttributes:attrs];
-        [_items[i] drawAtPoint:NSMakePoint(row.origin.x + 22, row.origin.y + (_rowH - sz.height) / 2) withAttributes:attrs];
+        NSRect textRect = NSMakeRect(textX, row.origin.y + (_rowH - sz.height) / 2,
+                                     NSMaxX(_listRect) - textX - 6, sz.height);
+        [_items[i] drawInRect:textRect withAttributes:trAttrs];
     }
     [[NSColor colorWithCalibratedWhite:0.15 alpha:1] set];
     NSBezierPath *border = [NSBezierPath bezierPathWithRect:NSInsetRect(_listRect, 0.5, 0.5)];

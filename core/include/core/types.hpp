@@ -98,6 +98,13 @@ struct GrpcSettings {
     bool deadlineMsSet = false;
 };
 
+// Một RPC khả dụng (để UI dựng dropdown chọn service/method).
+struct GrpcMethodInfo {
+    std::string service;     // pkg.Service đầy đủ
+    std::string method;      // tên RPC
+    std::string methodType;  // unary | server_streaming | client_streaming | bidi_streaming
+};
+
 struct GrpcRequest {
     std::string target;          // host:port (authority, không phải URL có path)
     std::string service;         // pkg.Service đầy đủ

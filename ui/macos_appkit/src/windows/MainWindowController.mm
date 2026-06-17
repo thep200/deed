@@ -132,6 +132,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     std::string _currentId;   // id request đang mở (định danh ổn định)
     uint64_t _currentHandle;
     BOOL _hasRequest;
+    std::vector<core::GrpcMethodInfo> _grpcMethods; // song song với item của _servicePopup
+    uint64_t _grpcMethodsReqSeq;  // chống race: chỉ áp kết quả listGrpcMethods mới nhất
 
     // Chrome + containers
     NSWindow *_window;
@@ -181,7 +183,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     OS9BevelButton *_envButton;
     OS9BevelButton *_sendButton;
     OS9BevelButton *_cancelButton;
-    OS9BevelButton *_protoButton;
+    OS9PopupButton *_protoPopup;     // gRPC: chọn nguồn proto (Reflection | .proto)
+    OS9PopupButton *_servicePopup;   // gRPC: chọn service/RPC (trước nút Send)
     OS9PopupButton *_methodPopup;
     OS9SerratedInset *_urlInset; // khung input răng cưa retro bọc ô URL
     NSTextField *_urlField;
@@ -438,7 +441,21 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _sendButton.icon = OS9SendImage(16);   // icon máy bay giấy thay cho label "Send"
     _sendButton.toolTip = @"Send  ⌘↩";
     _cancelButton = [[OS9BevelButton alloc] initWithTitle:@"Cancel" target:self action:@selector(cancelClicked:)];
-    _protoButton = [[OS9BevelButton alloc] initWithTitle:@"Proto: reflection" target:self action:@selector(protoClicked:)];
+
+    // gRPC: nguồn proto = dropdown (Reflection | .proto). Chỉ 2 lựa chọn.
+    _protoPopup = [[OS9PopupButton alloc] initWithItems:@[ @"Reflection", @".proto" ]
+                                                 target:self action:@selector(protoModeChanged:)];
+    _protoPopup.toolTip = @"Nguồn proto: Reflection (hỏi server) hoặc nạp file .proto";
+
+    // gRPC: chọn service/RPC mà server cung cấp (đặt trước nút Send).
+    _servicePopup = [[OS9PopupButton alloc] initWithItems:@[ @"No rpc" ]
+                                                   target:self action:@selector(serviceMethodChanged:)];
+    // Bấm vào -> chủ động check host lấy RPC rồi mới bung menu (reflection cần IO mạng).
+    __weak MainWindowController *wsForRpc = self;
+    _servicePopup.onClick = ^{
+        MainWindowController *s = wsForRpc; if (!s) return;
+        [s fetchGrpcMethodsThenOpen:YES];
+    };
 
     _methodPopup = [[OS9PopupButton alloc] initWithItems:@[ @"GET", @"POST", @"PUT", @"PATCH", @"DELETE", @"HEAD", @"OPTIONS" ]
                                                   target:self action:@selector(methodChanged:)];
@@ -462,7 +479,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _urlField.delegate = self;   // controlTextDidChange: -> phát hiện dán cURL/grpcurl
     [_urlInset addSubview:_urlField];
 
-    for (NSView *v in @[ _settingButton, _envButton, _sendButton, _cancelButton, _protoButton, _methodPopup, _urlInset ])
+    for (NSView *v in @[ _settingButton, _envButton, _sendButton, _cancelButton, _protoPopup, _servicePopup, _methodPopup, _urlInset ])
         [_mainPane addSubview:v];
 }
 
@@ -586,7 +603,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     CGFloat wSetting = [cfg floatFor:@"BTN_SETTING_W" def:64];
     CGFloat wEnv = [cfg floatFor:@"BTN_ENV_W" def:120];
     CGFloat wMethod = [cfg floatFor:@"BTN_METHOD_W" def:92];
-    CGFloat wProto = [cfg floatFor:@"BTN_PROTO_W" def:150];
+    CGFloat wProto = [cfg floatFor:@"BTN_PROTO_W" def:120];
+    CGFloat wService = [cfg floatFor:@"BTN_SERVICE_W" def:200];
     CGFloat wSend = [cfg floatFor:@"BTN_SEND_W" def:54];
     CGFloat wCancel = [cfg floatFor:@"BTN_CANCEL_W" def:64];
 
@@ -594,21 +612,25 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _envButton.frame = NSMakeRect(x, ty, wEnv, btnH); x += wEnv + 6;
     BOOL grpc = (_model.type == core::RequestType::Grpc);
     _methodPopup.frame = NSMakeRect(x, ty, wMethod, btnH);
-    _protoButton.frame = NSMakeRect(x, ty, wProto, btnH);
+    _protoPopup.frame = NSMakeRect(x, ty, wProto, btnH);
     _methodPopup.hidden = grpc;
-    _protoButton.hidden = !grpc;
+    _protoPopup.hidden = !grpc;
     x += (grpc ? wProto : wMethod) + 6;
 
     _cancelButton.hidden = !_sending;
-    CGFloat rightGroup = wSend + 6 + (_sending ? wCancel + 6 : 0);
+    _servicePopup.hidden = !grpc;
+    // Nhóm phải: [servicePopup (gRPC)] [Cancel (khi gửi)] [Send].
+    CGFloat rightGroup = wSend + 6 + (_sending ? wCancel + 6 : 0) + (grpc ? wService + 6 : 0);
     CGFloat urlW = (MW - pad) - x - rightGroup;
     if (urlW < 140) urlW = 140;
     _urlInset.frame = NSMakeRect(x, ty, urlW, btnH);
     // field nằm trong inset, chừa viền + canh giữa theo chiều dọc cho 1 dòng.
     CGFloat fh = ceil([[OS9Theme monoFont] ascender] - [[OS9Theme monoFont] descender]) + 2;
     _urlField.frame = NSMakeRect(4, floor((btnH - fh) / 2), urlW - 8, fh);
-    if (_sending) _cancelButton.frame = NSMakeRect(MW - pad - wSend - 6 - wCancel, ty, wCancel, btnH);
-    _sendButton.frame = NSMakeRect(MW - pad - wSend, ty, wSend, btnH);
+    CGFloat rx = MW - pad - wSend;            // mép phải nút Send
+    _sendButton.frame = NSMakeRect(rx, ty, wSend, btnH);
+    if (_sending) { rx -= 6 + wCancel; _cancelButton.frame = NSMakeRect(rx, ty, wCancel, btnH); }
+    if (grpc) { rx -= 6 + wService; _servicePopup.frame = NSMakeRect(rx, ty, wService, btnH); }
 
     [self positionToast];
 }
@@ -952,7 +974,10 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
         Auth dummy;
         [_reqBuffers addObject:N(fieldcodec::authToJson(dummy))];
         _urlField.stringValue = N(g.target); _urlPrevLen = _urlField.stringValue.length;
-        _protoButton.title = [NSString stringWithFormat:@"Proto: %s", g.protoSource.mode.c_str()];
+        // reflection -> index 0; protoFiles/descriptorSet -> ".proto" (index 1).
+        _protoPopup.selectedIndex = (g.protoSource.mode == "reflection") ? 0 : 1;
+        [_protoPopup setNeedsDisplay:YES];
+        [self showSavedGrpcMethodLabel];   // hiện RPC đã lưu (KHÔNG fetch; fetch khi bấm dropdown)
     }
     _activeReqTab = 0;
     _reqText.string = _reqBuffers.count ? _reqBuffers[0] : @"";
@@ -1349,7 +1374,11 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     if (note.object == _renameField) [self commitInlineRename:nil];   // rời ô rename -> lưu
 }
 - (void)methodChanged:(id)sender { }
-- (void)urlCommitted:(id)sender { [self parseUrlQueryIntoQueryTab]; }   // Enter ở ô URL -> tách query
+- (void)urlCommitted:(id)sender {
+    // gRPC: ô URL = target -> Enter nạp lại danh sách RPC. HTTP: tách query.
+    if (_model.type == core::RequestType::Grpc) [self reloadGrpcMethods];
+    else [self parseUrlQueryIntoQueryTab];
+}
 
 // Decode 1 thành phần query: '+' -> space, %XX -> byte (khớp Core urlutil::urlDecode).
 - (NSString *)urlDecodeComponent:(NSString *)s {
@@ -1605,38 +1634,130 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     [self toastOk:@"Saved"];
 }
 
-#pragma mark Proto (gRPC)
+#pragma mark Proto source (gRPC)
 
-- (void)protoClicked:(id)sender {
+// Dropdown nguồn proto: index 0 = Reflection, 1 = .proto (mở file panel).
+- (void)protoModeChanged:(id)sender {
     if (_model.type != core::RequestType::Grpc) return;
+    if (_protoPopup.selectedIndex == 1) {
+        NSOpenPanel *p = [NSOpenPanel openPanel];
+        p.allowedFileTypes = @[ @"proto" ];
+        if ([p runModal] == NSModalResponseOK) {
+            core::ProtoSource ps;
+            ps.mode = "protoFiles";
+            ps.files.push_back(p.URL.lastPathComponent.UTF8String);
+            ps.importPaths.push_back(p.URL.URLByDeletingLastPathComponent.path.UTF8String);
+            _model.grpc.protoSource = ps;
+        } else {
+            // Huỷ chọn file -> trở về trạng thái trước (reflection).
+            _protoPopup.selectedIndex = 0;
+            [_protoPopup setNeedsDisplay:YES];
+            _model.grpc.protoSource = core::ProtoSource{};
+            _model.grpc.protoSource.mode = "reflection";
+        }
+    } else {
+        _model.grpc.protoSource = core::ProtoSource{};
+        _model.grpc.protoSource.mode = "reflection";
+    }
+    [self reloadGrpcMethods];
+}
+
+#pragma mark RPC picker (gRPC)
+
+// Hiện RPC đã lưu trong model lên nút (KHÔNG gọi mạng). Fetch thật khi bấm vào dropdown.
+- (void)showSavedGrpcMethodLabel {
+    _grpcMethods.clear();
+    const core::GrpcRequest &g = _model.grpc;
+    if (g.service.empty() || g.method.empty()) {
+        _servicePopup.itemTitles = @[ @"No rpc" ];
+        _servicePopup.toolTip = nil;
+    } else {
+        NSString *full = [NSString stringWithFormat:@"%s/%s", g.service.c_str(), g.method.c_str()];
+        _servicePopup.itemTitles = @[ full ];
+        _servicePopup.toolTip = full;
+    }
+    _servicePopup.selectedIndex = 0;
+    [_servicePopup setNeedsDisplay:YES];
+}
+
+// Nạp nền (KHÔNG bung menu): dùng khi đổi nguồn proto / commit URL.
+- (void)reloadGrpcMethods { [self fetchGrpcMethodsThenOpen:NO]; }
+
+// Nạp danh sách service/RPC theo nguồn proto hiện tại (reflection: query host; .proto: parse).
+// openWhenDone = YES: bung menu ngay sau khi nạp xong (dùng khi bấm vào dropdown chọn RPC).
+// Chạy nền vì reflection có IO mạng; chỉ áp kết quả của lần gọi mới nhất.
+- (void)fetchGrpcMethodsThenOpen:(BOOL)openWhenDone {
+    if (_model.type != core::RequestType::Grpc || !_engine) return;
+    _model.grpc.target = _urlField.stringValue.UTF8String; // target = ô URL (host:port)
+    // Reflection cần host; .proto thì parse file nên không bắt buộc host.
+    BOOL needsHost = (_model.grpc.protoSource.mode == "reflection");
+    if (needsHost && _model.grpc.target.empty()) {
+        _grpcMethods.clear();
+        _servicePopup.itemTitles = @[ @"No rpc" ];
+        _servicePopup.selectedIndex = 0;
+        _servicePopup.toolTip = nil;
+        [_servicePopup setNeedsDisplay:YES];
+        if (openWhenDone) [self toastWarn:@"Nhập host gRPC trước (vd: localhost:50051)"];
+        return;
+    }
+    _servicePopup.itemTitles = @[ @"(loading…)" ];
+    _servicePopup.selectedIndex = 0;
+    [_servicePopup setNeedsDisplay:YES];
+
+    uint64_t seq = ++_grpcMethodsReqSeq;
+    core::GrpcRequest g = _model.grpc;
+    core::Engine *engine = _engine.get();
     __weak MainWindowController *ws = self;
-    OS9ShowDropdown(@[ @"Reflection (mặc định)", @"Chọn .proto…", @"Chọn descriptorSet…" ], -1, _protoButton,
-                    ^(NSInteger idx) {
-        MainWindowController *s = ws; if (!s) return;
-        if (idx == 0) [s protoReflection:nil];
-        else if (idx == 1) [s protoFiles:nil];
-        else [s protoDescSet:nil];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        std::string err;
+        std::vector<core::GrpcMethodInfo> methods = engine->listGrpcMethods(g, err);
+        NSString *errStr = err.empty() ? nil : N(err);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MainWindowController *s = ws;
+            if (!s || seq != s->_grpcMethodsReqSeq) return; // đã có yêu cầu mới hơn
+            [s applyGrpcMethods:methods error:errStr openMenu:openWhenDone];
+        });
     });
 }
-- (void)protoReflection:(id)s {
-    _model.grpc.protoSource = core::ProtoSource{}; _model.grpc.protoSource.mode = "reflection";
-    _protoButton.title = @"Proto: reflection";
-}
-- (void)protoFiles:(id)s {
-    NSOpenPanel *p = [NSOpenPanel openPanel]; p.allowedFileTypes = @[ @"proto" ];
-    if ([p runModal] == NSModalResponseOK) {
-        core::ProtoSource ps; ps.mode = "protoFiles";
-        ps.files.push_back(p.URL.lastPathComponent.UTF8String);
-        ps.importPaths.push_back(p.URL.URLByDeletingLastPathComponent.path.UTF8String);
-        _model.grpc.protoSource = ps; _protoButton.title = @"Proto: protoFiles";
+
+- (void)applyGrpcMethods:(const std::vector<core::GrpcMethodInfo> &)methods error:(NSString *)err
+                openMenu:(BOOL)openMenu {
+    _grpcMethods = methods;
+    if (methods.empty()) {
+        _servicePopup.itemTitles = @[ @"No rpc" ];
+        _servicePopup.selectedIndex = 0;
+        _servicePopup.toolTip = nil;
+        [_servicePopup setNeedsDisplay:YES];
+        if (err.length) [self toastWarn:[NSString stringWithFormat:@"List RPCs: %@", err]];
+        return;
     }
-}
-- (void)protoDescSet:(id)s {
-    NSOpenPanel *p = [NSOpenPanel openPanel];
-    if ([p runModal] == NSModalResponseOK) {
-        core::ProtoSource ps; ps.mode = "descriptorSet"; ps.descriptorSetPath = p.URL.path.UTF8String;
-        _model.grpc.protoSource = ps; _protoButton.title = @"Proto: descriptorSet";
+    NSMutableArray<NSString *> *titles = [NSMutableArray array];
+    NSInteger sel = 0;
+    for (size_t i = 0; i < methods.size(); ++i) {
+        const core::GrpcMethodInfo &m = methods[i];
+        [titles addObject:[NSString stringWithFormat:@"%s/%s", m.service.c_str(), m.method.c_str()]];
+        if (m.service == _model.grpc.service && m.method == _model.grpc.method) sel = (NSInteger)i;
     }
+    _servicePopup.itemTitles = titles;
+    _servicePopup.selectedIndex = sel;
+    [_servicePopup setNeedsDisplay:YES];
+    [self applySelectedGrpcMethod:sel]; // đồng bộ model với lựa chọn hiển thị
+    if (openMenu) [_servicePopup openMenu];
+}
+
+// Người dùng chọn RPC -> ghi service/method/methodType vào model (autosave tự lưu).
+- (void)serviceMethodChanged:(id)sender {
+    [self applySelectedGrpcMethod:_servicePopup.selectedIndex];
+}
+
+- (void)applySelectedGrpcMethod:(NSInteger)idx {
+    if (idx < 0 || idx >= (NSInteger)_grpcMethods.size()) return;
+    const core::GrpcMethodInfo &m = _grpcMethods[(size_t)idx];
+    _model.grpc.service = m.service;
+    _model.grpc.method = m.method;
+    _model.grpc.methodType = m.methodType;
+    // Hover nút hiện tên RPC đầy đủ (nút có thể đã cắt "…").
+    _servicePopup.toolTip = [NSString stringWithFormat:@"%s/%s", m.service.c_str(), m.method.c_str()];
 }
 
 - (void)manageEnv:(id)sender { [self enterConfig:0]; }

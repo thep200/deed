@@ -32,16 +32,30 @@
 
 - (void)drawRect:(NSRect)dirty {
     [OS9Theme drawButtonInRect:self.bounds pressed:_pressed isDefault:NO];
+    NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
+    ps.lineBreakMode = NSLineBreakByTruncatingTail;   // tên dài -> cắt "…" (tên đầy đủ ở toolTip)
     NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont],
-                            NSForegroundColorAttributeName : [OS9Theme buttonFGPressed:_pressed enabled:YES]};
+                            NSForegroundColorAttributeName : [OS9Theme buttonFGPressed:_pressed enabled:YES],
+                            NSParagraphStyleAttributeName : ps};
     NSString *t = self.selectedTitle;
     NSSize sz = [t sizeWithAttributes:attrs];
-    [t drawAtPoint:NSMakePoint(7, floor((self.bounds.size.height - sz.height) / 2)) withAttributes:attrs];
+    CGFloat tx = 7, tw = self.bounds.size.width - tx - 16;   // chừa chỗ mũi ▾ bên phải
+    [t drawInRect:NSMakeRect(tx, floor((self.bounds.size.height - sz.height) / 2), tw, sz.height)
+        withAttributes:attrs];
     [OS9Theme drawDropdownArrowInRect:self.bounds]; // ▾ + vạch ngăn theo dropdown.svg
 }
 
 - (void)mouseDown:(NSEvent *)e {
     _pressed = YES; [self setNeedsDisplay:YES]; [self displayIfNeeded];
+    if (self.onClick) {
+        self.onClick();          // owner tự quyết (vd: nạp RPC qua mạng rồi openMenu)
+    } else {
+        [self openMenu];
+    }
+    _pressed = NO; [self setNeedsDisplay:YES];   // overlay là modeless -> nhả nút ngay
+}
+
+- (void)openMenu {
     __weak OS9PopupButton *ws = self;
     OS9ShowDropdown(_itemTitles, _selectedIndex, self, ^(NSInteger idx) {
         OS9PopupButton *s = ws; if (!s) return;
@@ -49,7 +63,6 @@
         [s setNeedsDisplay:YES];
         if (s.action) [NSApp sendAction:s.action to:s.target from:s];
     });
-    _pressed = NO; [self setNeedsDisplay:YES];   // overlay là modeless -> nhả nút ngay
 }
 
 @end

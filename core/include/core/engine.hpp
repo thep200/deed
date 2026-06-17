@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "core/i_ui_delegate.hpp"
 #include "core/import_export/importer.hpp"
@@ -40,6 +41,11 @@ public:
     // --- Gửi (async, trả handle ngay) ---
     RequestHandle send(const RequestModel& model, IUiDelegate* delegate);
     void cancel(RequestHandle);
+
+    // --- gRPC: liệt kê service/method khả dụng (cho dropdown chọn RPC) ---
+    // reflection: query server qua ServerReflection; protoFiles/descriptorSet: parse nguồn.
+    // ĐỒNG BỘ + có IO mạng cho reflection — UI nên gọi trên thread nền.
+    std::vector<GrpcMethodInfo> listGrpcMethods(const GrpcRequest& grpc, std::string& error) const;
 
     // --- Import cURL / grpcurl (CURL_IMPORT.md) ---
     // Phân loại text dán vào ô URL; rồi parse sang RequestModel (KHÔNG ghi file).

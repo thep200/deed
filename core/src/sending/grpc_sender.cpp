@@ -4,9 +4,7 @@
 #include <memory>
 #include <string>
 
-#include <google/protobuf/compiler/importer.h>
 #include <google/protobuf/descriptor.h>
-#include <google/protobuf/descriptor.pb.h>
 #include <google/protobuf/dynamic_message.h>
 #include <google/protobuf/util/json_util.h>
 
@@ -15,8 +13,8 @@
 #include <grpcpp/support/byte_buffer.h>
 #include <grpcpp/support/slice.h>
 
-#include "infra/fs_util.hpp"
 #include "codec/json_codec.hpp"
+#include "sending/grpc_descriptors.hpp"
 
 namespace gp = google::protobuf;
 
@@ -24,79 +22,8 @@ namespace core {
 
 namespace {
 
-// Gom lỗi compile .proto thành chuỗi để báo về UI.
-class ProtoErrorCollector : public gp::compiler::MultiFileErrorCollector {
-public:
-    std::string errors;
-    void RecordError(absl::string_view filename, int line, int column,
-                     absl::string_view message) override {
-        errors += std::string(filename) + ":" + std::to_string(line) + ":" +
-                  std::to_string(column) + ": " + std::string(message) + "\n";
-    }
-};
-
-// Giữ nguồn descriptor sống suốt vòng gửi.
-struct DescriptorContext {
-    // protoFiles
-    std::unique_ptr<gp::compiler::DiskSourceTree> sourceTree;
-    std::unique_ptr<ProtoErrorCollector> errCollector;
-    std::unique_ptr<gp::compiler::Importer> importer;
-    // descriptorSet
-    std::unique_ptr<gp::DescriptorPool> pool;
-    const gp::DescriptorPool* activePool = nullptr;
-    std::string error;
-};
-
-bool buildFromProtoFiles(const GrpcRequest& g, DescriptorContext& ctx) {
-    ctx.sourceTree = std::make_unique<gp::compiler::DiskSourceTree>();
-    if (g.protoSource.importPaths.empty()) {
-        ctx.sourceTree->MapPath("", "."); // mặc định cwd
-    }
-    for (const auto& ip : g.protoSource.importPaths) ctx.sourceTree->MapPath("", ip);
-    ctx.errCollector = std::make_unique<ProtoErrorCollector>();
-    ctx.importer = std::make_unique<gp::compiler::Importer>(ctx.sourceTree.get(),
-                                                            ctx.errCollector.get());
-    for (const auto& f : g.protoSource.files) {
-        if (ctx.importer->Import(f) == nullptr) {
-            ctx.error = "failed to load .proto: " + ctx.errCollector->errors;
-            return false;
-        }
-    }
-    ctx.activePool = ctx.importer->pool();
-    return true;
-}
-
-bool buildFromDescriptorSet(const GrpcRequest& g, DescriptorContext& ctx) {
-    std::string raw;
-    if (!fsutil::readFile(g.protoSource.descriptorSetPath, raw)) {
-        ctx.error = "cannot read descriptorSet: " + g.protoSource.descriptorSetPath;
-        return false;
-    }
-    gp::FileDescriptorSet fds;
-    if (!fds.ParseFromString(raw)) {
-        ctx.error = "invalid descriptorSet (parse failed)";
-        return false;
-    }
-    ctx.pool = std::make_unique<gp::DescriptorPool>();
-    for (const auto& file : fds.file()) {
-        if (ctx.pool->BuildFile(file) == nullptr) {
-            ctx.error = "failed to build FileDescriptor: " + file.name();
-            return false;
-        }
-    }
-    ctx.activePool = ctx.pool.get();
-    return true;
-}
-
-std::shared_ptr<grpc::ChannelCredentials> makeCreds(const GrpcTls& tls) {
-    if (!tls.enabled) return grpc::InsecureChannelCredentials();
-    grpc::SslCredentialsOptions opts;
-    std::string buf;
-    if (!tls.caCertPath.empty() && fsutil::readFile(tls.caCertPath, buf)) opts.pem_root_certs = buf;
-    if (!tls.clientKeyPath.empty() && fsutil::readFile(tls.clientKeyPath, buf)) opts.pem_private_key = buf;
-    if (!tls.clientCertPath.empty() && fsutil::readFile(tls.clientCertPath, buf)) opts.pem_cert_chain = buf;
-    return grpc::SslCredentials(opts);
-}
+using grpcdesc::DescriptorContext;
+using grpcdesc::makeCreds;
 
 ErrorKind mapGrpcStatus(grpc::StatusCode code) {
     switch (code) {
@@ -129,21 +56,9 @@ void GrpcSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
         return;
     }
 
-    // Nạp descriptor.
+    // Nạp descriptor (protoFiles | descriptorSet | reflection).
     DescriptorContext ctx;
-    bool built = false;
-    if (g.protoSource.mode == "protoFiles") {
-        built = buildFromProtoFiles(g, ctx);
-    } else if (g.protoSource.mode == "descriptorSet") {
-        built = buildFromDescriptorSet(g, ctx);
-    } else {
-        delegate.onError(handle,
-                         ApiError{ErrorKind::Unsupported,
-                                  "protoSource 'reflection' is not supported in this POC build — "
-                                  "use protoFiles or descriptorSet."});
-        return;
-    }
-    if (!built) {
+    if (!grpcdesc::buildDescriptors(g, ctx)) {
         delegate.onError(handle, ApiError{ErrorKind::Parse, ctx.error});
         return;
     }

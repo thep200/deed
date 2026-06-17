@@ -1,6 +1,6 @@
 // grpc_sender.hpp — GrpcSender: unary ĐỘNG (README §7.3, §12.3).
 // DescriptorPool + DynamicMessageFactory + GenericStub, marshal JSON<->protobuf runtime.
-// POC: chỉ unary; protoSource = protoFiles | descriptorSet (reflection: chưa hỗ trợ ở build này).
+// POC: chỉ unary; protoSource = reflection | protoFiles | descriptorSet (xem grpc_descriptors).
 #pragma once
 
 #include "core/sending/i_request_sender.hpp"
