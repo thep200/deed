@@ -179,9 +179,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     CGFloat _reqW;
     NSRect _preZoomFrame; // lưu frame trước khi phóng to (để thu nhỏ lại)
 
-    // toast
-    NSTextField *_toast;
-    NSUInteger _toastGen;
+    // toast (stack góc phải-dưới, đẩy lên)
+    NSMutableArray<OS9Toast *> *_toasts;
 
     // config screen (2 màn riêng: Environments / Settings)
     OS9BevelButton *_backButton;
@@ -194,6 +193,9 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     BOOL _sending;
     NSTimer *_spinTimer;   // animate icon loading trong nút Send
     CGFloat _spinPhase;
+    NSUInteger _urlPrevLen; // độ dài URL lần trước -> nhận biết "dán" (tăng đột biến)
+    NSTextView *_fieldEditor; // field editor dùng chung, tắt hết auto-features
+    NSString *_bodyMode;    // mode body hiện tại: json | binary(file) | form-urlencoded(form)
 }
 
 #pragma mark Build
@@ -210,8 +212,10 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     // =0 -> titled window hệ thống (góc bo tròn). Tiêu đề/nút luôn tự vẽ ở OS9TitleBar.
     BOOL square = [cfg boolFor:@"SQUARE_CORNERS" def:YES];
     if (square) {
+        // + Miniaturizable: cho phép thu vào Dock (genie) mà vẫn borderless -> góc VUÔNG.
         _window = [[OS9Window alloc] initWithContentRect:frame
-                                               styleMask:(NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable)
+                                               styleMask:(NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable |
+                                                          NSWindowStyleMaskMiniaturizable)
                                                  backing:NSBackingStoreBuffered
                                                    defer:NO];
     } else {
@@ -283,22 +287,37 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _titleBar.closeAction = @selector(closeWindow:);
     _titleBar.zoomTarget = self;
     _titleBar.zoomAction = @selector(zoomToggle:);
+    _titleBar.collapseTarget = self;
+    _titleBar.collapseAction = @selector(collapseToggle:);   // windowshade (borderless không minimize được)
     [_window.contentView addSubview:_titleBar];
 }
 
-- (void)buildToast {
-    _toast = [NSTextField labelWithString:@""];
-    _toast.alignment = NSTextAlignmentCenter;
-    _toast.font = [OS9Theme uiFont];
-    _toast.textColor = [NSColor whiteColor];
-    _toast.wantsLayer = YES;
-    _toast.layer.backgroundColor = [NSColor colorWithCalibratedWhite:0.12 alpha:0.92].CGColor;
-    _toast.layer.cornerRadius = 4;
-    _toast.drawsBackground = NO;
-    _toast.bezeled = NO;
-    _toast.editable = NO;
-    _toast.hidden = YES;
-    [_window.contentView addSubview:_toast positioned:NSWindowAbove relativeTo:nil];
+- (void)buildToast { _toasts = [NSMutableArray array]; }
+
+// Tắt toàn bộ tính năng nhập tự động của macOS trên một NSTextView (kể cả field editor).
+// Mục đích: KHÔNG để hệ thống bật autofill/spell/completion -> không spawn tiến trình con hỗ trợ.
+- (void)disableAutoFeatures:(NSTextView *)tv {
+    tv.continuousSpellCheckingEnabled = NO;
+    tv.grammarCheckingEnabled = NO;
+    tv.automaticSpellingCorrectionEnabled = NO;
+    tv.automaticQuoteSubstitutionEnabled = NO;
+    tv.automaticDashSubstitutionEnabled = NO;
+    tv.automaticTextReplacementEnabled = NO;
+    tv.automaticDataDetectionEnabled = NO;
+    tv.automaticLinkDetectionEnabled = NO;
+    if ([tv respondsToSelector:@selector(setAutomaticTextCompletionEnabled:)])
+        tv.automaticTextCompletionEnabled = NO;   // macOS 10.12.2+
+}
+
+// NSTextField dùng FIELD EDITOR dùng chung của window. Trả về field editor đã tắt
+// hết auto-features -> áp cho MỌI ô text (URL, env, settings) trong window.
+- (id)windowWillReturnFieldEditor:(NSWindow *)sender toObject:(id)client {
+    if (!_fieldEditor) {
+        _fieldEditor = [[NSTextView alloc] initWithFrame:NSZeroRect];
+        _fieldEditor.fieldEditor = YES;
+        [self disableAutoFeatures:_fieldEditor];
+    }
+    return _fieldEditor;
 }
 
 - (void)styleScroller:(NSScrollView *)sc {
@@ -425,6 +444,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _urlField.cell.wraps = NO;
     _urlField.cell.scrollable = YES;
     _urlField.lineBreakMode = NSLineBreakByTruncatingTail;
+    _urlField.delegate = self;   // controlTextDidChange: -> phát hiện dán cURL/grpcurl
     [_urlInset addSubview:_urlField];
 
     for (NSView *v in @[ _settingButton, _envButton, _sendButton, _cancelButton, _protoButton, _methodPopup, _urlInset ])
@@ -465,7 +485,9 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _settingText = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100)];
     _settingText.font = [OS9Theme monoFont];
     _settingText.richText = NO;
-    _settingText.automaticQuoteSubstitutionEnabled = NO;
+    // Tắt mọi tính năng tự động macOS (spell/autofill/completion/substitution) -> không
+    // spawn tiến trình con hỗ trợ (AppleSpell, text-completion…).
+    [self disableAutoFeatures:_settingText];
     _settingText.verticallyResizable = YES;
     _settingText.horizontallyResizable = NO;
     _settingText.textContainer.widthTracksTextView = YES;
@@ -603,7 +625,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 - (void)setRequestType:(core::RequestType)t {
     _model.type = t;
     if (t == core::RequestType::Http) {
-        _reqTabTitles = @[ @"Params", @"Headers", @"Body", @"Auth" ];
+        _reqTabTitles = @[ @"Body", @"Params", @"Headers", @"Auth" ];  // Body ngoài cùng trái
         _respTabTitles = @[ @"Response", @"Headers", @"Request", @"Cookie" ];
     } else {
         _reqTabTitles = @[ @"Message", @"Metadata", @"Auth" ];
@@ -621,7 +643,15 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
     NSInteger i = 0;
     for (NSString *t in _reqTabTitles) {
-        OS9BevelButton *b = [[OS9BevelButton alloc] initWithTitle:t target:self action:@selector(reqTabClicked:)];
+        OS9BevelButton *b;
+        if ([t isEqualToString:@"Body"]) {
+            // Body = dropdown chọn định dạng (json/file/form), label "Body (MODE)".
+            b = [[OS9BevelButton alloc] initWithTitle:[self bodyButtonTitle]
+                                               target:self action:@selector(bodyButtonClicked:)];
+            b.dropdown = YES;
+        } else {
+            b = [[OS9BevelButton alloc] initWithTitle:t target:self action:@selector(reqTabClicked:)];
+        }
         b.tag = i++; [_reqTabButtons addObject:b]; [_mainPane addSubview:b];
     }
     i = 0;
@@ -642,7 +672,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _reqText.editable = has;
     _sendButton.enabledState = has && !_sending;
     if (!has) {
-        _reqText.string = @""; _respText.string = @""; _urlField.stringValue = @"";
+        _reqText.string = @""; _respText.string = @""; _urlField.stringValue = @""; _urlPrevLen = 0;
         _currentRel.clear(); _currentId.clear();
     }
     [self updateTitle];
@@ -823,20 +853,25 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     [_reqBuffers removeAllObjects];
     using namespace core;
     if (_model.type == RequestType::Http) {
-        const HttpRequest &h = _model.http;
-        [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(h.params))];
-        [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(h.headers))];
-        [_reqBuffers addObject:N(fieldcodec::bodyToJson(h.body))];
-        [_reqBuffers addObject:N(fieldcodec::authToJson(h.auth))];
+        HttpRequest &h = _model.http;
+        // Body mặc định JSON: request chưa có body (mode none) -> hiển thị như JSON.
+        if (h.body.mode == "none") { h.body = Body{}; h.body.mode = "json"; }
+        // Buffer body = ĐÚNG nội dung muốn gửi (không bọc {"mode","json"}); mode do app giữ.
+        [_reqBuffers addObject:[self bodyBufferFromModel:h.body]];     // 0 = Body (ngoài cùng trái)
+        [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(h.params))];   // 1
+        [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(h.headers))];  // 2
+        [_reqBuffers addObject:N(fieldcodec::authToJson(h.auth))];          // 3
         [_methodPopup selectTitle:N(h.method)];
-        _urlField.stringValue = N(h.url);
+        _urlField.stringValue = N(h.url); _urlPrevLen = _urlField.stringValue.length;
+        _bodyMode = N(h.body.mode);
+        [self updateBodyButtonLabel];
     } else {
         const GrpcRequest &g = _model.grpc;
         [_reqBuffers addObject:N(g.message.empty() ? "{}" : g.message)];
         [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(g.metadata))];
         Auth dummy;
         [_reqBuffers addObject:N(fieldcodec::authToJson(dummy))];
-        _urlField.stringValue = N(g.target);
+        _urlField.stringValue = N(g.target); _urlPrevLen = _urlField.stringValue.length;
         _protoButton.title = [NSString stringWithFormat:@"Proto: %s", g.protoSource.mode.c_str()];
     }
     _activeReqTab = 0;
@@ -869,9 +904,9 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
         HttpRequest &h = _model.http;
         h.method = _methodPopup.selectedTitle.UTF8String ?: "GET";
         h.url = _urlField.stringValue.UTF8String;
-        if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[0]), h.params, err)) return fail(0, err);
-        if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[1]), h.headers, err)) return fail(1, err);
-        if (!fieldcodec::jsonToBody(S(_reqBuffers[2]), h.body, err)) return fail(2, err);
+        if (![self syncBodyFromBuffer:_reqBuffers[0] into:h.body err:err]) return fail(0, err);
+        if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[1]), h.params, err)) return fail(1, err);
+        if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[2]), h.headers, err)) return fail(2, err);
         if (!fieldcodec::jsonToAuth(S(_reqBuffers[3]), h.auth, err)) return fail(3, err);
     } else {
         GrpcRequest &g = _model.grpc;
@@ -899,6 +934,107 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     try { _engine->collection().saveRequest(_currentRel, _model); [_tree reloadData];
           [self applyTreeExpansion]; }
     catch (...) {}
+}
+
+#pragma mark Tabs
+
+#pragma mark Body dropdown (json/file/form)
+
+// Tên hiển thị nút Body theo mode hiện tại: "Body (JSON)" / "Body (FILE)" / "Body (FORM)".
+- (NSString *)bodyButtonTitle {
+    NSString *m = _bodyMode.length ? _bodyMode : @"json";
+    if ([m isEqualToString:@"binary"]) return @"File";
+    if ([m isEqualToString:@"form-urlencoded"]) return @"Form";
+    return @"JSON";   // chỉ tên mode làm label (không "Body", không ngoặc)
+}
+- (NSInteger)bodyTabIndex { return [_reqTabTitles indexOfObject:@"Body"]; } // 0 cho HTTP, NSNotFound cho gRPC
+- (void)updateBodyButtonLabel {
+    NSInteger bi = [self bodyTabIndex];
+    if (bi == NSNotFound || bi >= (NSInteger)_reqTabButtons.count) return;
+    _reqTabButtons[bi].title = [self bodyButtonTitle];
+}
+// Template body cho từng mode — KHÔNG bọc key "mode" (app tự giữ mode), nhưng CÓ sẵn
+// các key gợi ý để người dùng biết điền gì.
+//   json -> JSON thô.   form -> 1 entry key/value mẫu.   file -> object có key filePath.
+static NSString *const kFormBodyTemplate =
+    @"[\n  {\n    \"key\": \"\",\n    \"value\": \"\",\n    \"enabled\": true\n  }\n]";
+static NSString *const kFileBodyTemplate = @"{\n  \"filePath\": \"\"\n}";
+- (NSString *)bodyTemplateForMode:(NSString *)mode {
+    if ([mode isEqualToString:@"binary"]) return kFileBodyTemplate;
+    if ([mode isEqualToString:@"form-urlencoded"]) return kFormBodyTemplate;
+    return @"{}";                                        // json
+}
+
+// Model.Body -> nội dung hiển thị trong editor (đúng cái gửi đi, không bọc).
+- (NSString *)bodyBufferFromModel:(const core::Body &)b {
+    if (b.mode == "form-urlencoded")
+        return b.formUrlEncoded.empty() ? kFormBodyTemplate
+                                        : N(core::fieldcodec::keyValuesToJson(b.formUrlEncoded));
+    if (b.mode == "binary") {
+        NSString *p = N(b.binaryFilePath);
+        return [NSString stringWithFormat:@"{\n  \"filePath\": \"%@\"\n}", p ?: @""];
+    }
+    if (b.mode == "text") return N(b.text);
+    if (b.mode == "xml") return N(b.xml);
+    return N(b.json.empty() ? "{}" : b.json);            // json (mặc định)
+}
+
+// Editor buffer -> Model.Body, parse theo _bodyMode (mode do app định nghĩa, không nằm trong text).
+- (BOOL)syncBodyFromBuffer:(NSString *)buf into:(core::Body &)out err:(std::string &)err {
+    using namespace core;
+    NSString *bm = _bodyMode.length ? _bodyMode : @"json";
+    Body nb;
+    if ([bm isEqualToString:@"form-urlencoded"]) {
+        nb.mode = "form-urlencoded";
+        if (!fieldcodec::jsonToKeyValues(S(buf), nb.formUrlEncoded, err)) return NO;
+    } else if ([bm isEqualToString:@"binary"]) {
+        nb.mode = "binary";
+        // Nhận cả object {"filePath": "..."} lẫn chuỗi path thuần (tương thích cũ).
+        NSString *t = [buf stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        id obj = t.length ? [NSJSONSerialization JSONObjectWithData:[t dataUsingEncoding:NSUTF8StringEncoding]
+                                                            options:0 error:nil] : nil;
+        if ([obj isKindOfClass:[NSDictionary class]]) {
+            NSString *fp = ((NSDictionary *)obj)[@"filePath"] ?: ((NSDictionary *)obj)[@"path"];
+            nb.binaryFilePath = fp.length ? S(fp) : "";
+        } else {
+            nb.binaryFilePath = S(t);   // coi cả text là path
+        }
+    } else if ([bm isEqualToString:@"text"]) {
+        nb.mode = "text"; nb.text = S(buf);
+    } else if ([bm isEqualToString:@"xml"]) {
+        nb.mode = "xml"; nb.xml = S(buf);
+    } else {
+        nb.mode = "json"; nb.json = S(buf);   // JSON thô người dùng nhập, KHÔNG encode vào key "json"
+    }
+    out = nb;
+    return YES;
+}
+
+- (void)bodyButtonClicked:(OS9BevelButton *)b {
+    NSInteger bi = [self bodyTabIndex];
+    if (bi == NSNotFound) return;
+    NSArray<NSString *> *opts = @[ @"JSON", @"File", @"Form" ];
+    NSArray<NSString *> *modes = @[ @"json", @"binary", @"form-urlencoded" ];
+    NSInteger sel = [modes indexOfObject:(_bodyMode.length ? _bodyMode : @"json")];
+    if (sel == NSNotFound) sel = 0;
+    __weak MainWindowController *ws = self;
+    OS9ShowDropdown(opts, sel, b, ^(NSInteger idx) {
+        MainWindowController *s = ws; if (!s) return;
+        [s pickBodyMode:modes[idx]];
+    });
+}
+
+- (void)pickBodyMode:(NSString *)mode {
+    NSInteger bi = [self bodyTabIndex];
+    if (bi == NSNotFound) return;
+    [self stashActiveReqBuffer];                 // lưu nội dung đang gõ vào tab hiện tại
+    if (![_bodyMode isEqualToString:mode])       // đổi mode -> nạp template mới
+        _reqBuffers[bi] = [self bodyTemplateForMode:mode];
+    _bodyMode = mode;
+    [self updateBodyButtonLabel];
+    _activeReqTab = bi;                          // kích hoạt + hiện body
+    _reqText.string = _reqBuffers[bi];
+    [self highlightActiveTab:_reqTabButtons active:bi];
 }
 
 #pragma mark Tabs
@@ -954,7 +1090,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     NSPasteboard *pb = [NSPasteboard generalPasteboard];
     [pb clearContents];
     [pb setString:N(curl) forType:NSPasteboardTypeString];
-    [self toast:@"Đã copy cURL"];
+    [self toastOk:@"Đã copy cURL"];
 }
 
 // Zoom toggle thủ công (performZoom đôi khi không thu nhỏ lại được).
@@ -968,6 +1104,9 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
         [_window setFrame:vis display:YES animate:YES];
     }
 }
+
+// Minimize: thu cửa sổ vào Dock (genie). Window borderless + Miniaturizable -> miniaturize: chạy.
+- (void)collapseToggle:(id)sender { [_window miniaturize:nil]; }
 
 // Áp font cấu hình (từ Settings) cho mọi ô chữ + vẽ lại.
 - (void)applyConfiguredFontAndRefresh {
@@ -991,7 +1130,114 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     if (_activeReqTab >= 0 && _activeReqTab < (NSInteger)_reqBuffers.count)
         _reqBuffers[_activeReqTab] = [(_reqText.string ?: @"") copy];
 }
-- (void)controlTextDidChange:(NSNotification *)note { }
+// Dán cURL/grpcurl vào ô URL -> tự nhận biết -> preview -> tạo request mới (CURL_IMPORT.md).
+// Nhận biết "dán/drop" bằng độ dài tăng đột biến (>=8 ký tự một lần) — gõ tay tăng 1/ký tự.
+- (void)controlTextDidChange:(NSNotification *)note {
+    if (note.object != _urlField) return;
+    NSString *text = _urlField.stringValue ?: @"";
+    NSUInteger len = text.length;
+    NSUInteger prev = _urlPrevLen;
+    _urlPrevLen = len;
+    if (!_engine || len < prev + 8) return;            // không phải dán -> bỏ qua
+    BOOL isCurl = _engine->looksLikeCurl(text.UTF8String);
+    BOOL isGrpc = !isCurl && _engine->looksLikeGrpcurl(text.UTF8String);
+    if (!isCurl && !isGrpc) return;
+    // cURL: tự import + tạo request luôn (chỉ toast, KHÔNG popup). grpcurl: vẫn xác nhận popup.
+    // Defer: tránh xử lý NGAY trong callback đổi text (field editor đang bận).
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (isCurl) [self importNow:text grpc:NO];
+        else        [self offerImport:text grpc:YES];
+    });
+}
+
+// Import + tạo request ngay, không hỏi; báo kết quả qua toast.
+- (void)importNow:(NSString *)text grpc:(BOOL)isGrpc {
+    core::ImportResult r = isGrpc ? _engine->importFromGrpc(text.UTF8String)
+                                  : _engine->importFromCurl(text.UTF8String);
+    if (!r.ok) {
+        [self toastWarn:[NSString stringWithFormat:@"Import %@ lỗi: %s",
+                         isGrpc ? @"grpcurl" : @"cURL", r.error.c_str()]];
+        [self restoreUrlField];
+        return;
+    }
+    [self createFromImport:r.model];
+}
+
+// Hiện preview xác nhận; nếu OK -> tạo request mới trong tree + mở editor.
+- (void)offerImport:(NSString *)text grpc:(BOOL)isGrpc {
+    core::ImportResult r = isGrpc ? _engine->importFromGrpc(text.UTF8String)
+                                  : _engine->importFromCurl(text.UTF8String);
+    if (!r.ok) {
+        [self toastWarn:[NSString stringWithFormat:@"Import %@ lỗi: %s",
+                         isGrpc ? @"grpcurl" : @"cURL", r.error.c_str()]];
+        return;
+    }
+    NSAlert *a = [[NSAlert alloc] init];
+    a.messageText = isGrpc ? @"Phát hiện lệnh grpcurl" : @"Phát hiện lệnh cURL";
+    a.informativeText = [self importSummary:r.model unknown:r.unknown grpc:isGrpc];
+    [a addButtonWithTitle:@"Tạo request"];
+    [a addButtonWithTitle:@"Cancel"];
+    if ([a runModal] == NSAlertFirstButtonReturn) {
+        [self createFromImport:r.model];
+    } else {
+        [self restoreUrlField];   // bỏ: trả ô URL về giá trị request đang mở
+    }
+}
+
+- (NSString *)importSummary:(const core::RequestModel &)m unknown:(const std::vector<std::string> &)unknown grpc:(BOOL)isGrpc {
+    NSMutableString *s = [NSMutableString string];
+    if (isGrpc) {
+        const core::GrpcRequest &g = m.grpc;
+        [s appendFormat:@"target: %s\n", g.target.c_str()];
+        [s appendFormat:@"%s / %s\n", g.service.c_str(), g.method.c_str()];
+        [s appendFormat:@"TLS: %@ · metadata: %lu · proto: %s",
+            g.tls.enabled ? @"secure" : @"plaintext",
+            (unsigned long)g.metadata.size(), g.protoSource.mode.c_str()];
+    } else {
+        const core::HttpRequest &h = m.http;
+        [s appendFormat:@"%s  %s\n", h.method.c_str(), h.url.c_str()];
+        [s appendFormat:@"headers: %lu · body: %s · auth: %s",
+            (unsigned long)h.headers.size(), h.body.mode.c_str(), h.auth.type.c_str()];
+    }
+    if (!unknown.empty()) {
+        [s appendString:@"\nbỏ qua:"];
+        for (const auto &u : unknown) [s appendFormat:@" %s", u.c_str()];
+    }
+    return s;
+}
+
+// Tên gợi ý: HTTP "METHOD lastPathSegment"; gRPC = method.
+- (NSString *)deriveImportName:(const core::RequestModel &)m {
+    if (m.type == core::RequestType::Grpc)
+        return m.grpc.method.empty() ? @"Imported gRPC" : N(m.grpc.method);
+    NSString *url = N(m.http.url);
+    NSString *path = url;
+    NSRange q = [path rangeOfString:@"?"]; if (q.location != NSNotFound) path = [path substringToIndex:q.location];
+    NSString *last = path.lastPathComponent;
+    if (!last.length || [last containsString:@":"]) last = @"request"; // chỉ có host
+    return [NSString stringWithFormat:@"%s %@", m.http.method.c_str(), last];
+}
+
+- (void)createFromImport:(const core::RequestModel &)m {
+    [self autosaveCurrent];   // lưu request đang mở trước khi chuyển (app autosave, không hỏi)
+    NSString *name = [self deriveImportName:m];
+    try {
+        std::string rel = _engine->collection().createRequestFromModel([self selectedFolderRel], m, name.UTF8String);
+        [self reloadTree];
+        [self loadRequestAtRel:N(rel)];   // ô URL/target hiện giá trị đã parse
+        [self toastOk:[NSString stringWithFormat:@"Đã import & tạo request: %@", name]];
+    } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
+}
+
+// Trả ô URL về URL/target của request đang mở (tránh lưu nhầm text lệnh).
+- (void)restoreUrlField {
+    if (!_hasRequest) { _urlField.stringValue = @""; _urlPrevLen = 0; return; }
+    NSString *u = (_model.type == core::RequestType::Grpc) ? N(_model.grpc.target) : N(_model.http.url);
+    _urlField.stringValue = u;
+    _urlPrevLen = u.length;
+}
+
+- (void)controlTextDidEndEditing:(NSNotification *)note { }
 - (void)methodChanged:(id)sender { }
 - (void)urlCommitted:(id)sender { }
 
@@ -1009,7 +1255,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     try {
         _engine->collection().saveRequest(_currentRel, _model);
         [self reloadTree];
-        [self toast:@"Đã lưu"];
+        [self toastOk:@"Đã lưu"];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 
@@ -1203,7 +1449,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _mainPane.hidden = NO;
     [self refreshEnvButton];
     [self relayout];
-    [self toast:@"Đã lưu"];
+    [self toastOk:@"Đã lưu"];
 }
 
 #pragma mark Proto (gRPC)
@@ -1358,7 +1604,10 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
 #pragma mark Window / misc
 
-- (void)closeWindow:(id)sender { [_window performClose:nil]; }
+// performClose: vô hiệu với window borderless -> gọi windowShouldClose: (tự lưu) rồi close trực tiếp.
+- (void)closeWindow:(id)sender {
+    if ([self windowShouldClose:_window]) [_window close];
+}
 - (BOOL)windowShouldClose:(NSWindow *)sender { [self autosaveCurrent]; return YES; } // tự lưu, không hỏi
 - (void)windowDidResize:(NSNotification *)note { [self relayout]; }
 - (void)windowDidBecomeKey:(NSNotification *)note { [_titleBar setNeedsDisplay:YES]; }
@@ -1381,46 +1630,60 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     return [out componentsJoinedByString:@"/"];
 }
 
-#pragma mark Toast (bay ra từ phải)
+#pragma mark Toast (retro, stack góc phải-dưới, đẩy lên)
 
-- (void)toast:(NSString *)msg { [self showToast:msg warn:NO]; }
-- (void)toastWarn:(NSString *)msg { [self showToast:msg warn:YES]; }
+- (void)toast:(NSString *)msg     { [self showToast:msg kind:0]; } // info (xám)
+- (void)toastOk:(NSString *)msg   { [self showToast:msg kind:1]; } // success (xanh)
+- (void)toastWarn:(NSString *)msg { [self showToast:msg kind:2]; } // fail (đỏ)
 
-- (void)showToast:(NSString *)msg warn:(BOOL)warn {
-    if (!_toast) return;
-    _toast.stringValue = msg;
-    _toast.layer.backgroundColor = (warn ? [NSColor colorWithCalibratedRed:0.45 green:0.10 blue:0.10 alpha:0.95]
-                                          : [NSColor colorWithCalibratedWhite:0.12 alpha:0.94]).CGColor;
-    [_window.contentView addSubview:_toast positioned:NSWindowAbove relativeTo:nil];
-    _toast.hidden = NO;
-    _toast.alphaValue = 1.0;
-    [self positionToast];
+- (void)showToast:(NSString *)msg kind:(NSInteger)kind {
+    if (!_toasts) _toasts = [NSMutableArray array];
+    NSView *cv = _window.contentView;
+    OS9Toast *t = [[OS9Toast alloc] initWithMessage:msg kind:kind];
+    NSSize sz = [OS9Toast sizeForMessage:msg];
+    // bắt đầu off-screen bên phải, ở slot dưới cùng -> reflow sẽ trượt vào.
+    t.frame = NSMakeRect(cv.bounds.size.width, cv.bounds.size.height - 14 - sz.height, sz.width, sz.height);
+    __weak MainWindowController *ws = self;
+    __weak OS9Toast *wt = t;
+    t.onClose = ^{ [ws dismissToast:wt]; };
+    [cv addSubview:t positioned:NSWindowAbove relativeTo:nil];
+    [_toasts addObject:t];
+    while (_toasts.count > 5) {                       // giới hạn stack
+        OS9Toast *old = _toasts.firstObject;
+        [_toasts removeObjectAtIndex:0]; [old removeFromSuperview];
+    }
+    [self reflowToasts];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.8 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ [ws dismissToast:wt]; });
+}
 
-    // trượt vào từ phải
-    NSRect on = _toast.frame;
-    NSRect off = on; off.origin.x = _window.contentView.bounds.size.width;
-    _toast.frame = off;
+- (void)dismissToast:(OS9Toast *)t {
+    if (!t || ![_toasts containsObject:t]) return;
+    [_toasts removeObject:t];
+    NSRect away = t.frame; away.origin.x = _window.contentView.bounds.size.width;  // trượt ra phải + mờ
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
-        ctx.duration = 0.22; self->_toast.animator.frame = on;
-    } completionHandler:nil];
+        ctx.duration = 0.28; t.animator.frame = away; t.animator.alphaValue = 0.0;
+    } completionHandler:^{ [t removeFromSuperview]; }];
+    [self reflowToasts];   // các toast còn lại trượt xuống lấp chỗ
+}
 
-    NSUInteger gen = ++_toastGen;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (gen != self->_toastGen) return;
-        NSRect cur = self->_toast.frame; NSRect away = cur; away.origin.x = self->_window.contentView.bounds.size.width;
+// Xếp toast từ góc phải-DƯỚI lên: mới nhất (cuối mảng) ở dưới cùng (content flipped: y lớn = dưới).
+- (void)reflowToasts {
+    NSView *cv = _window.contentView;
+    CGFloat W = cv.bounds.size.width, H = cv.bounds.size.height;
+    const CGFloat margin = 14, gap = 8;
+    CGFloat bottom = H - margin;
+    for (NSInteger i = (NSInteger)_toasts.count - 1; i >= 0; i--) {
+        OS9Toast *t = _toasts[i];
+        CGFloat tw = t.frame.size.width, th = t.frame.size.height;
+        NSRect target = NSMakeRect(W - tw - margin, bottom - th, tw, th);
         [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
-            ctx.duration = 0.3; self->_toast.animator.frame = away; self->_toast.animator.alphaValue = 0.0;
-        } completionHandler:^{ if (gen == self->_toastGen) self->_toast.hidden = YES; }];
-    });
+            ctx.duration = 0.2; t.animator.frame = target; t.animator.alphaValue = 1.0;
+        } completionHandler:nil];
+        bottom = (bottom - th) - gap;
+    }
 }
 
-- (void)positionToast {
-    NSRect b = [_window.contentView bounds];
-    NSSize sz = [_toast.stringValue sizeWithAttributes:@{NSFontAttributeName : [OS9Theme uiFont]}];
-    CGFloat w = MIN(sz.width + 28, b.size.width - 40);
-    CGFloat h = 26;
-    // góc phải, ngay dưới title bar (content flipped: y nhỏ = trên).
-    _toast.frame = NSMakeRect(b.size.width - w - 12, 30, w, h);
-}
+- (void)positionToast { [self reflowToasts]; }
 
 @end

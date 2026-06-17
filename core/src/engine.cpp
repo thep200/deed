@@ -196,6 +196,12 @@ void Engine::cancel(RequestHandle handle) {
     if (it != inflight->map.end()) it->second->cancel();
 }
 
+// Import: importers thuần (stateless) -> chỉ uỷ thác. KHÔNG ghi file (UI tạo qua CollectionStore).
+bool Engine::looksLikeCurl(const std::string& text) const { return CurlImporter{}.canHandle(text); }
+bool Engine::looksLikeGrpcurl(const std::string& text) const { return GrpcImporter{}.canHandle(text); }
+ImportResult Engine::importFromCurl(const std::string& text) const { return CurlImporter{}.parse(text); }
+ImportResult Engine::importFromGrpc(const std::string& text) const { return GrpcImporter{}.parse(text); }
+
 ValidationResult Engine::validateJson(const std::string& text) const {
     try {
         auto _ = nlohmann::json::parse(text);

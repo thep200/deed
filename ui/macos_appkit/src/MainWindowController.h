@@ -8,6 +8,7 @@
                                             NSOutlineViewDataSource,
                                             NSOutlineViewDelegate,
                                             NSTextViewDelegate,
+                                            NSTextFieldDelegate,
                                             NSWindowDelegate>
 - (void)showWindow;
 - (void)openCollectionRoot:(NSString *)path; // mở collection theo path (dev/CI affordance)

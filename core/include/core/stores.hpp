@@ -27,6 +27,9 @@ public:
 
     // CRUD — trả relPath của item vừa tạo/đổi.
     std::string createRequest(const std::string& folderRel, RequestType, const std::string& name) const;
+    // Tạo request mới TỪ model có sẵn (vd import cURL/grpcurl). Gán id mới + name, ghi atomic.
+    std::string createRequestFromModel(const std::string& folderRel, RequestModel model,
+                                       const std::string& name) const;
     std::string createFolder(const std::string& parentRel, const std::string& name) const;
     std::string rename(const std::string& relPath, const std::string& newName) const;
     std::string duplicate(const std::string& relPath) const;

@@ -168,6 +168,18 @@ std::string CollectionStore::createRequest(const std::string& folderRel, Request
     return fs::relative(full, fs::path(root_)).generic_string();
 }
 
+std::string CollectionStore::createRequestFromModel(const std::string& folderRel, RequestModel m,
+                                                    const std::string& name) const {
+    fs::path dir = fs::path(fsutil::join(root_, folderRel));
+    fs::create_directories(dir);
+    std::string slug = fsutil::slugify(name);
+    std::string full = uniquePath(dir, slug, ".json");
+    m.id = genId();      // id mới, độc lập với nguồn import
+    m.name = name;
+    fsutil::writeFileAtomic(full, codec::dumpRequest(m));
+    return fs::relative(full, fs::path(root_)).generic_string();
+}
+
 std::string CollectionStore::createFolder(const std::string& parentRel, const std::string& name) const {
     std::string slug = fsutil::slugify(name);
     fs::path dir = fs::path(fsutil::join(fsutil::join(root_, parentRel), slug));

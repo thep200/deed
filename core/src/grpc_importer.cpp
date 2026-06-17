@@ -32,12 +32,28 @@ bool splitServiceMethod(const std::string& sm, std::string& service, std::string
 
 bool GrpcImporter::canHandle(const std::string& input) const {
     std::string t = lower(trim(input));
-    if (t.rfind("grpcurl", 0) == 0) return true;
-    if (t.rfind("grpc://", 0) == 0 || t.rfind("grpcs://", 0) == 0) return true;
-    // chuỗi gọn host:port/pkg.Service/Method (có ':' và ít nhất một '/')
+    if (t.rfind("grpcurl", 0) == 0) return true;                         // lệnh grpcurl
+    if (t.rfind("grpc://", 0) == 0 || t.rfind("grpcs://", 0) == 0) return true;  // scheme rõ
+
+    // Dạng gọn host:port/pkg.Service/Method — CHẶT để không nhầm URL HTTP:
+    //   - không khoảng trắng,
+    //   - host phải có ':' (host:port),
+    //   - phần path = "Service/Method" đúng 2 đoạn, Service có dấu '.' (namespace),
+    //     Method bắt đầu bằng chữ HOA (PascalCase).
     std::string s = trim(input);
-    return s.find(':') != std::string::npos && s.find('/') != std::string::npos &&
-           s.find(' ') == std::string::npos;
+    if (s.empty() || s.find(' ') != std::string::npos) return false;
+    size_t slash = s.find('/');
+    if (slash == std::string::npos) return false;
+    std::string host = s.substr(0, slash);
+    if (host.find(':') == std::string::npos) return false;              // cần host:port
+    std::string rest = s.substr(slash + 1);                            // pkg.Service/Method
+    size_t slash2 = rest.find('/');
+    if (slash2 == std::string::npos) return false;                     // cần Service/Method
+    std::string svc = rest.substr(0, slash2);
+    std::string method = rest.substr(slash2 + 1);
+    if (svc.find('.') == std::string::npos) return false;              // Service phải dotted
+    if (method.empty() || method.find('/') != std::string::npos) return false; // đúng 2 đoạn
+    return std::isupper(static_cast<unsigned char>(method[0])) != 0;   // Method PascalCase
 }
 
 ImportResult GrpcImporter::parse(const std::string& input) const {

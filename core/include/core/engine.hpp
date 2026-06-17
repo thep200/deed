@@ -7,6 +7,7 @@
 #include <string>
 
 #include "core/i_ui_delegate.hpp"
+#include "core/importer.hpp"
 #include "core/stores.hpp"
 #include "core/types.hpp"
 
@@ -39,6 +40,13 @@ public:
     // --- Gửi (async, trả handle ngay) ---
     RequestHandle send(const RequestModel& model, IUiDelegate* delegate);
     void cancel(RequestHandle);
+
+    // --- Import cURL / grpcurl (CURL_IMPORT.md) ---
+    // Phân loại text dán vào ô URL; rồi parse sang RequestModel (KHÔNG ghi file).
+    bool looksLikeCurl(const std::string& text) const;
+    bool looksLikeGrpcurl(const std::string& text) const;
+    ImportResult importFromCurl(const std::string& text) const;   // type=http
+    ImportResult importFromGrpc(const std::string& text) const;   // type=grpc
 
     // --- Tiện ích đồng bộ cho UI ---
     ValidationResult validateJson(const std::string& text) const;

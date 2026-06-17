@@ -40,6 +40,8 @@ NSImage *OS9SpinnerImage(CGFloat size, CGFloat phase);
 @property(nonatomic) SEL closeAction;
 @property(nonatomic, weak) id zoomTarget;     // nil -> performZoom mặc định
 @property(nonatomic) SEL zoomAction;
+@property(nonatomic, weak) id collapseTarget; // nil -> miniaturize mặc định
+@property(nonatomic) SEL collapseAction;
 @end
 
 // Nền platinum (tô xám đặc cho content).
@@ -61,6 +63,16 @@ NSImage *OS9SpinnerImage(CGFloat size, CGFloat phase);
 
 // Ô input retro: nền trắng + viền răng cưa nhỏ ở các góc (URL / status line).
 @interface OS9SerratedInset : NSView
+@end
+
+// Toast retro (theo assets/toast.png): viền đen dày + bóng đổ cứng, nền theo loại:
+// xám=info, xanh=success, đỏ=fail. Có icon trạng thái bên trái + nút ✕ bên phải.
+@interface OS9Toast : NSView
+@property(nonatomic) NSInteger kind;            // 0=info(xám) 1=success(xanh) 2=fail(đỏ)
+@property(nonatomic, copy) NSString *message;
+@property(nonatomic, copy) void (^onClose)(void);  // bấm toast/✕ -> đóng
+- (instancetype)initWithMessage:(NSString *)msg kind:(NSInteger)kind;
++ (NSSize)sizeForMessage:(NSString *)msg;       // kích thước (đã gồm bóng đổ)
 @end
 
 // Nhãn nhỏ kiểu OS9 (NSTextField không viền).

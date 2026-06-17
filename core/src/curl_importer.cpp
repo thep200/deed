@@ -92,9 +92,24 @@ ImportResult CurlImporter::parse(const std::string& input) const {
             h.auth.type = "basic";
             h.auth.basicUsername = c == std::string::npos ? up : up.substr(0, c);
             h.auth.basicPassword = c == std::string::npos ? "" : up.substr(c + 1);
-        } else if (flag == "-d" || flag == "--data" || flag == "--data-raw" ||
-                   flag == "--data-binary" || flag == "--data-ascii") {
+        } else if (flag == "--data-binary") {
+            std::string v = val(i);
+            if (!v.empty() && v.front() == '@') { h.body.mode = "binary"; h.body.binaryFilePath = v.substr(1); }
+            else dataParts.push_back(v);
+        } else if (flag == "-d" || flag == "--data" || flag == "--data-raw" || flag == "--data-ascii") {
             dataParts.push_back(val(i));
+        } else if (flag == "-A" || flag == "--user-agent") {
+            KeyValue kv; kv.enabled = true; kv.key = "User-Agent"; kv.value = val(i); h.headers.push_back(kv);
+        } else if (flag == "-e" || flag == "--referer") {
+            KeyValue kv; kv.enabled = true; kv.key = "Referer"; kv.value = val(i); h.headers.push_back(kv);
+        } else if (flag == "-b" || flag == "--cookie") {
+            KeyValue kv; kv.enabled = true; kv.key = "Cookie"; kv.value = val(i); h.headers.push_back(kv);
+        } else if (flag == "-I" || flag == "--head") {
+            h.method = "HEAD"; explicitMethod = true;
+        } else if (flag == "--compressed") {
+            KeyValue kv; kv.enabled = true; kv.key = "Accept-Encoding"; kv.value = "gzip, deflate"; h.headers.push_back(kv);
+        } else if (flag == "-m" || flag == "--max-time" || flag == "--connect-timeout") {
+            try { h.settings.timeoutMs = (int)(std::stod(val(i)) * 1000); h.settings.timeoutMsSet = true; } catch (...) {}
         } else if (flag == "--data-urlencode") {
             std::string kvs = val(i);
             size_t eq = kvs.find('=');
@@ -120,10 +135,12 @@ ImportResult CurlImporter::parse(const std::string& input) const {
             h.settings.verifyTls = false; h.settings.verifyTlsSet = true;
         } else if (flag == "--url") {
             h.url = val(i);
-        } else if (flag == "--compressed" || flag == "-s" || flag == "--silent" ||
+        } else if (flag == "-s" || flag == "--silent" ||
                    flag == "-i" || flag == "--include" || flag == "-v" || flag == "--verbose" ||
-                   flag == "-#" || flag == "--progress-bar") {
-            // bỏ qua: không ảnh hưởng request model
+                   flag == "-#" || flag == "--progress-bar" ||
+                   flag == "-o" || flag == "--output" || flag == "-O" || flag == "--remote-name") {
+            if (flag == "-o" || flag == "--output") (void)val(i); // nuốt giá trị output, bỏ qua
+            // bỏ qua: flag output/log, không ảnh hưởng request model
         } else if (!tk.empty() && tk[0] == '-') {
             res.unknown.push_back(tk); // cờ lạ -> gom
         } else {

@@ -10,6 +10,7 @@
 /.claude/
 
 /docs/
+/assets/
 
 # CMake per-machine (khong vao VCS)
 CMakeUserPresets.json
