@@ -7,8 +7,8 @@
 #include <string>
 
 #include "core/i_ui_delegate.hpp"
-#include "core/importer.hpp"
-#include "core/stores.hpp"
+#include "core/import_export/importer.hpp"
+#include "core/persistence/stores.hpp"
 #include "core/types.hpp"
 
 namespace core {

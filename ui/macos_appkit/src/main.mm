@@ -1,7 +1,7 @@
 // main.mm — điểm vào app AppKit (Phase 2). Dựng NSApplication + menu + cửa sổ chính.
 #import <Cocoa/Cocoa.h>
 
-#import "AppController.h"
+#import "app/AppController.h"
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {

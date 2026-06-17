@@ -1,22 +1,22 @@
 # core — static lib, pure C++ (cross-platform). UI link vào đây. README §3.
 add_library(core STATIC
-  src/types.cpp
-  src/variable_resolver.cpp
-  src/json_codec.cpp
-  src/field_codec.cpp
-  src/fs_util.cpp
-  src/collection_store.cpp
-  src/session_store.cpp
-  src/secret_store.cpp
-  src/environment_store.cpp
-  src/app_config_store.cpp
-  src/http_sender.cpp
-  src/grpc_sender.cpp
-  src/engine.cpp
-  src/shell_tokenize.cpp
-  src/curl_importer.cpp
-  src/curl_export.cpp
-  src/grpc_importer.cpp
+  src/domain/types.cpp
+  src/variables/variable_resolver.cpp
+  src/codec/json_codec.cpp
+  src/codec/field_codec.cpp
+  src/infra/fs_util.cpp
+  src/persistence/collection_store.cpp
+  src/persistence/session_store.cpp
+  src/persistence/secret_store.cpp
+  src/persistence/environment_store.cpp
+  src/persistence/app_config_store.cpp
+  src/sending/http_sender.cpp
+  src/sending/grpc_sender.cpp
+  src/app/engine.cpp
+  src/import_export/shell_tokenize.cpp
+  src/import_export/curl_importer.cpp
+  src/import_export/curl_export.cpp
+  src/import_export/grpc_importer.cpp
 )
 
 # include/ = header public (UI chỉ thấy phần này); src/ = riêng tư.
