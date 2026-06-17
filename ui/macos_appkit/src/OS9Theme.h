@@ -22,9 +22,14 @@
 + (void)drawBevelInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
 // Vẽ nút MỚI (btn-new.svg): góc vuông, #CCCCCC, viền #484848, bevel trắng/xám.
 + (void)drawNewBevelInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
-// Bộ chọn kiểu nút (dùng cho mọi button). Mặc định kiểu MỚI; đổi qua .env BUTTON_STYLE=classic.
-+ (void)setClassicButtonStyle:(BOOL)classic;
+// Vẽ nút kiểu LINE (retro, border-line): nền phẳng + viền nét, góc vuông; nhấn = đảo nền.
++ (void)drawLineButtonInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
+// Bộ chọn kiểu nút (dùng cho mọi button): "line" (mặc định) | "new" | "classic" (.env BUTTON_STYLE).
++ (void)setButtonStyleName:(NSString *)name;
++ (void)setClassicButtonStyle:(BOOL)classic;   // giữ tương thích (classic<->new)
 + (void)drawButtonInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
+// Màu chữ phù hợp trạng thái nút (kiểu line khi nhấn đảo nền -> chữ trắng).
++ (NSColor *)buttonFGPressed:(BOOL)pressed enabled:(BOOL)enabled;
 // Vẽ viền inset (sunken) cho ô nhập: tối trên-trái, sáng dưới-phải.
 + (void)drawInsetInRect:(NSRect)r;
 // Vẽ title bar kẻ sọc platinum.

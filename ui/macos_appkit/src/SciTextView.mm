@@ -1,5 +1,6 @@
 #import "SciTextView.h"
 #import "OS9Theme.h"
+#import "OS9Widgets.h"
 #import "JsonEditorBehavior.h"
 
 #import <ScintillaView.h>
@@ -51,13 +52,17 @@
     [_sci setEditable:_editable];
     [self msg:SCI_SETREADONLY w:(_editable ? 0 : 1) l:0];
 
-    // Scrollbar overlay: ẩn khi không dùng, chỉ hiện lúc có scroll event rồi tự mờ đi.
+    // Scrollbar RETRO: dùng OS9Scroller (như cây thư mục) thay scroller hệ thống.
+    // Overlay + autohide -> ẩn khi không cuộn, chỉ hiện lúc có scroll event.
     NSScrollView *sv = [(NSView *)[_sci content] enclosingScrollView];
     if (sv) {
         sv.scrollerStyle = NSScrollerStyleOverlay;
-        sv.hasHorizontalScroller = YES;
-        sv.hasVerticalScroller = YES;
         sv.autohidesScrollers = YES;
+        sv.scrollerKnobStyle = NSScrollerKnobStyleDefault;
+        sv.hasVerticalScroller = YES;
+        sv.hasHorizontalScroller = YES;
+        sv.verticalScroller = [[OS9Scroller alloc] initWithFrame:NSMakeRect(0, 0, 16, 100)];
+        sv.horizontalScroller = [[OS9Scroller alloc] initWithFrame:NSMakeRect(0, 0, 100, 16)];
     }
 
     // Hành vi soạn JSON (auto-close / auto-indent / brace-match): chỉ ô SOẠN.

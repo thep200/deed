@@ -14,6 +14,11 @@
 // Vẽ icon bánh răng cổ điển (cog) cỡ size — dùng cho nút Setting.
 NSImage *OS9GearImage(CGFloat size);
 
+// Icon "send" (máy bay giấy hướng phải) — thay label nút Send.
+NSImage *OS9SendImage(CGFloat size);
+// Icon loading (spinner nan hoa) tại pha quay phase∈[0,1) — animate bằng timer.
+NSImage *OS9SpinnerImage(CGFloat size, CGFloat phase);
+
 // Popup kiểu OS9: bevel + tiêu đề đang chọn + mũi ▼; bấm để bung menu.
 @interface OS9PopupButton : NSControl
 @property(nonatomic, strong) NSArray<NSString *> *itemTitles;
@@ -66,3 +71,8 @@ NSTextField *OS9CenteredLabel(NSString *text);
 
 // Style menu kiểu OS9: mỗi item là 1 view tự vẽ (nền platinum, chọn -> highlight xanh tím).
 void OS9StyleMenu(NSMenu *menu);
+
+// Dropdown tuỳ biến: danh sách item GÓC VUÔNG (không dùng NSMenu hệ thống), hiện ngay
+// dưới (hoặc trên nếu hết chỗ) anchor. onPick(index) khi chọn; tự đóng khi click ngoài/Esc.
+void OS9ShowDropdown(NSArray<NSString *> *items, NSInteger selected, NSView *anchor,
+                     void (^onPick)(NSInteger index));

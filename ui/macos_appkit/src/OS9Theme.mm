@@ -48,11 +48,34 @@ static CGFloat gFontSize = 11;
     return p;
 }
 
-static BOOL gClassicButtons = NO; // mặc định: nút kiểu MỚI (btn-new.svg)
-+ (void)setClassicButtonStyle:(BOOL)classic { gClassicButtons = classic; }
+// 0=line (mặc định), 1=new, 2=classic
+static int gButtonStyle = 0;
++ (void)setButtonStyleName:(NSString *)name {
+    if ([name isEqualToString:@"classic"]) gButtonStyle = 2;
+    else if ([name isEqualToString:@"new"]) gButtonStyle = 1;
+    else gButtonStyle = 0; // line
+}
++ (void)setClassicButtonStyle:(BOOL)classic { gButtonStyle = classic ? 2 : 1; }
 + (void)drawButtonInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault {
-    if (gClassicButtons) [self drawBevelInRect:r pressed:pressed isDefault:isDefault];
-    else [self drawNewBevelInRect:r pressed:pressed isDefault:isDefault];
+    if (gButtonStyle == 2)      [self drawBevelInRect:r pressed:pressed isDefault:isDefault];
+    else if (gButtonStyle == 1) [self drawNewBevelInRect:r pressed:pressed isDefault:isDefault];
+    else                        [self drawLineButtonInRect:r pressed:pressed isDefault:isDefault];
+}
+
++ (NSColor *)buttonFGPressed:(BOOL)pressed enabled:(BOOL)enabled {
+    if (pressed && gButtonStyle == 0) return [NSColor whiteColor]; // line: nền đảo tối
+    return enabled ? [NSColor blackColor] : [self shadow];
+}
+
+// Retro border-line: nền phẳng trắng/sáng + viền nét đậm, góc VUÔNG. Nhấn -> đảo (nền tối).
++ (void)drawLineButtonInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault {
+    NSRect inner = NSInsetRect(r, 0.5, 0.5);
+    [(pressed ? G(0.20) : [NSColor whiteColor]) set];   // nhấn: nền đen-xám (đảo)
+    NSRectFill(inner);
+    [G(0.15) set];                                       // viền #262626
+    NSBezierPath *p = [NSBezierPath bezierPathWithRect:inner];
+    p.lineWidth = isDefault ? 2.0 : 1.0;
+    [p stroke];
 }
 
 // btn-new.svg: nền #CCCCCC, góc vuông, viền #484848 1px, bevel trắng (trên-trái) / #808080 (dưới-phải).

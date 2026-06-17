@@ -192,6 +192,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     NSTextView *_settingText;
 
     BOOL _sending;
+    NSTimer *_spinTimer;   // animate icon loading trong nút Send
+    CGFloat _spinPhase;
 }
 
 #pragma mark Build
@@ -202,7 +204,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     { core::AppConfigStore a; core::AppConfig c = a.load();
       [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize]; }
     // Kiểu nút: new (btn-new.svg) mặc định, hoặc classic (button.svg) qua .env.
-    [OS9Theme setClassicButtonStyle:[[cfg stringFor:@"BUTTON_STYLE" def:@"new"] isEqualToString:@"classic"]];
+    [OS9Theme setButtonStyleName:[cfg stringFor:@"BUTTON_STYLE" def:@"new"]];
     NSRect frame = NSMakeRect(0, 0, [cfg floatFor:@"WINDOW_WIDTH" def:1040], [cfg floatFor:@"WINDOW_HEIGHT" def:680]);
     // Góc cửa sổ: SQUARE_CORNERS=1 (mặc định) -> borderless góc VUÔNG kiểu OS9.
     // =0 -> titled window hệ thống (góc bo tròn). Tiêu đề/nút luôn tự vẽ ở OS9TitleBar.
@@ -397,8 +399,10 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _settingButton.toolTip = @"Settings";
     _envButton = [[OS9BevelButton alloc] initWithTitle:@"Global" target:self action:@selector(envClicked:)];
     _envButton.dropdown = YES;   // hiển thị mũi tên dropdown như method
-    _sendButton = [[OS9BevelButton alloc] initWithTitle:@"Send  ⌘↩" target:self action:@selector(sendRequest:)];
+    _sendButton = [[OS9BevelButton alloc] initWithTitle:@"" target:self action:@selector(sendRequest:)];
     _sendButton.isDefault = YES;
+    _sendButton.icon = OS9SendImage(16);   // icon máy bay giấy thay cho label "Send"
+    _sendButton.toolTip = @"Send  ⌘↩";
     _cancelButton = [[OS9BevelButton alloc] initWithTitle:@"Cancel" target:self action:@selector(cancelClicked:)];
     _protoButton = [[OS9BevelButton alloc] initWithTitle:@"Proto: reflection" target:self action:@selector(protoClicked:)];
 
@@ -520,17 +524,17 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _divTree.frame = NSMakeRect(divTreeX, statusY, dw, panesBottom - statusY);
     _divResp.frame = NSMakeRect(divRespX, panesY, dw, panesBottom - panesY);
 
-    // (3) request tabs + [cURL] ở mép phải hàng tab + editor
-    CGFloat curlW = 46;
-    [self layoutTabButtons:_reqTabButtons atX:reqX y:top width:(_reqW - curlW - 4) height:tabH extra:0];
-    _curlButton.frame = NSMakeRect(reqX + _reqW - curlW, top, curlW, tabH);
+    // (3) NHÓM pane trái = tab request + cURL (cùng 1 hàng, dàn đều) + editor
+    NSMutableArray<OS9BevelButton *> *leftTabGroup = [_reqTabButtons mutableCopy];
+    if (_curlButton) [leftTabGroup addObject:_curlButton];
+    [self layoutTabButtons:leftTabGroup atX:reqX y:top width:_reqW height:tabH extra:0];
     _reqInset.frame = NSMakeRect(reqX, panesY, _reqW, panesBottom - panesY);
     _reqText.frame = NSInsetRect(_reqInset.bounds, 2, 2);
 
-    // (4) response tabs (+ pretty) + editor
-    CGFloat prettyW = 70;
-    [self layoutTabButtons:_respTabButtons atX:respX y:top width:(respW - prettyW - 4) height:tabH extra:0];
-    _prettyButton.frame = NSMakeRect(respX + respW - prettyW, top, prettyW, tabH);
+    // (4) NHÓM pane phải = tab response + Pretty (cùng 1 hàng) + editor
+    NSMutableArray<OS9BevelButton *> *rightTabGroup = [_respTabButtons mutableCopy];
+    if (_prettyButton) [rightTabGroup addObject:_prettyButton];
+    [self layoutTabButtons:rightTabGroup atX:respX y:top width:respW height:tabH extra:0];
     _respInset.frame = NSMakeRect(respX, panesY, respW, panesBottom - panesY);
     _respText.frame = NSInsetRect(_respInset.bounds, 2, 2);
 
@@ -546,7 +550,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     CGFloat wEnv = [cfg floatFor:@"BTN_ENV_W" def:120];
     CGFloat wMethod = [cfg floatFor:@"BTN_METHOD_W" def:92];
     CGFloat wProto = [cfg floatFor:@"BTN_PROTO_W" def:150];
-    CGFloat wSend = [cfg floatFor:@"BTN_SEND_W" def:96];
+    CGFloat wSend = [cfg floatFor:@"BTN_SEND_W" def:54];
     CGFloat wCancel = [cfg floatFor:@"BTN_CANCEL_W" def:64];
 
     _settingButton.frame = NSMakeRect(x, ty, wSetting, btnH); x += wSetting + 6;
@@ -1018,8 +1022,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
         [self toastWarn:@"POC chỉ gửi gRPC unary"]; return;
     }
     _sending = YES;
-    _sendButton.enabledState = NO;
-    _sendButton.title = @"Sending…";   // trạng thái nằm ngay trên nút Send
+    [self startSendSpinner];           // icon loading quay thay cho label
     _cancelButton.enabledState = YES;
     [self relayout];
     [self updateStatus:@""];
@@ -1056,11 +1059,27 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
 - (void)finishSending {
     _sending = NO;
+    [self stopSendSpinner];
     _sendButton.enabledState = _hasRequest;
-    _sendButton.title = @"Send  ⌘↩";
+    _sendButton.icon = OS9SendImage(16);   // trả lại icon send
     _cancelButton.enabledState = NO;
     [self relayout];
 }
+
+// Spinner trong nút Send khi đang gửi: quay 1 nan mỗi tick (8 nan -> ~mượt).
+- (void)startSendSpinner {
+    _spinPhase = 0;
+    [_spinTimer invalidate];
+    _sendButton.icon = OS9SpinnerImage(16, 0);
+    __weak MainWindowController *ws = self;
+    _spinTimer = [NSTimer scheduledTimerWithTimeInterval:0.09 repeats:YES block:^(NSTimer *t) {
+        MainWindowController *s = ws; if (!s) { [t invalidate]; return; }
+        s->_spinPhase += 1.0 / 8.0;
+        if (s->_spinPhase >= 1.0) s->_spinPhase -= 1.0;
+        s->_sendButton.icon = OS9SpinnerImage(16, s->_spinPhase);
+    }];
+}
+- (void)stopSendSpinner { [_spinTimer invalidate]; _spinTimer = nil; }
 
 - (void)rebuildResponseBuffers {
     [_respBuffers removeAllObjects];
@@ -1104,22 +1123,24 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
 - (void)envClicked:(id)sender {
     if (!_engine) { [self toastWarn:@"Mở folder collection trước"]; return; }
-    NSMenu *m = [[NSMenu alloc] init];
-    NSMenuItem *g = [m addItemWithTitle:@"Global" action:@selector(pickEnv:) keyEquivalent:@""]; g.target = self;
-    for (const auto &name : _engine->environments().list()) {
-        if (name == "Global") continue;
-        NSMenuItem *it = [m addItemWithTitle:N(name) action:@selector(pickEnv:) keyEquivalent:@""]; it.target = self;
-    }
-    [m addItem:[NSMenuItem separatorItem]];
-    [[m addItemWithTitle:@"Manage…" action:@selector(manageEnv:) keyEquivalent:@""] setTarget:self];
-    OS9StyleMenu(m);
-    [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0, _envButton.frame.size.height) inView:_envButton];
+    NSMutableArray<NSString *> *items = [@[ @"Global" ] mutableCopy];
+    for (const auto &name : _engine->environments().list())
+        if (name != "Global") [items addObject:N(name)];
+    [items addObject:@"Manage…"];
+    NSString *active = N(_engine->session().getActiveEnv());
+    NSInteger sel = [items indexOfObject:active]; if (sel == NSNotFound) sel = 0;
+    __weak MainWindowController *ws = self;
+    OS9ShowDropdown(items, sel, _envButton, ^(NSInteger idx) {
+        MainWindowController *s = ws; if (!s) return;
+        if (idx == (NSInteger)items.count - 1) { [s manageEnv:nil]; return; }
+        [s pickEnvNamed:items[idx]];
+    });
 }
-- (void)pickEnv:(NSMenuItem *)item {
+- (void)pickEnvNamed:(NSString *)name {
     if (!_engine) return;
-    _engine->session().setActiveEnv(item.title.UTF8String);
+    _engine->session().setActiveEnv(name.UTF8String);
     [self refreshEnvButton];
-    [self toast:[NSString stringWithFormat:@"ENV: %@", item.title]];
+    [self toast:[NSString stringWithFormat:@"ENV: %@", name]];
 }
 - (void)refreshEnvButton {
     _envButton.title = _engine ? N(_engine->session().getActiveEnv()) : @"Global";
@@ -1189,12 +1210,14 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
 - (void)protoClicked:(id)sender {
     if (_model.type != core::RequestType::Grpc) return;
-    NSMenu *m = [[NSMenu alloc] init];
-    [[m addItemWithTitle:@"Reflection (mặc định)" action:@selector(protoReflection:) keyEquivalent:@""] setTarget:self];
-    [[m addItemWithTitle:@"Chọn .proto…" action:@selector(protoFiles:) keyEquivalent:@""] setTarget:self];
-    [[m addItemWithTitle:@"Chọn descriptorSet…" action:@selector(protoDescSet:) keyEquivalent:@""] setTarget:self];
-    OS9StyleMenu(m);
-    [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0, _protoButton.frame.size.height) inView:_protoButton];
+    __weak MainWindowController *ws = self;
+    OS9ShowDropdown(@[ @"Reflection (mặc định)", @"Chọn .proto…", @"Chọn descriptorSet…" ], -1, _protoButton,
+                    ^(NSInteger idx) {
+        MainWindowController *s = ws; if (!s) return;
+        if (idx == 0) [s protoReflection:nil];
+        else if (idx == 1) [s protoFiles:nil];
+        else [s protoDescSet:nil];
+    });
 }
 - (void)protoReflection:(id)s {
     _model.grpc.protoSource = core::ProtoSource{}; _model.grpc.protoSource.mode = "reflection";

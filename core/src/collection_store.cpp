@@ -151,12 +151,13 @@ std::string CollectionStore::createRequest(const std::string& folderRel, Request
     m.type = type;
     if (type == RequestType::Http) {
         m.http.method = "GET";
-        // Header mặc định theo chuẩn HTTP phổ biến (giống Postman/curl khởi tạo).
-        m.http.headers.push_back({"Content-Type", "application/json", true});
-        m.http.headers.push_back({"Accept", "*/*", true});
-        m.http.headers.push_back({"User-Agent", "deed/0.1", true});
-        m.http.headers.push_back({"Accept-Encoding", "gzip, deflate, br", true});
-        m.http.headers.push_back({"Connection", "keep-alive", true});
+        // 5 header mặc định phổ biến, MẶC ĐỊNH TẮT (enabled=false): gợi ý sẵn,
+        // người dùng bật từng cái khi cần (giống cách Postman để header dạng tắt).
+        m.http.headers.push_back({"Content-Type", "application/json", false});
+        m.http.headers.push_back({"Accept", "*/*", false});
+        m.http.headers.push_back({"User-Agent", "deed/0.1", false});
+        m.http.headers.push_back({"Accept-Encoding", "gzip, deflate, br", false});
+        m.http.headers.push_back({"Connection", "keep-alive", false});
         m.http.body.mode = "none";
     } else {
         m.grpc.methodType = "unary";
