@@ -380,12 +380,12 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 }
 
 - (void)buildEditors {
-    __weak MainWindowController *weakSelf = self;
-    // (3) request: editor Scintilla sửa được, live-stash khi user gõ.
+    // (3) request: editor Scintilla sửa được. KHÔNG cần stash mỗi phím:
+    // stashActiveReqBuffer đã chạy ở MỌI điểm đọc buffer (đổi tab / gửi / đổi mode)
+    // nên buffer tab hiện tại luôn được cập nhật trước khi dùng (tránh copy O(n)/phím).
     _reqInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     [_mainPane addSubview:_reqInset];
     _reqText = [[SciTextView alloc] initEditable:YES];
-    _reqText.onTextChanged = ^{ [weakSelf reqTextChanged]; };
     [_reqInset addSubview:_reqText];
     _reqBuffers = [NSMutableArray array];
     _reqTabButtons = [NSMutableArray array];
@@ -955,9 +955,8 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 // Tên hiển thị nút Body theo mode hiện tại: "Body (JSON)" / "Body (FILE)" / "Body (FORM)".
 - (NSString *)bodyButtonTitle {
     NSString *m = _bodyMode.length ? _bodyMode : @"json";
-    if ([m isEqualToString:@"binary"]) return @"File";
-    if ([m isEqualToString:@"form-urlencoded"]) return @"Form";
-    return @"JSON";   // chỉ tên mode làm label (không "Body", không ngoặc)
+    for (NSDictionary *d in BodyModeTable()) if ([d[@"mode"] isEqualToString:m]) return d[@"label"];
+    return @"JSON";   // text/xml/none -> JSON (giữ hành vi cũ)
 }
 - (NSInteger)bodyTabIndex { return [_reqTabTitles indexOfObject:@"Body"]; } // 0 cho HTTP, NSNotFound cho gRPC
 - (void)updateBodyButtonLabel {
@@ -971,10 +970,21 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 static NSString *const kFormBodyTemplate =
     @"[\n  {\n    \"key\": \"\",\n    \"value\": \"\",\n    \"enabled\": true\n  }\n]";
 static NSString *const kFileBodyTemplate = @"{\n  \"filePath\": \"\"\n}";
+
+// NGUỒN DUY NHẤT cho dropdown Body: mode nội bộ <-> option/label/template.
+// Thêm/bớt định dạng chỉ cần sửa bảng này (trước đây rải rác ở 3 hàm if-else).
+static NSArray<NSDictionary *> *BodyModeTable(void) {
+    static NSArray *t;
+    if (!t) t = @[
+        @{@"mode" : @"json",            @"opt" : @"JSON", @"label" : @"JSON", @"tpl" : @"{}"},
+        @{@"mode" : @"binary",          @"opt" : @"File", @"label" : @"File", @"tpl" : kFileBodyTemplate},
+        @{@"mode" : @"form-urlencoded", @"opt" : @"Form", @"label" : @"Form", @"tpl" : kFormBodyTemplate},
+    ];
+    return t;
+}
 - (NSString *)bodyTemplateForMode:(NSString *)mode {
-    if ([mode isEqualToString:@"binary"]) return kFileBodyTemplate;
-    if ([mode isEqualToString:@"form-urlencoded"]) return kFormBodyTemplate;
-    return @"{}";                                        // json
+    for (NSDictionary *d in BodyModeTable()) if ([d[@"mode"] isEqualToString:mode]) return d[@"tpl"];
+    return @"{}";                                        // json (mặc định cho text/xml/none)
 }
 
 // Model.Body -> nội dung hiển thị trong editor (đúng cái gửi đi, không bọc).
@@ -1025,8 +1035,9 @@ static NSString *const kFileBodyTemplate = @"{\n  \"filePath\": \"\"\n}";
 - (void)bodyButtonClicked:(OS9BevelButton *)b {
     NSInteger bi = [self bodyTabIndex];
     if (bi == NSNotFound) return;
-    NSArray<NSString *> *opts = @[ @"JSON", @"File", @"Form" ];
-    NSArray<NSString *> *modes = @[ @"json", @"binary", @"form-urlencoded" ];
+    NSMutableArray<NSString *> *opts = [NSMutableArray array];
+    NSMutableArray<NSString *> *modes = [NSMutableArray array];
+    for (NSDictionary *d in BodyModeTable()) { [opts addObject:d[@"opt"]]; [modes addObject:d[@"mode"]]; }
     NSInteger sel = [modes indexOfObject:(_bodyMode.length ? _bodyMode : @"json")];
     if (sel == NSNotFound) sel = 0;
     __weak MainWindowController *ws = self;
@@ -1136,12 +1147,6 @@ static NSString *const kFileBodyTemplate = @"{\n  \"filePath\": \"\"\n}";
 
 #pragma mark Editing
 
-// Live-stash: user gõ trong editor request -> buffer tab hiện tại luôn đồng bộ
-// (SciTextView.onTextChanged gọi cái này; tránh lẫn giá trị khi đổi tab).
-- (void)reqTextChanged {
-    if (_activeReqTab >= 0 && _activeReqTab < (NSInteger)_reqBuffers.count)
-        _reqBuffers[_activeReqTab] = [(_reqText.string ?: @"") copy];
-}
 // Dán cURL/grpcurl vào ô URL -> tự nhận biết -> preview -> tạo request mới (CURL_IMPORT.md).
 // Nhận biết "dán/drop" bằng độ dài tăng đột biến (>=8 ký tự một lần) — gõ tay tăng 1/ký tự.
 - (void)controlTextDidChange:(NSNotification *)note {

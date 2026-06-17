@@ -4,32 +4,43 @@ static NSColor *G(CGFloat v) { return [NSColor colorWithCalibratedWhite:v alpha:
 
 @implementation OS9Theme
 
-+ (NSColor *)face        { return G(0.80); }   // ~#CCCCCC platinum
-+ (NSColor *)buttonFace  { return G(0.867); }  // #DDDDDD (button.svg)
-+ (NSColor *)faceLight   { return G(0.88); }
-+ (NSColor *)highlight   { return G(1.00); }
-+ (NSColor *)shadow      { return G(0.53); }
-+ (NSColor *)darkShadow  { return G(0.33); }
-+ (NSColor *)frame       { return G(0.0); }
-+ (NSColor *)windowBg    { return G(0.80); }
-+ (NSColor *)accent      { return [NSColor colorWithCalibratedRed:0.20 green:0.30 blue:0.55 alpha:1.0]; }
-+ (NSColor *)titleActive { return G(0.80); }
+// Token màu là HẰNG SỐ -> cache 1 lần (tránh cấp phát NSColor mỗi lần drawRect gọi).
+// Các getter chỉ chạy trên main thread (vẽ UI) nên lazy-static an toàn.
++ (NSColor *)face        { static NSColor *c; if (!c) c = G(0.80);  return c; }   // ~#CCCCCC platinum
++ (NSColor *)buttonFace  { static NSColor *c; if (!c) c = G(0.867); return c; }   // #DDDDDD (button.svg)
++ (NSColor *)faceLight   { static NSColor *c; if (!c) c = G(0.88);  return c; }
++ (NSColor *)highlight   { static NSColor *c; if (!c) c = G(1.00);  return c; }
++ (NSColor *)shadow      { static NSColor *c; if (!c) c = G(0.53);  return c; }
++ (NSColor *)darkShadow  { static NSColor *c; if (!c) c = G(0.33);  return c; }
++ (NSColor *)frame       { static NSColor *c; if (!c) c = G(0.0);   return c; }
++ (NSColor *)windowBg    { static NSColor *c; if (!c) c = G(0.80);  return c; }
++ (NSColor *)accent      { static NSColor *c; if (!c) c = [NSColor colorWithCalibratedRed:0.20 green:0.30 blue:0.55 alpha:1.0]; return c; }
++ (NSColor *)titleActive { static NSColor *c; if (!c) c = G(0.80);  return c; }
 
 static NSString *gFontName = nil;
 static CGFloat gFontSize = 11;
+static NSFont *gUiFont = nil;    // cache: tránh tra cứu font mỗi lần vẽ/đo chữ
+static NSFont *gMonoFont = nil;
 
 + (void)setConfiguredFontName:(NSString *)name size:(CGFloat)size {
     gFontName = (name.length ? [name copy] : nil);
     gFontSize = (size > 0 ? size : 11);
+    gUiFont = nil; gMonoFont = nil;   // đổi cấu hình -> bỏ cache để dựng lại
 }
 
 + (NSFont *)uiFont {
-    if (gFontName) { NSFont *f = [NSFont fontWithName:gFontName size:gFontSize]; if (f) return f; }
-    return [NSFont fontWithName:@"Geneva" size:gFontSize] ?: [NSFont systemFontOfSize:gFontSize];
+    if (!gUiFont) {
+        if (gFontName) gUiFont = [NSFont fontWithName:gFontName size:gFontSize];
+        if (!gUiFont) gUiFont = [NSFont fontWithName:@"Geneva" size:gFontSize] ?: [NSFont systemFontOfSize:gFontSize];
+    }
+    return gUiFont;
 }
 + (NSFont *)monoFont {
-    if (gFontName) { NSFont *f = [NSFont fontWithName:gFontName size:gFontSize]; if (f) return f; }
-    return [NSFont fontWithName:@"Monaco" size:gFontSize] ?: [NSFont userFixedPitchFontOfSize:gFontSize];
+    if (!gMonoFont) {
+        if (gFontName) gMonoFont = [NSFont fontWithName:gFontName size:gFontSize];
+        if (!gMonoFont) gMonoFont = [NSFont fontWithName:@"Monaco" size:gFontSize] ?: [NSFont userFixedPitchFontOfSize:gFontSize];
+    }
+    return gMonoFont;
 }
 
 // Nút góc bo pixel (theo button.svg): các góc bị cắt 2 bậc x 2px.
