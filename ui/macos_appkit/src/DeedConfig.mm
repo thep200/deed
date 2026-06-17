@@ -65,6 +65,14 @@
     return (v && v.length) ? (CGFloat)[v doubleValue] : def;
 }
 
+- (BOOL)boolFor:(NSString *)key def:(BOOL)def {
+    NSString *v = _kv[key];
+    if (!v || !v.length) return def;
+    v = v.lowercaseString;
+    return [v isEqualToString:@"1"] || [v isEqualToString:@"true"] ||
+           [v isEqualToString:@"yes"] || [v isEqualToString:@"on"];
+}
+
 - (NSString *)appName { return [self stringFor:@"APP_NAME" def:@"deed"]; }
 
 @end

@@ -204,18 +204,28 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     // Kiểu nút: new (btn-new.svg) mặc định, hoặc classic (button.svg) qua .env.
     [OS9Theme setClassicButtonStyle:[[cfg stringFor:@"BUTTON_STYLE" def:@"new"] isEqualToString:@"classic"]];
     NSRect frame = NSMakeRect(0, 0, [cfg floatFor:@"WINDOW_WIDTH" def:1040], [cfg floatFor:@"WINDOW_HEIGHT" def:680]);
-    _window = [[NSWindow alloc] initWithContentRect:frame
-                                          styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-                                                     NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable |
-                                                     NSWindowStyleMaskFullSizeContentView)
-                                            backing:NSBackingStoreBuffered
-                                              defer:NO];
-    _window.titlebarAppearsTransparent = YES;
-    _window.titleVisibility = NSWindowTitleHidden;
+    // Góc cửa sổ: SQUARE_CORNERS=1 (mặc định) -> borderless góc VUÔNG kiểu OS9.
+    // =0 -> titled window hệ thống (góc bo tròn). Tiêu đề/nút luôn tự vẽ ở OS9TitleBar.
+    BOOL square = [cfg boolFor:@"SQUARE_CORNERS" def:YES];
+    if (square) {
+        _window = [[OS9Window alloc] initWithContentRect:frame
+                                               styleMask:(NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable)
+                                                 backing:NSBackingStoreBuffered
+                                                   defer:NO];
+    } else {
+        _window = [[NSWindow alloc] initWithContentRect:frame
+                                              styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                                                         NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable |
+                                                         NSWindowStyleMaskFullSizeContentView)
+                                                backing:NSBackingStoreBuffered
+                                                  defer:NO];
+        _window.titlebarAppearsTransparent = YES;
+        _window.titleVisibility = NSWindowTitleHidden;
+        [_window standardWindowButton:NSWindowCloseButton].hidden = YES;
+        [_window standardWindowButton:NSWindowMiniaturizeButton].hidden = YES;
+        [_window standardWindowButton:NSWindowZoomButton].hidden = YES;
+    }
     _window.movableByWindowBackground = NO;
-    [_window standardWindowButton:NSWindowCloseButton].hidden = YES;
-    [_window standardWindowButton:NSWindowMiniaturizeButton].hidden = YES;
-    [_window standardWindowButton:NSWindowZoomButton].hidden = YES;
     _window.delegate = self;
     _window.minSize = NSMakeSize([cfg floatFor:@"WINDOW_MIN_WIDTH" def:820], [cfg floatFor:@"WINDOW_MIN_HEIGHT" def:520]);
     // App platinum sáng -> ép Aqua để text/field không bị trắng theo Dark Mode hệ thống.

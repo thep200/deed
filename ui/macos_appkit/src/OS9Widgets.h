@@ -23,6 +23,11 @@ NSImage *OS9GearImage(CGFloat size);
 - (void)selectTitle:(NSString *)title;
 @end
 
+// Cửa sổ kiểu OS9: borderless -> góc VUÔNG (không bo tròn như titled window),
+// nhưng vẫn nhận key/main + kéo/resize. Dùng khi muốn look retro vuông vức.
+@interface OS9Window : NSWindow
+@end
+
 // Title bar kẻ sọc + nút close, kéo cửa sổ được.
 @interface OS9TitleBar : NSView
 @property(nonatomic, copy) NSString *title;

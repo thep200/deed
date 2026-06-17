@@ -137,6 +137,14 @@
 
 #pragma mark - OS9TitleBar
 
+@implementation OS9Window
+// Borderless mặc định KHÔNG được làm key/main -> ép cho phép để gõ phím/active được.
+- (BOOL)canBecomeKeyWindow { return YES; }
+- (BOOL)canBecomeMainWindow { return YES; }
+@end
+
+#pragma mark - OS9TitleBar
+
 @implementation OS9TitleBar
 
 - (BOOL)isFlipped { return NO; }

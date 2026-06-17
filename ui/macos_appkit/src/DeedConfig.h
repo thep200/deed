@@ -8,6 +8,7 @@
 
 - (NSString *)stringFor:(NSString *)key def:(NSString *)def;
 - (CGFloat)floatFor:(NSString *)key def:(CGFloat)def;
+- (BOOL)boolFor:(NSString *)key def:(BOOL)def;
 
 // Tiện ích hay dùng.
 - (NSString *)appName;          // APP_NAME (mặc định "deed")
