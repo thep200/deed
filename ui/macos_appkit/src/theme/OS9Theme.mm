@@ -15,6 +15,7 @@ static NSColor *G(CGFloat v) { return [NSColor colorWithCalibratedWhite:v alpha:
 + (NSColor *)frame       { static NSColor *c; if (!c) c = G(0.0);   return c; }
 + (NSColor *)windowBg    { static NSColor *c; if (!c) c = G(0.80);  return c; }
 + (NSColor *)accent      { static NSColor *c; if (!c) c = [NSColor colorWithCalibratedRed:0.20 green:0.30 blue:0.55 alpha:1.0]; return c; }
++ (NSColor *)rowSelectionGray { static NSColor *c; if (!c) c = G(0.82); return c; } // xám nhẹ Platinum (#D1D1D1)
 + (NSColor *)titleActive { static NSColor *c; if (!c) c = G(0.80);  return c; }
 
 static NSString *gFontName = nil;

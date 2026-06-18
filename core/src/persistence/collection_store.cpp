@@ -28,8 +28,8 @@ bool isConfigFile(const std::string& name) {
 }
 bool isHidden(const std::string& name) { return !name.empty() && name[0] == '.'; }
 
-// Sinh id ngẫu nhiên nhẹ (không thư viện ngoài): RNG seed MỘT LẦN rồi tiến trạng thái
-// mỗi lần gọi -> không trùng dù gọi liên tiếp trong cùng mili-giây.
+// Sinh id ngẫu nhiên nhẹ: base36 LOWERCASE, 12 ký tự, KHÔNG '_' (để nhúng vào TÊN FILE — §2A).
+// RNG seed MỘT LẦN rồi tiến trạng thái mỗi lần gọi -> không trùng dù gọi liên tiếp.
 std::string genId() {
     static std::mutex mu;
     static std::mt19937_64 rng([] {
@@ -38,12 +38,15 @@ std::string genId() {
         s ^= static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
         return s;
     }());
-    static const char* alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford-ish
+    static const char* alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"; // base36, [a-z0-9]
     std::lock_guard<std::mutex> lk(mu);
-    std::string s = "req_";
-    for (int i = 0; i < 12; ++i) s += alphabet[rng() % 32];
+    std::string s;
+    for (int i = 0; i < 12; ++i) s += alphabet[rng() % 36];
     return s;
 }
+
+// id dùng được trong tên file? (cũ "req_..." chứa '_' -> không hợp lệ -> phải regenerate khi migrate).
+std::string ensureFileId(const std::string& id) { return isValidFileId(id) ? id : genId(); }
 
 std::string uniquePath(const fs::path& dir, const std::string& slug, const std::string& ext) {
     fs::path cand = dir / (slug + ext);
@@ -55,14 +58,14 @@ std::string uniquePath(const fs::path& dir, const std::string& slug, const std::
     throw std::runtime_error("could not find a unique filename for: " + slug);
 }
 
-// Tìm tên file duy nhất theo grammar mã hoá (giữ nguyên prefix http_<method>_ / grpc_,
-// chỉ thêm hậu tố vào slug khi trùng). Trả TÊN FILE (không kèm thư mục).
-std::string uniqueEncodedName(const fs::path& dir, RequestType type,
+// Tìm tên file duy nhất theo grammar mã hoá (<id>_type_..., id đầu). id duy nhất nên hầu như
+// không trùng; vẫn giữ vòng thêm hậu tố slug cho chắc. Trả TÊN FILE (không kèm thư mục).
+std::string uniqueEncodedName(const fs::path& dir, const std::string& id, RequestType type,
                               const std::string& method, const std::string& displayName) {
-    std::string first = encodeRequestFilename(type, method, displayName);
+    std::string first = encodeRequestFilename(id, type, method, displayName);
     if (!fs::exists(dir / first)) return first;
     for (int i = 2; i < 10000; ++i) {
-        std::string cand = encodeRequestFilename(type, method, displayName + " " + std::to_string(i));
+        std::string cand = encodeRequestFilename(id, type, method, displayName + " " + std::to_string(i));
         if (!fs::exists(dir / cand)) return cand;
     }
     throw std::runtime_error("could not find a unique filename for: " + displayName);
@@ -87,7 +90,13 @@ TreeNode buildRequestLeaf(const fs::path& fullPath, const std::string& relPath) 
         } else {
             leaf.methodOrType.clear();        // gRPC: UI không hiển thị method type
         }
-        leaf.id.clear();                      // id chỉ có trong nội dung -> nạp khi MỞ
+        leaf.id = p.id;                       // id ĐỌC TỪ TÊN FILE (zero-read) — dùng cho reveal/cache.
+        if (leaf.id.empty()) {                // file CŨ chưa có id trong tên -> đọc 1 lần lấy id nội dung
+            std::string txt;
+            if (fsutil::readFile(fullPath.string(), txt)) {
+                try { leaf.id = codec::json::parse(txt).value("id", std::string()); } catch (...) {}
+            }
+        }
         return leaf;
     }
 
@@ -173,7 +182,9 @@ RequestModel CollectionStore::loadRequest(const std::string& relPath) const {
     if (!fsutil::readFile(fsutil::join(root_, relPath), txt))
         throw std::runtime_error("cannot read request: " + relPath);
     RequestModel m = codec::requestFromJson(codec::json::parse(txt));
-    if (m.id.empty()) {                 // file cũ chưa có id -> gán + ghi lại tại CHỖ (không rename)
+    // id phải hợp lệ để nhúng vào TÊN FILE ([a-z0-9], không '_'). Rỗng hoặc legacy "req_..."
+    // -> sinh id sạch + ghi lại nội dung tại CHỖ (rename tên file để sau ở save/migrate).
+    if (!isValidFileId(m.id)) {
         m.id = genId();
         try { fsutil::writeFileAtomic(fsutil::join(root_, relPath), codec::dumpRequest(m)); }
         catch (...) {}
@@ -183,8 +194,7 @@ RequestModel CollectionStore::loadRequest(const std::string& relPath) const {
 
 std::string CollectionStore::findRelPathById(const std::string& id) const {
     if (id.empty()) return "";
-    // id chỉ nằm trong NỘI DUNG file -> duyệt thư mục, đọc từng .json tới khi khớp.
-    // Chỉ gọi khi resync (rename/move), KHÔNG dùng để render cây.
+    // Ưu tiên đọc id TỪ TÊN FILE (zero-read); chỉ đọc nội dung cho file CŨ chưa có id trong tên.
     std::function<std::string(const std::string&)> walk =
         [&](const std::string& rel) -> std::string {
         fs::path dir = fs::path(fsutil::join(root_, rel));
@@ -200,11 +210,15 @@ std::string CollectionStore::findRelPathById(const std::string& id) const {
             } else if (e.is_regular_file()) {
                 if (e.path().extension() != ".json" || isConfigFile(fname) || isHidden(fname))
                     continue;
-                std::string txt;
+                ParsedRequestName p = parseRequestFilename(fname);
+                if (!p.id.empty()) {                 // id từ tên file
+                    if (p.id == id) return childRel;
+                    continue;
+                }
+                std::string txt;                     // file cũ chưa có id trong tên -> đọc nội dung
                 if (fsutil::readFile(e.path().string(), txt)) {
                     try {
-                        auto j = codec::json::parse(txt);
-                        if (j.value("id", std::string()) == id) return childRel;
+                        if (codec::json::parse(txt).value("id", std::string()) == id) return childRel;
                     } catch (...) {}
                 }
             }
@@ -214,15 +228,53 @@ std::string CollectionStore::findRelPathById(const std::string& id) const {
     return walk("");
 }
 
+int CollectionStore::migrateAddIdToFilenames() const {
+    int migrated = 0;
+    std::function<void(const std::string&)> walk = [&](const std::string& rel) {
+        fs::path dir = fs::path(fsutil::join(root_, rel));
+        std::error_code ec;
+        std::vector<fs::path> files;
+        for (const auto& e : fs::directory_iterator(dir, ec)) {
+            if (e.is_symlink()) continue;
+            std::string fname = e.path().filename().string();
+            std::string childRel = rel.empty() ? fname : rel + "/" + fname;
+            if (e.is_directory()) {
+                if (isReservedDir(fname) || isHidden(fname)) continue;
+                walk(childRel);
+            } else if (e.is_regular_file()) {
+                if (e.path().extension() != ".json" || isConfigFile(fname) || isHidden(fname))
+                    continue;
+                ParsedRequestName p = parseRequestFilename(fname);
+                if (p.ok && !p.id.empty()) continue;     // đã có id trong tên -> KHÔNG đọc nội dung
+                files.push_back(childRel);               // cần migrate (xử lý sau vòng lặp dir)
+            }
+        }
+        for (const auto& childRel : files) {
+            try {
+                RequestModel m = loadRequest(childRel);  // bảo đảm id sạch (sinh nếu legacy/empty)
+                std::string method = (m.type == RequestType::Http) ? m.http.method : std::string();
+                fs::path src = fs::path(fsutil::join(root_, childRel));
+                std::string newName = uniqueEncodedName(src.parent_path(), m.id, m.type, method, m.name);
+                if (newName != src.filename().string()) {
+                    fs::rename(src, src.parent_path() / newName, ec);
+                    if (!ec) ++migrated;
+                }
+            } catch (...) { /* file lỗi -> bỏ qua, không chặn migrate phần còn lại */ }
+        }
+    };
+    walk("");
+    return migrated;
+}
+
 std::string CollectionStore::saveRequest(const std::string& relPath, const RequestModel& m) const {
     fs::path cur = fs::path(fsutil::join(root_, relPath));
     fs::path dir = cur.parent_path();
     std::string method = (m.type == RequestType::Http) ? m.http.method : std::string();
     // Ghi nội dung trước (nguồn chân lý), rồi đồng bộ tên file = cache dẫn xuất (§4).
     fsutil::writeFileAtomic(cur.string(), codec::dumpRequest(m));
-    std::string desired = encodeRequestFilename(m.type, method, m.name);
+    std::string desired = encodeRequestFilename(m.id, m.type, method, m.name);
     if (cur.filename().string() == desired) return relPath;   // tên đã khớp -> xong
-    std::string newName = uniqueEncodedName(dir, m.type, method, m.name);
+    std::string newName = uniqueEncodedName(dir, m.id, m.type, method, m.name);
     fs::path dst = dir / newName;
     std::error_code ec;
     fs::rename(cur, dst, ec);                  // git phát hiện rename qua nội dung giữ nguyên
@@ -254,7 +306,7 @@ std::string CollectionStore::createRequest(const std::string& folderRel, Request
         m.grpc.message = "{}";
     }
     std::string method = (type == RequestType::Http) ? m.http.method : std::string();
-    fs::path full = dir / uniqueEncodedName(dir, type, method, name);
+    fs::path full = dir / uniqueEncodedName(dir, m.id, type, method, name);
     fsutil::writeFileAtomic(full.string(), codec::dumpRequest(m));
     return fs::relative(full, fs::path(root_)).generic_string();
 }
@@ -266,7 +318,7 @@ std::string CollectionStore::createRequestFromModel(const std::string& folderRel
     m.id = genId();      // id mới, độc lập với nguồn import
     m.name = name;
     std::string method = (m.type == RequestType::Http) ? m.http.method : std::string();
-    fs::path full = dir / uniqueEncodedName(dir, m.type, method, name);
+    fs::path full = dir / uniqueEncodedName(dir, m.id, m.type, method, name);
     fsutil::writeFileAtomic(full.string(), codec::dumpRequest(m));
     return fs::relative(full, fs::path(root_)).generic_string();
 }
@@ -286,11 +338,11 @@ std::string CollectionStore::rename(const std::string& relPath, const std::strin
         fs::rename(src, dst);
         return fs::relative(dst, fs::path(root_)).generic_string();
     }
-    // request: cập nhật field name + đổi tên file theo grammar mã hoá (http_method_slug / grpc_slug).
+    // request: cập nhật field name + đổi tên file (GIỮ id cũ, chỉ đổi slug). §2A.
     RequestModel m = loadRequest(relPath);
     m.name = newName;
     std::string method = (m.type == RequestType::Http) ? m.http.method : std::string();
-    fs::path newFull = src.parent_path() / uniqueEncodedName(src.parent_path(), m.type, method, newName);
+    fs::path newFull = src.parent_path() / uniqueEncodedName(src.parent_path(), m.id, m.type, method, newName);
     fsutil::writeFileAtomic(newFull.string(), codec::dumpRequest(m));
     fs::remove(src);
     return fs::relative(newFull, fs::path(root_)).generic_string();
@@ -310,7 +362,7 @@ std::string CollectionStore::duplicate(const std::string& relPath) const {
     m.id = genId();                 // id mới để không trùng
     m.name = m.name + " copy";
     std::string method = (m.type == RequestType::Http) ? m.http.method : std::string();
-    fs::path newFull = src.parent_path() / uniqueEncodedName(src.parent_path(), m.type, method, m.name);
+    fs::path newFull = src.parent_path() / uniqueEncodedName(src.parent_path(), m.id, m.type, method, m.name);
     fsutil::writeFileAtomic(newFull.string(), codec::dumpRequest(m));
     return fs::relative(newFull, fs::path(root_)).generic_string();
 }

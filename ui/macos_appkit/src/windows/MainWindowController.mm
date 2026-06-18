@@ -123,6 +123,24 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
 }
 @end
 
+#pragma mark - OS9RowView (highlight XÁM tự vẽ, bỏ xanh mặc định — VIỆC 3)
+
+@interface OS9RowView : NSTableRowView
+@end
+@implementation OS9RowView
+// Tô nền xám nhẹ khi row được chọn (đơn HOẶC nhiều); KHÔNG đảo chữ trắng.
+- (void)drawBackgroundInRect:(NSRect)dirtyRect {
+    [[NSColor whiteColor] set];
+    NSRectFill(self.bounds);
+    if (self.selected) { [[OS9Theme rowSelectionGray] set]; NSRectFill(self.bounds); }
+}
+// Vô hiệu mọi hiệu ứng selection/emphasized mặc định (không vẽ xanh ở bất kỳ trạng thái nào).
+- (void)drawSelectionInRect:(NSRect)dirtyRect {}
+- (BOOL)isEmphasized { return NO; }
+- (void)setEmphasized:(BOOL)emphasized { [super setEmphasized:NO]; }
+- (void)setSelected:(BOOL)selected { [super setSelected:selected]; [self setNeedsDisplay:YES]; }
+@end
+
 #pragma mark - MainWindowController
 
 @implementation MainWindowController {
@@ -154,6 +172,7 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     TreeItem *_renameItem;
     NSMutableArray<TreeItem *> *_roots;
     NSMutableSet<NSString *> *_expandedFolders; // relPath các folder đang mở (giữ qua reload)
+    BOOL _revealingSelection;                    // đang chọn do reveal -> bỏ qua auto-load
 
     // (3) request editor
     OS9SerratedInset *_reqInset;
@@ -162,6 +181,9 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     NSMutableArray<OS9BevelButton *> *_reqTabButtons;
     NSArray<NSString *> *_reqTabTitles;
     NSInteger _activeReqTab;
+    // VIỆC 1: nhớ tab theo TỪNG pane bằng KHOÁ ngữ nghĩa (title), KHÔNG theo index, KHÔNG
+    // nằm trong RequestModel -> giữ qua chuyển request. nil/không-khớp -> fallback tab đầu.
+    NSString *_leftPaneActiveTabKey;
 
     // (4) response
     OS9SerratedInset *_respInset;
@@ -170,6 +192,7 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     NSMutableArray<OS9BevelButton *> *_respTabButtons;
     NSArray<NSString *> *_respTabTitles;
     NSInteger _activeRespTab;
+    NSString *_rightPaneActiveTabKey;   // khoá tab pane phải (nhớ riêng pane này)
     OS9BevelButton *_prettyButton;
     NSInteger _prettyMode; // 0=Pretty 1=Raw 2=Encode 3=Decode
     OS9BevelButton *_curlButton;      // copy request hiện tại as cURL
@@ -373,6 +396,8 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     _tree.rowHeight = 18;
     _tree.indentationPerLevel = 9;         // thụt ít -> sát lề trái hơn
     _tree.allowsMultipleSelection = YES;   // chọn nhiều để xoá cùng lúc
+    // VIỆC 3: TẮT highlight xanh mặc định -> tự vẽ nền XÁM nhẹ (row view bên dưới).
+    _tree.selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone;
     _tree.dataSource = self;
     _tree.delegate = self;
     _tree.target = self;
@@ -763,6 +788,8 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     _openButton.title = [self abbreviatePath:path];
     _openButton.toolTip = path;
     [self setHasRequest:NO];
+    // Migrate 1 lần: file cũ -> thêm id vào tên (chỉ đụng file thiếu id). Trước khi dựng cây.
+    try { _engine->collection().migrateAddIdToFilenames(); } catch (...) {}
     [self reloadTree];
     [self refreshEnvButton];
 
@@ -907,6 +934,12 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
 }
 // Folder LUÔN expandable (rẻ, không đọc đĩa); request: không.
 - (BOOL)outlineView:(NSOutlineView *)ov isItemExpandable:(id)item { return ((TreeItem *)item).isFolder; }
+// VIỆC 3: row view tự vẽ nền xám khi selected (ảo hoá/tái dùng của NSOutlineView).
+- (NSTableRowView *)outlineView:(NSOutlineView *)ov rowViewForItem:(id)item {
+    OS9RowView *rv = [ov makeViewWithIdentifier:@"os9row" owner:self];
+    if (!rv) { rv = [[OS9RowView alloc] initWithFrame:NSZeroRect]; rv.identifier = @"os9row"; }
+    return rv;
+}
 - (NSView *)outlineView:(NSOutlineView *)ov viewForTableColumn:(NSTableColumn *)col item:(id)item {
     TreeItem *t = item;
     TreeCellView *cell = [ov makeViewWithIdentifier:@"treecell" owner:self];
@@ -921,12 +954,52 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     return cell;
 }
 - (void)outlineViewSelectionDidChange:(NSNotification *)note {
+    if (_revealingSelection) return;                 // chọn do reveal -> KHÔNG nạp lại (tránh đệ quy)
     if (_tree.selectedRowIndexes.count != 1) return; // multi-select -> không auto-load
     NSInteger row = _tree.selectedRow;
     if (row < 0) return;
     TreeItem *t = [_tree itemAtRow:row];
     if (t.isFolder || t.relPath.length == 0) return;
     [self loadRequestAtRel:t.relPath];
+}
+
+// VIỆC 2B: mở/cuộn tới + chọn request đang hiển thị — CHỈ mở nhánh tổ tiên (O(depth), không scan
+// toàn cây, không đọc nội dung; dùng id từ tên file để chống trùng tên).
+- (void)revealAndSelectRequestById:(NSString *)reqId relPath:(NSString *)relPath {
+    if (relPath.length == 0 || !_tree) return;
+    NSArray<NSString *> *parts = [relPath componentsSeparatedByString:@"/"];
+    NSArray<TreeItem *> *level = _roots;
+    NSString *accum = @"";
+    TreeItem *target = nil;
+    for (NSUInteger i = 0; i < parts.count; i++) {
+        accum = accum.length ? [accum stringByAppendingFormat:@"/%@", parts[i]] : parts[i];
+        BOOL isLast = (i + 1 == parts.count);
+        TreeItem *match = nil;
+        if (isLast) {                                // lá: ưu tiên khớp id EXACT, fallback relPath
+            for (TreeItem *t in level)
+                if (!t.isFolder && reqId.length && [t.requestId isEqualToString:reqId]) { match = t; break; }
+            if (!match)
+                for (TreeItem *t in level)
+                    if (!t.isFolder && [t.relPath isEqualToString:accum]) { match = t; break; }
+            target = match;
+        } else {                                     // folder tổ tiên: tìm theo relPath, unfold lazy
+            for (TreeItem *t in level)
+                if (t.isFolder && [t.relPath isEqualToString:accum]) { match = t; break; }
+            if (!match) return;                      // nhánh không tồn tại
+            if (!match.childrenLoaded) [self loadChildrenOf:match];  // CHỈ scan folder này
+            [_tree expandItem:match];
+            [_expandedFolders addObject:match.relPath];
+            level = match.children;
+        }
+        if (!match) return;
+    }
+    if (!target) return;
+    NSInteger row = [_tree rowForItem:target];
+    if (row < 0) return;
+    _revealingSelection = YES;                       // không kích hoạt nạp lại
+    [_tree selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+    [_tree scrollRowToVisible:row];
+    _revealingSelection = NO;
 }
 
 // --- Kéo-thả: di chuyển request/folder vào folder ---
@@ -1001,6 +1074,8 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
         [self updateStatus:@""];
         _respText.string = @"";
         [self showCachedResponseForId:_currentId];   // hiện response gần nhất (nếu có) — không gửi lại
+        // reveal + unfold + highlight node đang mở (dùng id từ tên file, chỉ mở nhánh tổ tiên).
+        [self revealAndSelectRequestById:N(_currentId) relPath:N(_currentRel)];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 
@@ -1047,9 +1122,21 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
         [_protoPopup setNeedsDisplay:YES];
         [self showSavedGrpcMethodLabel];   // hiện RPC đã lưu (KHÔNG fetch; fetch khi bấm dropdown)
     }
-    _activeReqTab = 0;
-    _reqText.string = _reqBuffers.count ? _reqBuffers[0] : @"";
-    [self highlightActiveTab:_reqTabButtons active:0];
+    // Áp LẠI tab đã nhớ của pane trái (nếu khoá tồn tại trong loại request hiện tại); else tab đầu.
+    NSInteger li = [self tabIndexForKey:_leftPaneActiveTabKey inTitles:_reqTabTitles];
+    if (li >= (NSInteger)_reqBuffers.count) li = 0;
+    _activeReqTab = li;
+    _reqText.string = _reqBuffers.count ? _reqBuffers[li] : @"";
+    [self highlightActiveTab:_reqTabButtons active:li];
+}
+
+// Index của tab theo KHOÁ (title) trong bộ titles; không khớp/nil -> 0 (tab đầu của loại đó).
+- (NSInteger)tabIndexForKey:(NSString *)key inTitles:(NSArray<NSString *> *)titles {
+    if (key.length) {
+        NSInteger idx = [titles indexOfObject:key];
+        if (idx != NSNotFound) return idx;
+    }
+    return 0;
 }
 
 - (void)stashActiveReqBuffer {
@@ -1219,6 +1306,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     _bodyMode = mode;
     [self updateBodyButtonLabel];
     _activeReqTab = bi;                          // kích hoạt + hiện body
+    if (bi < (NSInteger)_reqTabTitles.count) _leftPaneActiveTabKey = _reqTabTitles[bi];
     _reqText.string = _reqBuffers[bi];
     [self highlightActiveTab:_reqTabButtons active:bi];
 }
@@ -1230,6 +1318,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     if (tab < 0 || tab >= (NSInteger)_reqBuffers.count) return;
     [self stashActiveReqBuffer];
     _activeReqTab = tab;
+    if (tab < (NSInteger)_reqTabTitles.count) _leftPaneActiveTabKey = _reqTabTitles[tab];  // nhớ pane trái
     _reqText.string = _reqBuffers[tab];
     [self highlightActiveTab:_reqTabButtons active:tab];
 }
@@ -1237,6 +1326,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     NSInteger tab = b.tag;
     if (tab < 0 || tab >= (NSInteger)_respBuffers.count) return;
     _activeRespTab = tab;
+    if (tab < (NSInteger)_respTabTitles.count) _rightPaneActiveTabKey = _respTabTitles[tab];  // nhớ pane phải
     _respText.string = _respBuffers[tab];
     [self highlightActiveTab:_respTabButtons active:tab];
 }
@@ -1627,9 +1717,12 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         [_respBuffers addObject:[self applyView:r.body]];
         [_respBuffers addObject:N(fieldcodec::formatJson(r.resolvedRequestDump, true))];
     }
-    if (_activeRespTab >= (NSInteger)_respBuffers.count) _activeRespTab = 0;
-    _respText.string = _respBuffers.count ? _respBuffers[_activeRespTab] : @"";
-    [self highlightActiveTab:_respTabButtons active:_activeRespTab];
+    // Áp lại tab đã nhớ của pane phải (khoá ngữ nghĩa); không khớp -> tab đầu.
+    NSInteger ri = [self tabIndexForKey:_rightPaneActiveTabKey inTitles:_respTabTitles];
+    if (ri >= (NSInteger)_respBuffers.count) ri = 0;
+    _activeRespTab = ri;
+    _respText.string = _respBuffers.count ? _respBuffers[ri] : @"";
+    [self highlightActiveTab:_respTabButtons active:ri];
 }
 
 #pragma mark Status line

@@ -13,6 +13,7 @@
 + (NSColor *)titleActive; // nền title bar active
 + (NSColor *)windowBg;    // nền cửa sổ
 + (NSColor *)accent;      // xanh chọn (selection)
++ (NSColor *)rowSelectionGray; // nền xám nhẹ cho row được chọn trong cây (thay xanh mặc định)
 + (NSFont  *)uiFont;
 + (NSFont  *)monoFont;
 // Cấu hình font từ Settings (rỗng -> mặc định). size<=0 -> 11.

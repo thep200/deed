@@ -63,43 +63,82 @@ static void test_variable_resolver() {
     CHECK_EQ(r4.text, std::string("http://x"), "trim khoảng trắng trong {{ }}");
 }
 
-// ---------------- Request filename naming (LAZY_TREE §2) ----------------
+// ---------------- Request filename naming (new_format.file.md §2A: id ở ĐẦU) ----------------
 static void test_request_naming() {
     std::printf("[request_naming]\n");
 
-    // parse: gRPC = 2 phần (slug giữ '-'); HTTP = 3 phần (slug giữ '_').
-    auto g = parseRequestFilename("grpc_get-list-user.json");
+    // parse MỚI: <id>_<type>_... — token đầu = id; slug giữ '_'/'-'.
+    auto g = parseRequestFilename("ab12cd_grpc_get-list-user.json");
     CHECK(g.ok && g.type == RequestType::Grpc, "grpc parse ok");
-    CHECK_EQ(g.slug, std::string("get-list-user"), "grpc slug = toàn bộ phần sau grpc_");
+    CHECK_EQ(g.id, std::string("ab12cd"), "id = token đầu");
+    CHECK_EQ(g.slug, std::string("get-list-user"), "grpc slug = phần sau grpc_");
     CHECK(g.method.empty(), "grpc KHÔNG có method");
 
-    auto h = parseRequestFilename("http_get_get_list_user.json");
+    auto h = parseRequestFilename("xy9z_http_get_get_list_user.json");
     CHECK(h.ok && h.type == RequestType::Http, "http parse ok");
-    CHECK_EQ(h.method, std::string("get"), "http method = phần 2");
+    CHECK_EQ(h.id, std::string("xy9z"), "id = token đầu");
+    CHECK_EQ(h.method, std::string("get"), "http method");
     CHECK_EQ(h.slug, std::string("get_list_user"), "http slug giữ nguyên '_'");
+
+    // BACK-COMPAT: file CŨ không id (token đầu = http/grpc) -> parse được, id rỗng.
+    auto old = parseRequestFilename("http_get_tours-configs.json");
+    CHECK(old.ok && old.id.empty() && old.type == RequestType::Http, "file cũ: id rỗng, vẫn parse");
+    CHECK_EQ(old.slug, std::string("tours-configs"), "file cũ slug đúng");
 
     CHECK(!parseRequestFilename("collection.json").ok, "tên không đúng grammar -> ok=false");
     CHECK(!parseRequestFilename("README.md").ok, "không có '_' -> ok=false");
+    CHECK(!parseRequestFilename("ab12_xxx_slug.json").ok, "type lạ -> ok=false");
+
+    // isValidFileId: chỉ [a-z0-9], không '_'/hoa.
+    CHECK(isValidFileId("ab12cd34"), "id base36 hợp lệ");
+    CHECK(!isValidFileId("req_ABC"), "id legacy chứa '_'/hoa -> không hợp lệ");
+    CHECK(!isValidFileId(""), "id rỗng -> không hợp lệ");
 
     // normalizeDisplayName: sentence-case, '_'/'-' -> space, bỏ ký tự đặc biệt.
     CHECK_EQ(normalizeDisplayName("get-list-user"), std::string("Get list user"), "de-slug grpc");
-    CHECK_EQ(normalizeDisplayName("tours-configs"), std::string("Tours configs"), "de-slug http");
     CHECK_EQ(normalizeDisplayName("get_list_user"), std::string("Get list user"), "de-slug '_'");
     CHECK_EQ(normalizeDisplayName("name@of#request!"), std::string("Nameofrequest"),
              "ký tự đặc biệt bị loại");
 
-    // encode: http có method, grpc KHÔNG; LỆNH §2.2 — không nhúng nguyên prefix vào label.
-    CHECK_EQ(encodeRequestFilename(RequestType::Http, "POST", "Create Tour"),
-             std::string("http_post_create-tour.json"), "encode http lowercase method");
-    CHECK_EQ(encodeRequestFilename(RequestType::Grpc, "", "Get List User"),
-             std::string("grpc_get-list-user.json"), "encode grpc KHÔNG có method");
+    // encode: <id> ở đầu; http có method, grpc KHÔNG.
+    CHECK_EQ(encodeRequestFilename("k7id", RequestType::Http, "POST", "Create Tour"),
+             std::string("k7id_http_post_create-tour.json"), "encode http: id + method");
+    CHECK_EQ(encodeRequestFilename("k7id", RequestType::Grpc, "", "Get List User"),
+             std::string("k7id_grpc_get-list-user.json"), "encode grpc: id, KHÔNG method");
 
-    // round-trip: encode -> parse -> normalize KHÔNG còn prefix grpc_/http_<method>_.
-    std::string fn = encodeRequestFilename(RequestType::Grpc, "", "Get List User");
+    // round-trip: encode -> parse giữ id; label = slug chuẩn hoá, KHÔNG kèm id/prefix.
+    std::string fn = encodeRequestFilename("zz9", RequestType::Grpc, "", "Get List User");
     auto rt = parseRequestFilename(fn);
+    CHECK_EQ(rt.id, std::string("zz9"), "round-trip giữ id");
     std::string label = normalizeDisplayName(rt.slug);
-    CHECK(label.find("grpc") == std::string::npos, "label KHÔNG chứa prefix 'grpc'");
+    CHECK(label.find("grpc") == std::string::npos && label.find("zz9") == std::string::npos,
+          "label KHÔNG chứa id/prefix");
     CHECK_EQ(label, std::string("Get list user"), "label = name đã chuẩn hoá");
+}
+
+// Migration: file CŨ (không id ở tên) -> thêm id vào tên (git mv), zero-read lần sau.
+static void test_filename_migration(const std::string& root) {
+    std::printf("[filename_migration]\n");
+    std::string mroot = (fs::path(root) / "migrate_root").string();
+    fs::create_directories(mroot);
+    CollectionStore store(mroot);
+
+    std::string oldName = "http_get_legacy-req.json";   // dạng cũ, id legacy trong nội dung
+    { std::ofstream o((fs::path(mroot) / oldName));
+      o << R"({"schemaVersion":1,"id":"req_OLD","name":"Legacy Req","type":"http","http":{"method":"GET","url":""}})"; }
+
+    int n = store.migrateAddIdToFilenames();
+    CHECK(n >= 1, "migrate đổi tên >=1 file cũ");
+    CHECK(!fs::exists(fs::path(mroot) / oldName), "tên cũ không còn sau migrate");
+
+    std::vector<TreeNode> lvl = store.scanLevel("");
+    bool ok = false; std::string newId;
+    for (auto& c : lvl)
+        if (!c.isFolder) { ok = !c.id.empty() && c.name == "Legacy req"; newId = c.id; }
+    CHECK(ok, "scanLevel: id lấy từ TÊN file (zero-read), name chuẩn hoá");
+    CHECK(isValidFileId(newId), "id mới hợp lệ [a-z0-9], không '_'");
+    CHECK_EQ(store.migrateAddIdToFilenames(), 0, "migrate lần 2: 0 (đã có id, không đọc nội dung)");
+    CHECK(!store.findRelPathById(newId).empty(), "findRelPathById theo id từ tên file");
 }
 
 // ---------------- CollectionStore round-trip + CRUD ----------------
@@ -136,8 +175,12 @@ static void test_collection_store(const std::string& root) {
     std::string relAfterSave = store.saveRequest(rel, m);
     CHECK(!fs::exists(fs::path(root) / rel), "đổi method -> tên file cũ không còn");
     CHECK(fs::exists(fs::path(root) / relAfterSave), "tên file mới tồn tại sau save");
-    CHECK(fs::path(relAfterSave).filename().string().rfind("http_post_", 0) == 0,
-          "tên file phản ánh method mới (http_post_)");
+    {
+        std::string fn = fs::path(relAfterSave).filename().string();
+        CHECK(fn.find("_http_post_") != std::string::npos, "tên file phản ánh method mới (http_post)");
+        core::ParsedRequestName pr = core::parseRequestFilename(fn);
+        CHECK(pr.ok && core::isValidFileId(pr.id), "tên file mới có id hợp lệ ở đầu");
+    }
     rel = relAfterSave;
     RequestModel m2 = store.loadRequest(rel);
     CHECK_EQ(m2.http.method, std::string("POST"), "method round-trip");
@@ -549,6 +592,7 @@ int main() {
     test_field_codec();
     test_curl_export();
     test_request_naming();
+    test_filename_migration(root);
     test_response_cache(root);
     test_cache_config_clamp(root);
     test_app_config_defaults(root);

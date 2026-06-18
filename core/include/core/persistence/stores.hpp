@@ -44,8 +44,12 @@ public:
     // Di chuyển request/folder vào folder đích (drag-drop). Trả relPath mới.
     std::string move(const std::string& relPath, const std::string& destFolderRel) const;
 
-    // Tìm relPath của request theo id ổn định (quét cây). Rỗng nếu không thấy.
+    // Tìm relPath của request theo id ổn định (id ưu tiên đọc từ tên file). Rỗng nếu không thấy.
     std::string findRelPathById(const std::string& id) const;
+
+    // Migrate 1 lần: thêm <id> vào ĐẦU tên file cho các file CŨ chưa có id (git mv).
+    // File đã có id trong tên -> bỏ qua KHÔNG đọc nội dung. Trả số file đã đổi tên. §2A.
+    int migrateAddIdToFilenames() const;
 
     // Đảm bảo .gitignore có entry cho .session/ và .secrets/ (app tự quản — README §6.3).
     void ensureGitignore() const;
