@@ -270,20 +270,45 @@ Environment envFromJson(const json& j) {
     return e;
 }
 
+// Keys snake_case (cấu hình app). cacheResponses/cachePersist KHÔNG phơi cho user -> luôn default true.
 json toJson(const AppConfig& c) {
-    return json{{"defaultTimeoutMs", c.defaultTimeoutMs},
-                {"verifyTls", c.verifyTls},
-                {"lastCollectionRoot", c.lastCollectionRoot},
-                {"fontName", c.fontName},
-                {"fontSize", c.fontSize}};
+    return json{{"default_timeout_ms", c.defaultTimeoutMs},
+                {"verify_tls", c.verifyTls},
+                {"last_collection_root", c.lastCollectionRoot},
+                {"font_name", c.fontName},
+                {"font_size", c.fontSize},
+                {"ram_cache_size", c.ramCacheSizeMb},
+                {"disk_cache_size", c.diskCacheSizeMb}};
 }
-AppConfig appConfigFromJson(const json& j) {
-    AppConfig c;
-    c.defaultTimeoutMs = getInt(j, "defaultTimeoutMs", 30000);
-    c.verifyTls = getBool(j, "verifyTls", true);
-    c.lastCollectionRoot = getStr(j, "lastCollectionRoot");
-    c.fontName = getStr(j, "fontName");
-    c.fontSize = getInt(j, "fontSize", 11);
+namespace {
+// Đọc int theo key snake_case, fallback key camelCase cũ (tương thích config.json cũ).
+int getIntCompat(const json& j, const char* snake, const char* camel, int def) {
+    if (j.find(snake) != j.end()) return getInt(j, snake, def);
+    return getInt(j, camel, def);
+}
+std::string getStrCompat(const json& j, const char* snake, const char* camel,
+                         const std::string& def = "") {
+    if (j.find(snake) != j.end()) return getStr(j, snake);
+    if (j.find(camel) != j.end()) return getStr(j, camel);
+    return def;
+}
+bool getBoolCompat(const json& j, const char* snake, const char* camel, bool def) {
+    if (j.find(snake) != j.end()) return getBool(j, snake, def);
+    return getBool(j, camel, def);
+}
+} // namespace
+AppConfig appConfigFromJson(const json& j) { return appConfigFromJson(j, AppConfig{}); }
+
+AppConfig appConfigFromJson(const json& j, const AppConfig& def) {
+    AppConfig c = def;   // key thiếu -> giữ giá trị mặc định (từ .env)
+    c.defaultTimeoutMs = getIntCompat(j, "default_timeout_ms", "defaultTimeoutMs", def.defaultTimeoutMs);
+    c.verifyTls = getBoolCompat(j, "verify_tls", "verifyTls", def.verifyTls);
+    c.lastCollectionRoot = getStrCompat(j, "last_collection_root", "lastCollectionRoot", def.lastCollectionRoot);
+    c.fontName = getStrCompat(j, "font_name", "fontName", def.fontName);
+    c.fontSize = getIntCompat(j, "font_size", "fontSize", def.fontSize);
+    c.ramCacheSizeMb = getIntCompat(j, "ram_cache_size", "ramCacheSizeMb", def.ramCacheSizeMb);
+    c.diskCacheSizeMb = getIntCompat(j, "disk_cache_size", "diskCacheSizeMb", def.diskCacheSizeMb);
+    // cacheResponses/cachePersist không còn trong config user -> giữ default true của struct.
     return c;
 }
 
@@ -298,6 +323,71 @@ Session sessionFromJson(const json& j) {
     s.lastOpenedFile = getStr(j, "lastOpenedFile");
     s.activeEnv = getStr(j, "activeEnv", "Global");
     return s;
+}
+
+// ---- ResponseRecord (cache disk) ----
+namespace {
+json cookieArray(const std::vector<Cookie>& v) {
+    json a = json::array();
+    for (const auto& c : v)
+        a.push_back({{"name", c.name}, {"value", c.value}, {"domain", c.domain},
+                     {"path", c.path}, {"expires", c.expires}});
+    return a;
+}
+std::vector<Cookie> cookieFrom(const json& j) {
+    std::vector<Cookie> out;
+    if (!j.is_array()) return out;
+    for (const auto& e : j)
+        if (e.is_object())
+            out.push_back({getStr(e, "name"), getStr(e, "value"), getStr(e, "domain"),
+                           getStr(e, "path"), getStr(e, "expires")});
+    return out;
+}
+json apiResponseToJson(const ApiResponse& r) {
+    return json{{"statusCode", r.statusCode}, {"statusText", r.statusText},
+                {"headers", kvArray(r.headers)}, {"cookies", cookieArray(r.cookies)},
+                {"body", r.body}, {"elapsedMs", static_cast<long long>(r.elapsedMs)},
+                {"sizeBytes", static_cast<long long>(r.sizeBytes)},
+                {"resolvedRequestDump", r.resolvedRequestDump}};
+}
+ApiResponse apiResponseFrom(const json& j) {
+    ApiResponse r;
+    if (!j.is_object()) return r;
+    r.statusCode = getInt(j, "statusCode", 0);
+    r.statusText = getStr(j, "statusText");
+    if (auto it = j.find("headers"); it != j.end()) r.headers = kvFrom(*it);
+    if (auto it = j.find("cookies"); it != j.end()) r.cookies = cookieFrom(*it);
+    r.body = getStr(j, "body");
+    if (auto it = j.find("elapsedMs"); it != j.end() && it->is_number()) r.elapsedMs = it->get<long>();
+    if (auto it = j.find("sizeBytes"); it != j.end() && it->is_number())
+        r.sizeBytes = it->get<std::int64_t>();
+    r.resolvedRequestDump = getStr(j, "resolvedRequestDump");
+    return r;
+}
+} // namespace
+
+json toJson(const ResponseRecord& rec) {
+    return json{{"isError", rec.isError},
+                {"errorKind", static_cast<int>(rec.errorKind)},
+                {"errorMessage", rec.errorMessage},
+                {"response", apiResponseToJson(rec.response)},
+                {"receivedAt", static_cast<long long>(rec.receivedAt)},
+                {"requestRevision", rec.requestRevision},
+                {"bytes", static_cast<long long>(rec.bytes)}};
+}
+ResponseRecord responseRecordFromJson(const json& j) {
+    ResponseRecord rec;
+    if (!j.is_object()) return rec;
+    rec.isError = getBool(j, "isError", false);
+    rec.errorKind = static_cast<ErrorKind>(getInt(j, "errorKind", static_cast<int>(ErrorKind::Unknown)));
+    rec.errorMessage = getStr(j, "errorMessage");
+    if (auto it = j.find("response"); it != j.end()) rec.response = apiResponseFrom(*it);
+    if (auto it = j.find("receivedAt"); it != j.end() && it->is_number())
+        rec.receivedAt = it->get<std::int64_t>();
+    rec.requestRevision = getStr(j, "requestRevision");
+    if (auto it = j.find("bytes"); it != j.end() && it->is_number())
+        rec.bytes = it->get<std::uint64_t>();
+    return rec;
 }
 
 } // namespace core::codec

@@ -13,11 +13,11 @@ AppConfigStore::AppConfigStore(std::string path) : path_(std::move(path)) {}
 
 AppConfig AppConfigStore::load() const {
     std::string txt;
-    if (!fsutil::readFile(path_, txt)) return AppConfig{};
+    if (!fsutil::readFile(path_, txt)) return defaults_;   // chưa có file -> defaults (.env)
     try {
-        return codec::appConfigFromJson(nlohmann::json::parse(txt));
+        return codec::appConfigFromJson(nlohmann::json::parse(txt), defaults_);
     } catch (...) {
-        return AppConfig{};
+        return defaults_;
     }
 }
 

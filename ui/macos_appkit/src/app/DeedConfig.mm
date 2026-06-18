@@ -65,6 +65,11 @@
     return (v && v.length) ? (CGFloat)[v doubleValue] : def;
 }
 
+- (NSInteger)intFor:(NSString *)key def:(NSInteger)def {
+    NSString *v = _kv[key];
+    return (v && v.length) ? (NSInteger)[v integerValue] : def;
+}
+
 - (BOOL)boolFor:(NSString *)key def:(BOOL)def {
     NSString *v = _kv[key];
     if (!v || !v.length) return def;

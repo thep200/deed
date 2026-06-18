@@ -26,6 +26,9 @@ add_library(core STATIC
   src/infra/fs_util.cpp
   src/persistence/collection_store.cpp
   src/persistence/request_naming.cpp
+  src/cache/ram_cache_driver.cpp
+  src/cache/disk_cache_driver.cpp
+  src/cache/response_cache.cpp
   src/persistence/session_store.cpp
   src/persistence/secret_store.cpp
   src/persistence/environment_store.cpp

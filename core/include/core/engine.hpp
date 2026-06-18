@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 
+#include <optional>
+
+#include "core/cache.hpp"
 #include "core/i_ui_delegate.hpp"
 #include "core/import_export/importer.hpp"
 #include "core/persistence/stores.hpp"
@@ -16,10 +19,22 @@ namespace core {
 
 class SenderRegistry; // fwd (internal)
 
+// Trần/sàn cache ở ENV layer (ops-level). 0 = "không set" -> Core fallback getenv/default.
+// UI nạp từ file .env (DeedConfig) rồi truyền vào; Core không tự đọc .env (giữ thuần C++).
+struct CacheLimits {
+    int ramMaxMb = 0;
+    int ramMinMb = 0;
+    int diskMaxMb = 0;
+    int diskMinMb = 0;
+    int thresholdKb = 0;
+};
+
 // Cấu hình khởi tạo Engine: thư mục collection + (tuỳ chọn) đường app-config.
 struct EngineConfig {
     std::string collectionRoot;
     std::string appConfigPath; // rỗng -> dùng OS app-support mặc định
+    CacheLimits cacheLimits;   // trần/sàn cache từ .env (rỗng -> getenv/default)
+    AppConfig appDefaults;     // giá trị mặc định app-config từ .env (khi config.json thiếu key)
 };
 
 class Engine {
@@ -41,6 +56,17 @@ public:
     // --- Gửi (async, trả handle ngay) ---
     RequestHandle send(const RequestModel& model, IUiDelegate* delegate);
     void cancel(RequestHandle);
+
+    // --- Response cache (RESPONSE_CACHE.md). No-op khi tắt cache (cacheResponses=false). ---
+    // Lưu response/lỗi mới nhất của request id (ghi đè bản cũ). resolvedRequestDump nằm trong resp.
+    void putResponse(const std::string& id, const ApiResponse& resp);
+    void putError(const std::string& id, const ApiError& err);
+    // Lấy response gần nhất (RAM trước -> disk). nullopt nếu miss/tắt cache.
+    std::optional<ResponseRecord> getResponse(const std::string& id);
+    void removeResponse(const std::string& id);          // xoá khi xoá request
+    void reloadCacheConfig();                            // gọi sau khi đổi Settings
+    const CacheConfig& cacheConfig() const;              // cấu hình hiệu lực hiện tại
+    ResponseCache* responseCache();                      // truy cập trực tiếp (test/diagnostic), null nếu tắt
 
     // --- gRPC: liệt kê service/method khả dụng (cho dropdown chọn RPC) ---
     // reflection: query server qua ServerReflection; protoFiles/descriptorSet: parse nguồn.

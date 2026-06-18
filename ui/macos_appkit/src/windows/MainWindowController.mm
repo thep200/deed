@@ -222,7 +222,7 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
 - (void)showWindow {
     DeedConfig *cfg = [DeedConfig shared];
     // Font hiển thị lấy từ Settings (app-support) — set TRƯỚC khi dựng widget.
-    { core::AppConfigStore a; core::AppConfig c = a.load();
+    { core::AppConfigStore a; a.setDefaults([self appDefaultsFromEnv]); core::AppConfig c = a.load();
       [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize]; }
     // Kiểu nút: new (btn-new.svg) mặc định, hoặc classic (button.svg) qua .env.
     [OS9Theme setButtonStyleName:[cfg stringFor:@"BUTTON_STYLE" def:@"new"]];
@@ -291,6 +291,7 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
 - (void)restoreLastCollection {
     if (getenv("APICLIENT_OPEN")) return; // affordance test sẽ tự mở folder khác
     core::AppConfigStore appCfg;           // mặc định: ~/Library/Application Support/deed/config.json
+    appCfg.setDefaults([self appDefaultsFromEnv]);
     std::string last = appCfg.load().lastCollectionRoot;
     if (last.empty()) return;
     NSString *p = N(last);
@@ -726,11 +727,33 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     if ([p runModal] == NSModalResponseOK) [self openCollectionRoot:p.URL.path];
 }
 
+// Giá trị mặc định app-config đọc từ .env (DeedConfig). Dùng khi config.json thiếu key,
+// để người dùng chỉnh default qua .env mà không cần sửa code.
+- (core::AppConfig)appDefaultsFromEnv {
+    DeedConfig *dc = [DeedConfig shared];
+    core::AppConfig d;
+    d.defaultTimeoutMs = (int)[dc intFor:@"DEFAULT_TIMEOUT_MS" def:30000];
+    d.verifyTls = [dc boolFor:@"VERIFY_TLS" def:YES];
+    d.fontName = S([dc stringFor:@"FONT_NAME" def:@""]);
+    d.fontSize = (int)[dc intFor:@"FONT_SIZE" def:11];
+    d.ramCacheSizeMb = (int)[dc intFor:@"RAM_CACHE_SIZE" def:64];
+    d.diskCacheSizeMb = (int)[dc intFor:@"DISK_CACHE_SIZE" def:256];
+    return d;
+}
+
 - (void)openCollectionRoot:(NSString *)path {
     [self autosaveCurrent];
     [_expandedFolders removeAllObjects];   // collection mới: reset trạng thái fold (mặc định fold)
     _root = path.UTF8String;
     core::EngineConfig cfg; cfg.collectionRoot = _root;
+    // Trần/sàn cache đọc từ .env (DeedConfig) -> truyền vào Core (Core không tự đọc .env).
+    DeedConfig *dc = [DeedConfig shared];
+    cfg.cacheLimits.ramMaxMb = (int)[dc intFor:@"RAM_CACHE_SIZE_MAX" def:0];
+    cfg.cacheLimits.ramMinMb = (int)[dc intFor:@"RAM_CACHE_SIZE_MIN" def:0];
+    cfg.cacheLimits.diskMaxMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MAX" def:0];
+    cfg.cacheLimits.diskMinMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MIN" def:0];
+    cfg.cacheLimits.thresholdKb = (int)[dc intFor:@"RAM_CACHE_THRESHOLD_KB" def:0];
+    cfg.appDefaults = [self appDefaultsFromEnv];   // giá trị mặc định app-config từ .env
     _engine = std::make_unique<core::Engine>(cfg);
     _bridge = std::make_unique<UiDelegateBridge>(self);
     _envVC = [[EnvWindowController alloc] initWithEngine:_engine.get()];
@@ -977,7 +1000,23 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
         [self relayout];
         [self updateStatus:@""];
         _respText.string = @"";
+        [self showCachedResponseForId:_currentId];   // hiện response gần nhất (nếu có) — không gửi lại
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
+}
+
+// Mở request -> tra cache (RAM trước, rồi disk) và dựng lại pane response nếu trúng (§0).
+- (void)showCachedResponseForId:(const std::string &)reqId {
+    if (reqId.empty() || !_engine) return;
+    auto rec = _engine->getResponse(reqId);
+    if (!rec) return;
+    if (rec->isError) {
+        [self displayErrorKind:rec->errorKind message:N(rec->errorMessage)];
+    } else {
+        _lastResp = rec->response;
+        _hasResp = YES;
+        [self rebuildResponseBuffers];
+        [self updateStatusFromResponse:rec->response error:NO endMs:rec->receivedAt];  // mốc kết thúc đã lưu
+    }
 }
 
 - (void)populateEditorsFromModel {
@@ -1257,7 +1296,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
 
 // Áp font cấu hình (từ Settings) cho mọi ô chữ + vẽ lại.
 - (void)applyConfiguredFontAndRefresh {
-    core::AppConfigStore a; core::AppConfig c = a.load();
+    core::AppConfigStore a; a.setDefaults([self appDefaultsFromEnv]); core::AppConfig c = a.load();
     [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize];
     NSFont *mono = [OS9Theme monoFont];
     [_reqText setFontName:N(c.fontName) size:c.fontSize];
@@ -1497,24 +1536,54 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     [self finishSending];
     _lastResp = resp; _hasResp = YES;
     [self rebuildResponseBuffers];
-    [self updateStatusFromResponse:resp error:NO];
+    int64_t endMs = (int64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);  // mốc kết thúc = lúc nhận
+    [self updateStatusFromResponse:resp error:NO endMs:endMs];
+    [self cacheResponseAsync:resp forId:_currentId];   // lưu cache (nền) — khoá theo id
 }
 
 - (void)onCoreError:(uint64_t)handle error:(const core::ApiError &)err {
     if (handle != _currentHandle) return;
     NSLog(@"[smoke] onCoreError kind=%s msg=%s", core::toString(err.kind).c_str(), err.message.c_str());
     [self finishSending];
-    NSString *kind = N(core::toString(err.kind));
-    _statusLabel.stringValue = (err.kind == core::ErrorKind::Cancelled) ? @"Cancelled" : [NSString stringWithFormat:@"✕ %@", kind];
+    [self displayErrorKind:err.kind message:N(err.message)];
+    [self toastWarn:[NSString stringWithFormat:@"%@: %@", N(core::toString(err.kind)), N(err.message)]];
+    [self cacheErrorAsync:err forId:_currentId];       // cache cả lỗi để hiện lại đúng trạng thái (§7)
+}
+
+// Hiển thị trạng thái lỗi vào pane response (dùng chung cho lỗi mới lẫn lỗi từ cache).
+- (void)displayErrorKind:(core::ErrorKind)kind message:(NSString *)msg {
+    NSString *k = N(core::toString(kind));
+    _statusLabel.stringValue = (kind == core::ErrorKind::Cancelled) ? @"Cancelled" : [NSString stringWithFormat:@"✕ %@", k];
     _statusLabel.textColor = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
     _hasResp = NO;
     [_respBuffers removeAllObjects];
     for (NSUInteger i = 0; i < _respTabTitles.count; i++) [_respBuffers addObject:@""];
-    if (_respBuffers.count) _respBuffers[0] = [NSString stringWithFormat:@"[%@] %@", kind, N(err.message)];
+    if (_respBuffers.count) _respBuffers[0] = [NSString stringWithFormat:@"[%@] %@", k, msg ?: @""];
     _activeRespTab = 0;
     _respText.string = _respBuffers[0];
     [self highlightActiveTab:_respTabButtons active:0];
-    [self toastWarn:[NSString stringWithFormat:@"%@: %@", kind, N(err.message)]];
+}
+
+// Ghi cache ở thread NỀN (§6: put async, không block UI). Engine thread-safe.
+- (void)cacheResponseAsync:(const core::ApiResponse &)resp forId:(const std::string &)reqId {
+    if (reqId.empty()) return;
+    core::ApiResponse copy = resp;
+    std::string id = reqId;
+    __weak MainWindowController *ws = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        MainWindowController *s = ws;
+        if (s && s->_engine) s->_engine->putResponse(id, copy);
+    });
+}
+- (void)cacheErrorAsync:(const core::ApiError &)err forId:(const std::string &)reqId {
+    if (reqId.empty()) return;
+    core::ApiError copy = err;
+    std::string id = reqId;
+    __weak MainWindowController *ws = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        MainWindowController *s = ws;
+        if (s && s->_engine) s->_engine->putError(id, copy);
+    });
 }
 
 - (void)finishSending {
@@ -1570,11 +1639,24 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     _statusLabel.textColor = [NSColor blackColor];
 }
 
-- (void)updateStatusFromResponse:(const core::ApiResponse &)r error:(BOOL)isErr {
+// Giờ HH:mm:ss.SSS (độ chính xác millisecond) từ epoch ms. <=0 -> placeholder.
+- (NSString *)clockFromEpochMs:(int64_t)ms {
+    if (ms <= 0) return @"--:--:--.---";
+    static NSDateFormatter *fmt;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ fmt = [NSDateFormatter new]; fmt.dateFormat = @"HH:mm:ss.SSS"; });
+    return [fmt stringFromDate:[NSDate dateWithTimeIntervalSince1970:ms / 1000.0]];
+}
+
+// status | size | time | start - end. endMs = lúc nhận response; start = end - elapsed.
+- (void)updateStatusFromResponse:(const core::ApiResponse &)r error:(BOOL)isErr endMs:(int64_t)endMs {
     NSString *code = r.statusCode ? [NSString stringWithFormat:@"%d", r.statusCode] : @"OK";
     NSString *size = (r.sizeBytes >= 1024) ? [NSString stringWithFormat:@"%.1fkb", r.sizeBytes / 1024.0]
                                            : [NSString stringWithFormat:@"%lldb", (long long)r.sizeBytes];
-    _statusLabel.stringValue = [NSString stringWithFormat:@"%@ | %ldms | %@", code, r.elapsedMs, size];
+    int64_t startMs = (endMs > 0) ? endMs - (int64_t)r.elapsedMs : 0;   // suy ra mốc bắt đầu
+    NSString *range = [NSString stringWithFormat:@"%@ - %@",
+                       [self clockFromEpochMs:startMs], [self clockFromEpochMs:endMs]];
+    _statusLabel.stringValue = [NSString stringWithFormat:@"%@ | %@ | %ldms | %@", code, size, r.elapsedMs, range];
     _statusLabel.textColor = (r.statusCode >= 400) ? [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0]
                                                    : [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1.0];
 }
@@ -1628,8 +1710,10 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         _settingScroll.hidden = NO;
         core::AppConfig c = _engine->appConfig().load();
         _settingText.string = [NSString stringWithFormat:
-            @"{\n  \"defaultTimeoutMs\": %d,\n  \"verifyTls\": %@,\n  \"fontName\": \"%s\",\n  \"fontSize\": %d\n}",
-            c.defaultTimeoutMs, c.verifyTls ? @"true" : @"false", c.fontName.c_str(), c.fontSize];
+            @"{\n  \"default_timeout_ms\": %d,\n  \"verify_tls\": %@,\n  \"font_name\": \"%s\",\n  \"font_size\": %d,\n"
+             "  \"ram_cache_size\": %d,\n  \"disk_cache_size\": %d\n}",
+            c.defaultTimeoutMs, c.verifyTls ? @"true" : @"false", c.fontName.c_str(), c.fontSize,
+            c.ramCacheSizeMb, c.diskCacheSizeMb];
     }
     _configMode = YES;
     _mainPane.hidden = YES;
@@ -1647,11 +1731,14 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
             NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
             if (dict) {
                 core::AppConfig c = _engine->appConfig().load();
-                if (dict[@"defaultTimeoutMs"]) c.defaultTimeoutMs = [dict[@"defaultTimeoutMs"] intValue];
-                if (dict[@"verifyTls"]) c.verifyTls = [dict[@"verifyTls"] boolValue];
-                if (dict[@"fontName"]) c.fontName = [dict[@"fontName"] UTF8String];
-                if (dict[@"fontSize"]) c.fontSize = [dict[@"fontSize"] intValue];
+                if (dict[@"default_timeout_ms"]) c.defaultTimeoutMs = [dict[@"default_timeout_ms"] intValue];
+                if (dict[@"verify_tls"]) c.verifyTls = [dict[@"verify_tls"] boolValue];
+                if (dict[@"font_name"]) c.fontName = [dict[@"font_name"] UTF8String];
+                if (dict[@"font_size"]) c.fontSize = [dict[@"font_size"] intValue];
+                if (dict[@"ram_cache_size"]) c.ramCacheSizeMb = [dict[@"ram_cache_size"] intValue];
+                if (dict[@"disk_cache_size"]) c.diskCacheSizeMb = [dict[@"disk_cache_size"] intValue];
                 _engine->appConfig().save(c);
+                _engine->reloadCacheConfig();   // áp cap/threshold mới -> evict ngay nếu nhỏ đi (§1.2)
                 [self applyConfiguredFontAndRefresh];
             } else {
                 [self toastWarn:@"Invalid settings JSON — skipped"];
@@ -1834,6 +1921,23 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     return m;
 }
 
+// Xoá cache response của request bị xoá (cả 2 tầng — §7). id chỉ có trong nội dung file
+// (cây lazy không giữ id) -> đọc id trước khi xoá; folder thì duyệt đệ quy.
+- (void)purgeCacheAtRel:(NSString *)rel isFolder:(BOOL)isFolder {
+    if (!_engine || rel.length == 0) return;
+    if (!isFolder) {
+        try {
+            std::string id = _engine->collection().loadRequest(rel.UTF8String).id;
+            if (!id.empty()) _engine->removeResponse(id);
+        } catch (...) {}
+        return;
+    }
+    try {
+        for (const auto &c : _engine->collection().scanLevel(rel.UTF8String))
+            [self purgeCacheAtRel:N(c.relPath) isFolder:c.isFolder];
+    } catch (...) {}
+}
+
 - (void)deleteSelectedMulti:(id)sender {
     NSMutableArray<TreeItem *> *items = [NSMutableArray array];
     [_tree.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
@@ -1846,6 +1950,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     [a addButtonWithTitle:@"Delete"]; [a addButtonWithTitle:@"Cancel"];
     if ([a runModal] != NSAlertFirstButtonReturn) return;
     [self closeEditorIfDeleted:items];    // tránh autosave tạo lại file vừa xoá
+    for (TreeItem *t in items) [self purgeCacheAtRel:t.relPath isFolder:t.isFolder];
     for (TreeItem *t in items) { try { _engine->collection().remove(t.relPath.UTF8String); } catch (...) {} }
     [self reloadTree];
 }
@@ -1897,6 +2002,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     [a addButtonWithTitle:@"Delete"]; [a addButtonWithTitle:@"Cancel"];
     if ([a runModal] != NSAlertFirstButtonReturn) return;
     [self closeEditorIfDeleted:@[ t ]];   // tránh autosave tạo lại file vừa xoá
+    [self purgeCacheAtRel:t.relPath isFolder:t.isFolder];
     try { _engine->collection().remove(t.relPath.UTF8String); [self reloadTree]; }
     catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }

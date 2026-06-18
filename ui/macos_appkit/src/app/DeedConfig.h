@@ -8,6 +8,7 @@
 
 - (NSString *)stringFor:(NSString *)key def:(NSString *)def;
 - (CGFloat)floatFor:(NSString *)key def:(CGFloat)def;
+- (NSInteger)intFor:(NSString *)key def:(NSInteger)def;
 - (BOOL)boolFor:(NSString *)key def:(BOOL)def;
 
 // Tiện ích hay dùng.

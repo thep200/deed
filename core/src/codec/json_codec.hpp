@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/cache.hpp"
 #include "core/types.hpp"
 
 namespace core::codec {
@@ -22,7 +23,13 @@ Environment envFromJson(const json&);
 // AppConfig / Session
 json toJson(const AppConfig&);
 AppConfig appConfigFromJson(const json&);
+// Như trên nhưng key thiếu -> rơi về `defaults` (giá trị từ .env) thay vì hằng cứng.
+AppConfig appConfigFromJson(const json&, const AppConfig& defaults);
 json toJson(const Session&);
 Session sessionFromJson(const json&);
+
+// ResponseRecord (cache disk L2) — bao gồm ApiResponse + lỗi + meta.
+json toJson(const ResponseRecord&);
+ResponseRecord responseRecordFromJson(const json&);
 
 } // namespace core::codec

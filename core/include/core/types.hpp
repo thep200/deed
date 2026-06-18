@@ -207,6 +207,12 @@ struct AppConfig {
     std::string lastCollectionRoot; // thư mục collection mở gần nhất (mở lại khi khởi động)
     std::string fontName;           // font hiển thị (rỗng = mặc định); lấy từ Settings
     int fontSize = 11;
+
+    // --- Response cache (USER layer — sửa trong Settings; kẹp ≤ ENV max). RESPONSE_CACHE.md §1 ---
+    int ramCacheSizeMb = 64;        // mức RAM cache vận hành
+    int diskCacheSizeMb = 256;      // mức disk cache vận hành
+    bool cacheResponses = true;     // bật/tắt cache response
+    bool cachePersist = true;       // giữ cache qua restart (tắt -> chỉ RAM, không gắn disk)
 };
 
 // ---- Session app-state ----

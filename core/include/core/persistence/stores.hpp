@@ -120,11 +120,15 @@ class AppConfigStore {
 public:
     AppConfigStore();
     explicit AppConfigStore(std::string path); // override (test)
-    AppConfig load() const;
+    // Giá trị mặc định (từ .env, UI nạp) dùng khi config.json thiếu/khuyết key.
+    void setDefaults(const AppConfig& d) { defaults_ = d; }
+    const AppConfig& defaults() const { return defaults_; }
+    AppConfig load() const;                     // thiếu key/file -> rơi về defaults_
     void save(const AppConfig&) const;          // atomic
     const std::string& path() const { return path_; }
 private:
     std::string path_;
+    AppConfig defaults_;
 };
 
 } // namespace core
