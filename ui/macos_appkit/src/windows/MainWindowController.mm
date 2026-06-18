@@ -229,8 +229,7 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     NSTextField *_configTitle;
     NSInteger _configKind; // 0 = Environments, 1 = Settings
     EnvWindowController *_envVC;
-    NSScrollView *_settingScroll;
-    NSTextView *_settingText;
+    SciTextView *_settingEditor;   // editor JSON cho Settings (Scintilla — lexer JSON + theme Platinum)
 
     BOOL _sending;
     NSTimer *_spinTimer;   // animate icon loading trong nút Send
@@ -538,21 +537,10 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
 
     _envVC = [[EnvWindowController alloc] initWithEngine:nil]; // engine set khi mở
 
-    _settingScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
-    _settingScroll.hasVerticalScroller = YES;
-    _settingScroll.borderType = NSBezelBorder;
-    [self styleScroller:_settingScroll];
-    _settingText = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100)];
-    _settingText.font = [OS9Theme monoFont];
-    _settingText.richText = NO;
-    // Tắt mọi tính năng tự động macOS (spell/autofill/completion/substitution) -> không
-    // spawn tiến trình con hỗ trợ (AppleSpell, text-completion…).
-    [self disableAutoFeatures:_settingText];
-    _settingText.verticallyResizable = YES;
-    _settingText.horizontallyResizable = NO;
-    _settingText.textContainer.widthTracksTextView = YES;
-    _settingScroll.documentView = _settingText;
-    [_configPane addSubview:_settingScroll];
+    // Settings = JSON -> dùng SciTextView (Scintilla) như editor request: tô màu JSON,
+    // số dòng, theme Platinum, scrollbar OS9. Scintilla tự quản buffer (không spawn AppleSpell).
+    _settingEditor = [[SciTextView alloc] initEditable:YES];
+    [_configPane addSubview:_settingEditor];
 }
 
 #pragma mark Layout
@@ -681,7 +669,7 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     if (_configKind == 0) {                                          // Environments
         if (_envVC.view) { _envVC.view.frame = body; [_envVC layout]; }
     } else {                                                         // Settings
-        _settingScroll.frame = body;
+        _settingEditor.frame = body;
     }
 }
 
@@ -1348,10 +1336,9 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         [self stashActiveReqBuffer];
         return;
     }
-    // setting editor (NSTextView) đang focus?
-    id fr = _window.firstResponder;
-    if (fr == _settingText) {
-        _settingText.string = [self applyView:S(_settingText.string)];
+    // setting editor (Scintilla) đang giữ con trỏ?
+    if ([_settingEditor hasFocus]) {
+        _settingEditor.string = [self applyView:S(_settingEditor.string)];
         return;
     }
     if (_hasResp) [self rebuildResponseBuffers]; // mặc định: pane response
@@ -1391,7 +1378,8 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     NSFont *mono = [OS9Theme monoFont];
     [_reqText setFontName:N(c.fontName) size:c.fontSize];
     [_respText setFontName:N(c.fontName) size:c.fontSize];
-    _settingText.font = mono; _urlField.font = mono;
+    [_settingEditor setFontName:N(c.fontName) size:c.fontSize];
+    _urlField.font = mono;
     _tree.font = [OS9Theme uiFont];
     [_tree reloadData];
     [self restoreExpansion:_roots];
@@ -1795,14 +1783,14 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         NSView *ev = _envVC.view;
         if (ev.superview != _configPane) [_configPane addSubview:ev];
         ev.hidden = NO;
-        _settingScroll.hidden = YES;
+        _settingEditor.hidden = YES;
         [_envVC reload];
     } else {
         _configTitle.stringValue = @"Settings";
         if (_envVC.view) _envVC.view.hidden = YES;
-        _settingScroll.hidden = NO;
+        _settingEditor.hidden = NO;
         core::AppConfig c = _engine->appConfig().load();
-        _settingText.string = [NSString stringWithFormat:
+        _settingEditor.string = [NSString stringWithFormat:
             @"{\n  \"default_timeout_ms\": %d,\n  \"verify_tls\": %@,\n  \"font_name\": \"%s\",\n  \"font_size\": %d,\n"
              "  \"ram_cache_size\": %d,\n  \"disk_cache_size\": %d\n}",
             c.defaultTimeoutMs, c.verifyTls ? @"true" : @"false", c.fontName.c_str(), c.fontSize,
@@ -1820,7 +1808,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         if (_configKind == 0) {
             [_envVC save];
         } else {
-            NSData *d = [_settingText.string dataUsingEncoding:NSUTF8StringEncoding];
+            NSData *d = [_settingEditor.string dataUsingEncoding:NSUTF8StringEncoding];
             NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
             if (dict) {
                 core::AppConfig c = _engine->appConfig().load();
