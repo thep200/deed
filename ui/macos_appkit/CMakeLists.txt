@@ -29,6 +29,7 @@ add_executable(ApiClientApp MACOSX_BUNDLE
   src/widgets/OS9Dropdown.mm
   src/editor/SciTextView.mm
   src/editor/JsonEditorBehavior.mm
+  src/dialogs/OS9Dialog.mm
   src/windows/MainWindowController.mm
   src/windows/EnvWindowController.mm
   ${DEED_ENV_SRC}

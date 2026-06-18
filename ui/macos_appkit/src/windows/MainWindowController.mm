@@ -1,6 +1,7 @@
 #import "windows/MainWindowController.h"
 
 #import "app/DeedConfig.h"
+#import "dialogs/OS9Dialog.h"
 #import "windows/EnvWindowController.h"
 #import "theme/OS9Theme.h"
 #import "icons/OS9Glyphs.h"
@@ -168,8 +169,6 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     OS9SerratedInset *_treeInset;
     NSScrollView *_treeScroll;
     DeedOutlineView *_tree;
-    NSTextField *_renameField;   // ô rename inline trên cây (overlay)
-    TreeItem *_renameItem;
     NSMutableArray<TreeItem *> *_roots;
     NSMutableSet<NSString *> *_expandedFolders; // relPath các folder đang mở (giữ qua reload)
     BOOL _revealingSelection;                    // đang chọn do reveal -> bỏ qua auto-load
@@ -434,7 +433,7 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
 
     // Pane trái: nút cURL (Format JSON chuyển sang menu chuột phải trong editor).
     _curlButton = [[OS9BevelButton alloc] initWithTitle:@"cURL" target:self action:@selector(copyAsCurl:)];
-    _curlButton.toolTip = @"Copy request hiện tại dạng cURL";
+    _curlButton.toolTip = @"Copy current request as cURL";
     [_mainPane addSubview:_curlButton];
 }
 
@@ -472,7 +471,7 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     // gRPC: nguồn proto = dropdown (Reflection | .proto). Chỉ 2 lựa chọn.
     _protoPopup = [[OS9PopupButton alloc] initWithItems:@[ @"Reflection", @".proto" ]
                                                  target:self action:@selector(protoModeChanged:)];
-    _protoPopup.toolTip = @"Nguồn proto: Reflection (hỏi server) hoặc nạp file .proto";
+    _protoPopup.toolTip = @"Proto source: Reflection (ask server) or load a .proto file";
 
     // gRPC: chọn service/RPC mà server cung cấp (đặt trước nút Send).
     _servicePopup = [[OS9PopupButton alloc] initWithItems:@[ @"No RPC" ]
@@ -714,7 +713,7 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     }
     _prettyButton = [[OS9BevelButton alloc] initWithTitle:[self prettyTitle]
                                                    target:self action:@selector(prettyToggle:)];
-    _prettyButton.toolTip = @"Pretty/Raw/Encode/Decode — áp cho pane đang có con trỏ";
+    _prettyButton.toolTip = @"Pretty/Raw/Encode/Decode — applies to the focused pane";
     [_mainPane addSubview:_prettyButton];
     _activeReqTab = 0;
     _activeRespTab = 0;
@@ -844,60 +843,45 @@ static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     else [_tree expandItem:t];
 }
 
-// Double-click: vùng TRỐNG -> tạo nhanh HTTP request; trên 1 row -> rename inline.
+// Double-click: empty area -> quick new HTTP request; on a row -> rename via Platinum prompt.
 - (void)treeDoubleClicked:(id)sender {
     NSInteger row = _tree.clickedRow;
-    if (row < 0) { [self newHttp:nil]; return; }   // khoảng trống
-    [self beginInlineRenameRow:row];
+    if (row < 0) { [self newHttp:nil]; return; }   // empty area
+    [self promptRenameItem:[_tree itemAtRow:row]];
 }
 
-#pragma mark Inline rename (sửa tên ngay trên cây, không popup)
-
-- (void)beginInlineRenameRow:(NSInteger)row {
-    if (row < 0 || !_engine) return;
-    TreeItem *t = [_tree itemAtRow:row];
-    if (!t || t.relPath.length == 0) return;
-    [self commitInlineRename:nil];   // đóng ô đang mở (nếu có)
-    // Đặt ô rename trên contentView (không nhét vào NSOutlineView vì nó tự quản subview).
-    NSView *content = _window.contentView;
-    NSRect cell = [_tree frameOfCellAtColumn:0 row:row];
-    NSRect inWin = [_tree convertRect:cell toView:content];
-    CGFloat tx = inWin.origin.x + 20;  // chừa icon thư mục/doc
-    NSRect fr = NSMakeRect(tx, inWin.origin.y, NSMaxX(inWin) - tx - 2, inWin.size.height);
-    _renameField = [[NSTextField alloc] initWithFrame:fr];
-    _renameField.stringValue = t.name;
-    _renameField.font = [OS9Theme uiFont];
-    _renameField.bezeled = YES;
-    _renameField.editable = YES;
-    _renameField.drawsBackground = YES;
-    _renameField.focusRingType = NSFocusRingTypeNone;
-    _renameField.target = self;
-    _renameField.action = @selector(commitInlineRename:);  // Enter -> commit
-    _renameField.delegate = self;                          // blur -> commit (controlTextDidEndEditing)
-    _renameItem = t;
-    [content addSubview:_renameField positioned:NSWindowAbove relativeTo:nil];
-    [_window makeFirstResponder:_renameField];
-    [_renameField selectText:nil];
-}
-
-// Commit cả khi Enter lẫn khi mất focus. Nil _renameField TRƯỚC để tránh re-entry.
-- (void)commitInlineRename:(id)sender {
-    NSTextField *f = _renameField;
-    TreeItem *t = _renameItem;
-    if (!f || !t) return;
-    _renameField = nil; _renameItem = nil;
-    NSString *newName = [f.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    [f removeFromSuperview];
-    if (!newName.length || [newName isEqualToString:t.name]) return;   // không đổi
+// Rename qua dialog Platinum (CUSTOM_DIALOG §6.1): prompt + validate, rồi đồng bộ tên file (LAZY_TREE §4).
+- (void)promptRenameItem:(TreeItem *)t {
+    if (!t || t.relPath.length == 0 || !_engine) return;
+    NSString *newName = [OS9Dialog promptWithTitle:@"Rename"
+                                           message:@"New name:"
+                                       defaultText:(t.name ?: @"")
+                                       placeholder:@"Name"
+                                          okButton:@"Rename"
+                                      cancelButton:@"Cancel"
+                                          validate:^NSString *(NSString *s) {
+        NSString *tr = [s stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (tr.length == 0) return @"Name cannot be empty";
+        return nil;
+    }
+                                            parent:_window];
+    if (!newName || [newName isEqualToString:t.name]) return;   // cancel hoặc không đổi
     [self autosaveCurrent];
     BOOL wasCurrent = (!_currentId.empty() && t.requestId.length && S(t.requestId) == _currentId);
     try {
         std::string newRel = _engine->collection().rename(t.relPath.UTF8String, newName.UTF8String);
-        if (wasCurrent) { _currentRel = newRel; [self updateTitle]; } // giữ con trỏ request đang mở
+        if (wasCurrent) {
+            // Đồng bộ tên vào model đang mở: nếu không, Save sau đó ghi tên CŨ -> rollback tên file.
+            _model.name = newName.UTF8String;
+            _currentRel = newRel;
+            [self updateTitle];
+        }
         [self reloadTree];
+        if (wasCurrent) [self revealAndSelectRequestById:N(_currentId) relPath:N(_currentRel)];
         [self toastOk:@"Renamed"];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
+
 - (void)outlineViewItemDidExpand:(NSNotification *)n {
     TreeItem *t = n.userInfo[@"NSObject"];
     if (t.relPath) [_expandedFolders addObject:t.relPath];
@@ -1430,16 +1414,18 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
                          isGrpc ? @"grpcurl" : @"cURL", r.error.c_str()]];
         return;
     }
-    NSAlert *a = [[NSAlert alloc] init];
-    a.messageText = isGrpc ? @"grpcurl command detected" : @"cURL command detected";
-    a.informativeText = [self importSummary:r.model unknown:r.unknown grpc:isGrpc];
-    [a addButtonWithTitle:(_hasRequest ? @"Replace current" : @"Create request")];
-    [a addButtonWithTitle:@"Cancel"];
-    if ([a runModal] == NSAlertFirstButtonReturn) {
-        [self applyImport:r.model];
-    } else {
-        [self restoreUrlField];   // bỏ: trả ô URL về giá trị request đang mở
-    }
+    NSString *primary = _hasRequest ? @"Replace current" : @"Create request";
+    NSString *body = [NSString stringWithFormat:@"%@\n\n%@",
+                      isGrpc ? @"grpcurl command detected" : @"cURL command detected",
+                      [self importSummary:r.model unknown:r.unknown grpc:isGrpc]];
+    NSInteger choice = [OS9Dialog confirmWithTitle:@"Import"
+                                           message:body
+                                           buttons:@[ @"Cancel", primary ]
+                                     defaultButton:1 cancelButton:0
+                                              icon:OS9AlertNote
+                                            parent:_window];
+    if (choice == 1) [self applyImport:r.model];
+    else [self restoreUrlField];   // bỏ: trả ô URL về giá trị request đang mở
 }
 
 - (NSString *)importSummary:(const core::RequestModel &)m unknown:(const std::vector<std::string> &)unknown grpc:(BOOL)isGrpc {
@@ -1518,9 +1504,6 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     _urlPrevLen = u.length;
 }
 
-- (void)controlTextDidEndEditing:(NSNotification *)note {
-    if (note.object == _renameField) [self commitInlineRename:nil];   // rời ô rename -> lưu
-}
 - (void)methodChanged:(id)sender { }
 - (void)urlCommitted:(id)sender {
     // gRPC: ô URL = target -> Enter nạp lại danh sách RPC. HTTP: tách query.
@@ -1897,7 +1880,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         _servicePopup.selectedIndex = 0;
         _servicePopup.toolTip = nil;
         [_servicePopup setNeedsDisplay:YES];
-        if (openWhenDone) [self toastWarn:@"Nhập host gRPC trước (vd: localhost:50051)"];
+        if (openWhenDone) [self toastWarn:@"Enter gRPC host first (e.g. localhost:50051)"];
         return;
     }
     _servicePopup.itemTitles = @[ @"Loading..." ];
@@ -2026,10 +2009,12 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         if (t.relPath.length) [items addObject:t];
     }];
     if (items.count == 0) return;
-    NSAlert *a = [[NSAlert alloc] init];
-    a.messageText = [NSString stringWithFormat:@"Xoá %lu mục đã chọn?", (unsigned long)items.count];
-    [a addButtonWithTitle:@"Delete"]; [a addButtonWithTitle:@"Cancel"];
-    if ([a runModal] != NSAlertFirstButtonReturn) return;
+    NSInteger r = [OS9Dialog confirmWithTitle:@"Delete"
+                                      message:[NSString stringWithFormat:@"Delete %lu selected items? This cannot be undone.",
+                                               (unsigned long)items.count]
+                                      buttons:@[ @"Cancel", @"Delete" ]
+                                defaultButton:1 cancelButton:0 icon:OS9AlertCaution parent:_window];
+    if (r != 1) return;
     [self closeEditorIfDeleted:items];    // tránh autosave tạo lại file vừa xoá
     for (TreeItem *t in items) [self purgeCacheAtRel:t.relPath isFolder:t.isFolder];
     for (TreeItem *t in items) { try { _engine->collection().remove(t.relPath.UTF8String); } catch (...) {} }
@@ -2062,7 +2047,8 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
 }
 // Rename: chỉnh ngay trên cây (inline), không popup.
 - (void)renameSel:(id)s {
-    [self beginInlineRenameRow:_tree.selectedRow];
+    NSInteger row = _tree.selectedRow; if (row < 0) return;
+    [self promptRenameItem:[_tree itemAtRow:row]];
 }
 - (void)dupSel:(id)s {
     NSInteger row = _tree.selectedRow; if (row < 0) return;
@@ -2078,10 +2064,11 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
 - (void)deleteSel:(id)s {
     NSInteger row = _tree.selectedRow; if (row < 0) return;
     TreeItem *t = [_tree itemAtRow:row];
-    NSAlert *a = [[NSAlert alloc] init];
-    a.messageText = [NSString stringWithFormat:@"Xoá %@?", t.name];
-    [a addButtonWithTitle:@"Delete"]; [a addButtonWithTitle:@"Cancel"];
-    if ([a runModal] != NSAlertFirstButtonReturn) return;
+    NSInteger r = [OS9Dialog confirmWithTitle:@"Delete"
+                                      message:[NSString stringWithFormat:@"Delete \"%@\"? This cannot be undone.", t.name]
+                                      buttons:@[ @"Cancel", @"Delete" ]
+                                defaultButton:1 cancelButton:0 icon:OS9AlertCaution parent:_window];
+    if (r != 1) return;
     [self closeEditorIfDeleted:@[ t ]];   // tránh autosave tạo lại file vừa xoá
     [self purgeCacheAtRel:t.relPath isFolder:t.isFolder];
     try { _engine->collection().remove(t.relPath.UTF8String); [self reloadTree]; }

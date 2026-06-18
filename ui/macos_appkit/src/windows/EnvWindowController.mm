@@ -1,4 +1,5 @@
 #import "windows/EnvWindowController.h"
+#import "dialogs/OS9Dialog.h"
 
 #import "theme/OS9Theme.h"
 #import "widgets/OS9BevelButton.h"
@@ -111,10 +112,12 @@ static NSString *Key(NSString *env, NSString *alias) {
 - (void)deleteEnvClicked:(OS9BevelButton *)sender {
     NSString *env = sender.identifier;
     if (!env || [env isEqualToString:@"Global"]) return;
-    NSAlert *a = [[NSAlert alloc] init];
-    a.messageText = [NSString stringWithFormat:@"Xoá môi trường \"%@\"?", env];
-    [a addButtonWithTitle:@"Delete"]; [a addButtonWithTitle:@"Cancel"];
-    if ([a runModal] != NSAlertFirstButtonReturn) return;
+    NSInteger r = [OS9Dialog confirmWithTitle:@"Delete environment"
+                                      message:[NSString stringWithFormat:@"Delete environment \"%@\"? This cannot be undone.", env]
+                                      buttons:@[ @"Cancel", @"Delete" ]
+                                defaultButton:1 cancelButton:0 icon:OS9AlertCaution
+                                       parent:self.view.window];
+    if (r != 1) return;
     try { _engine->environments().remove(env.UTF8String); } catch (...) {}
     [self reload];
 }
@@ -210,7 +213,7 @@ static NSString *Key(NSString *env, NSString *alias) {
 #pragma mark Actions
 
 - (void)addEnv:(id)sender {
-    NSString *name = [self prompt:@"Tên môi trường mới" def:@"Dev"];
+    NSString *name = [self prompt:@"New environment name" def:@"Dev"];
     if (!name || name.length == 0) return;
     if ([_envNames containsObject:name]) { NSBeep(); return; }
     [_envNames addObject:name];
@@ -220,7 +223,7 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)addAlias:(id)sender {
-    NSString *name = [self prompt:@"Tên alias mới" def:@"baseUrl"];
+    NSString *name = [self prompt:@"New alias name" def:@"baseUrl"];
     if (!name || name.length == 0) return;
     if ([_aliases containsObject:name]) { NSBeep(); return; }
     [_aliases addObject:name];
@@ -267,15 +270,17 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (NSString *)prompt:(NSString *)title def:(NSString *)def {
-    NSAlert *a = [[NSAlert alloc] init];
-    a.messageText = title;
-    NSTextField *tf = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 220, 24)];
-    tf.stringValue = def ?: @"";
-    a.accessoryView = tf;
-    [a addButtonWithTitle:@"OK"];
-    [a addButtonWithTitle:@"Cancel"];
-    if ([a runModal] == NSAlertFirstButtonReturn) return tf.stringValue;
-    return nil;
+    return [OS9Dialog promptWithTitle:title
+                              message:nil
+                          defaultText:(def ?: @"")
+                          placeholder:nil
+                             okButton:@"OK"
+                         cancelButton:@"Cancel"
+                             validate:^NSString *(NSString *s) {
+        NSString *t = [s stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        return t.length ? nil : @"Name cannot be empty";
+    }
+                               parent:self.view.window];
 }
 
 @end
