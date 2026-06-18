@@ -32,8 +32,9 @@
 + (NSColor *)buttonFGPressed:(BOOL)pressed enabled:(BOOL)enabled;
 // Vẽ viền inset (sunken) cho ô nhập: tối trên-trái, sáng dưới-phải.
 + (void)drawInsetInRect:(NSRect)r;
-// Vẽ title bar kẻ sọc platinum.
-+ (void)drawStripedTitleInRect:(NSRect)r active:(BOOL)active;
+// Vẽ title bar kẻ sọc platinum. Sọc chỉ vẽ trong stripesRect (giữa 2 cụm icon),
+// nền nền (band) vẫn phủ toàn bộ r.
++ (void)drawStripedTitleInRect:(NSRect)r stripesInRect:(NSRect)stripesRect active:(BOOL)active;
 
 // Path nút góc bo kiểu pixel (theo button.svg).
 + (NSBezierPath *)steppedPathInRect:(NSRect)r;

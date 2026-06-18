@@ -1,11 +1,10 @@
 #import "widgets/OS9Toast.h"
 #import "theme/OS9Theme.h"
 
-#pragma mark - OS9Toast (retro theo toast.png)
+#pragma mark - OS9Toast (retro phẳng, viền nét đứt)
 
-static const CGFloat kToastShadow = 3;   // bóng đổ cứng (offset phải-dưới)
-static const CGFloat kToastBorder = 3;   // viền đen dày
-static const CGFloat kToastH = 30;       // cao thân (chưa gồm bóng)
+static const CGFloat kToastBorder = 1;   // độ dày viền line mỏng
+static const CGFloat kToastH = 30;       // cao thân
 static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClose = 24, kToastMaxW = 380;
 
 @implementation OS9Toast
@@ -22,32 +21,35 @@ static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClo
     NSSize ts = [(msg ?: @"") sizeWithAttributes:@{NSFontAttributeName : [self textFont]}];
     CGFloat w = kToastPadL + kToastIcon + kToastGapL + ts.width + 8 + kToastClose;
     w = MAX(150, MIN(w, kToastMaxW));
-    return NSMakeSize(w + kToastShadow, kToastH + kToastShadow);
+    return NSMakeSize(w, kToastH);
 }
 
-- (NSColor *)fillColor {
-    if (_kind == 1) return [NSColor colorWithCalibratedRed:0.64 green:0.85 blue:0.62 alpha:1]; // xanh retro
-    if (_kind == 2) return [NSColor colorWithCalibratedRed:0.93 green:0.64 blue:0.64 alpha:1]; // đỏ retro
-    return [NSColor colorWithCalibratedWhite:0.82 alpha:1];                                     // xám
+// Nền LUÔN là màu xám (không tô theo loại).
+- (NSColor *)fillColor { return [NSColor colorWithCalibratedWhite:0.82 alpha:1]; }
+
+// Màu viền nét đứt theo loại (lấy từ assets/color.png).
+- (NSColor *)accentColor {
+    if (_kind == 1) return [NSColor colorWithCalibratedRed:0.29 green:0.59 blue:0.40 alpha:1]; // xanh lá
+    if (_kind == 2) return [NSColor colorWithCalibratedRed:0.78 green:0.25 blue:0.22 alpha:1]; // đỏ
+    return [NSColor colorWithCalibratedRed:0.42 green:0.50 blue:0.69 alpha:1];                  // xanh-xám (info)
 }
 - (NSString *)glyph { return _kind == 1 ? @"✓" : (_kind == 2 ? @"!" : @"i"); }
 
-- (NSRect)bodyRect { return NSMakeRect(0, 0, self.bounds.size.width - kToastShadow, kToastH); }
 - (NSRect)closeRect {
-    NSRect b = [self bodyRect];
-    return NSMakeRect(NSMaxX(b) - kToastClose, 0, kToastClose, b.size.height);
+    return NSMakeRect(NSMaxX(self.bounds) - kToastClose, 0, kToastClose, self.bounds.size.height);
 }
 
 - (void)drawRect:(NSRect)dirty {
-    NSRect body = [self bodyRect];
-    // bóng đổ cứng (đen, lệch phải-dưới)
-    [[NSColor blackColor] set];
-    NSRectFill(NSMakeRect(kToastShadow, kToastShadow, body.size.width, body.size.height));
-    // nền theo loại + viền đen dày, GÓC VUÔNG (retro)
+    NSRect body = self.bounds;
+    // nền phẳng xám (không bóng đổ)
     [[self fillColor] set];
     NSRectFill(body);
-    [[NSColor blackColor] set];
-    NSFrameRectWithWidth(NSInsetRect(body, kToastBorder / 2.0, kToastBorder / 2.0), kToastBorder);
+    // viền LINE MỎNG tô theo loại
+    NSRect br = NSInsetRect(body, kToastBorder / 2.0 + 0.5, kToastBorder / 2.0 + 0.5);
+    NSBezierPath *bp = [NSBezierPath bezierPathWithRect:br];
+    bp.lineWidth = kToastBorder;
+    [[self accentColor] set];
+    [bp stroke];
 
     // icon trạng thái bên trái (đậm)
     NSDictionary *ga = @{NSFontAttributeName : [NSFont boldSystemFontOfSize:13],
@@ -55,8 +57,12 @@ static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClo
     NSSize gs = [[self glyph] sizeWithAttributes:ga];
     [[self glyph] drawAtPoint:NSMakePoint(kToastPadL + (kToastIcon - gs.width) / 2,
                                           (body.size.height - gs.height) / 2) withAttributes:ga];
-    // text
-    NSDictionary *ta = @{NSFontAttributeName : [OS9Toast textFont], NSForegroundColorAttributeName : [NSColor blackColor]};
+    // text (cắt đuôi bằng … nếu dài quá)
+    NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
+    ps.lineBreakMode = NSLineBreakByTruncatingTail;
+    NSDictionary *ta = @{NSFontAttributeName : [OS9Toast textFont],
+                         NSForegroundColorAttributeName : [NSColor blackColor],
+                         NSParagraphStyleAttributeName : ps};
     CGFloat tx = kToastPadL + kToastIcon + kToastGapL;
     NSRect tr = NSMakeRect(tx, 0, NSMinX([self closeRect]) - tx - 4, body.size.height);
     NSSize ts = [(_message ?: @"") sizeWithAttributes:ta];

@@ -233,20 +233,25 @@ static int gButtonStyle = 0;
 }
 
 // Title bar kẻ sọc ngang Platinum theo window.svg (#CCCCCC nền, dải #DDDDDD + sọc #999999/2px).
-+ (void)drawStripedTitleInRect:(NSRect)r active:(BOOL)active {
++ (void)drawStripedTitleInRect:(NSRect)r stripesInRect:(NSRect)stripesRect active:(BOOL)active {
     [G(0.8) set]; // #CCCCCC
     NSRectFill(r);
     NSRect band = NSInsetRect(r, 0, 3);
     [G(0.867) set]; // #DDDDDD
     NSRectFill(band);
-    if (active) {
-        [G(0.6) set]; // #999999 — sọc ngang mỗi 2px
-        for (CGFloat y = band.origin.y + 1; y < NSMaxY(band); y += 2)
-            NSRectFill(NSMakeRect(band.origin.x, y, band.size.width, 1));
+    // Sọc chỉ kẻ trong khoảng giữa 2 cụm icon (không tràn ra dưới icon).
+    CGFloat sx = MAX(NSMinX(band), NSMinX(stripesRect));
+    CGFloat sw = MIN(NSMaxX(band), NSMaxX(stripesRect)) - sx;
+    if (sw > 0) {
+        if (active) {
+            [G(0.6) set]; // #999999 — sọc ngang mỗi 2px
+            for (CGFloat y = band.origin.y + 1; y < NSMaxY(band); y += 2)
+                NSRectFill(NSMakeRect(sx, y, sw, 1));
+        }
+        // viền sáng/tối hai mép dải
+        [G(0.93) set]; NSRectFill(NSMakeRect(sx, NSMaxY(band) - 1, sw, 1));
+        [G(0.77) set]; NSRectFill(NSMakeRect(sx, band.origin.y, sw, 1));
     }
-    // viền sáng/tối hai mép dải
-    [G(0.93) set]; NSRectFill(NSMakeRect(band.origin.x, NSMaxY(band) - 1, band.size.width, 1));
-    [G(0.77) set]; NSRectFill(NSMakeRect(band.origin.x, band.origin.y, band.size.width, 1));
 }
 
 // Góc răng cưa nhỏ: 3 bậc x1px ở mỗi góc (cho ô input retro).

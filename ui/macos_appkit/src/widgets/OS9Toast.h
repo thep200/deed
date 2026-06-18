@@ -1,5 +1,6 @@
-// Toast retro (theo assets/toast.png): viền đen dày + bóng đổ cứng, nền theo loại:
-// xám=info, xanh=success, đỏ=fail. Có icon trạng thái bên trái + nút ✕ bên phải.
+// Toast retro PHẲNG: nền luôn xám, chỉ tô màu cho viền nét đứt (dash) theo loại
+// (màu lấy từ assets/color.png): info=xanh-xám, success=xanh lá, fail=đỏ.
+// Có icon trạng thái bên trái + nút ✕ bên phải.
 #import <Cocoa/Cocoa.h>
 
 @interface OS9Toast : NSView
@@ -7,5 +8,5 @@
 @property(nonatomic, copy) NSString *message;
 @property(nonatomic, copy) void (^onClose)(void);  // bấm toast/✕ -> đóng
 - (instancetype)initWithMessage:(NSString *)msg kind:(NSInteger)kind;
-+ (NSSize)sizeForMessage:(NSString *)msg;       // kích thước (đã gồm bóng đổ)
++ (NSSize)sizeForMessage:(NSString *)msg;       // kích thước toast
 @end

@@ -7,7 +7,12 @@
 
 - (void)drawRect:(NSRect)dirty {
     BOOL active = self.window.isKeyWindow;
-    [OS9Theme drawStripedTitleInRect:self.bounds active:active];
+    // Sọc chỉ kéo trong khoảng giữa cụm icon trái (close) và cụm icon phải (collapse+zoom).
+    const CGFloat gap = 6;
+    CGFloat sx = NSMaxX([self closeRect]) + gap;
+    CGFloat sw = NSMinX([self collapseRect]) - gap - sx;
+    NSRect stripes = NSMakeRect(sx, self.bounds.origin.y, MAX(0, sw), self.bounds.size.height);
+    [OS9Theme drawStripedTitleInRect:self.bounds stripesInRect:stripes active:active];
 
     // 3 ô điều khiển kiểu Mac: close (trái), collapse + zoom (phải) — theo *_box.svg.
     [OS9Theme drawMacControlBox:[self closeRect] glyph:0];

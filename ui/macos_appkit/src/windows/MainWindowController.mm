@@ -448,7 +448,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     _protoPopup.toolTip = @"Nguồn proto: Reflection (hỏi server) hoặc nạp file .proto";
 
     // gRPC: chọn service/RPC mà server cung cấp (đặt trước nút Send).
-    _servicePopup = [[OS9PopupButton alloc] initWithItems:@[ @"No rpc" ]
+    _servicePopup = [[OS9PopupButton alloc] initWithItems:@[ @"No RPC" ]
                                                    target:self action:@selector(serviceMethodChanged:)];
     // Bấm vào -> chủ động check host lấy RPC rồi mới bung menu (reflection cần IO mạng).
     __weak MainWindowController *wsForRpc = self;
@@ -1669,7 +1669,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     _grpcMethods.clear();
     const core::GrpcRequest &g = _model.grpc;
     if (g.service.empty() || g.method.empty()) {
-        _servicePopup.itemTitles = @[ @"No rpc" ];
+        _servicePopup.itemTitles = @[ @"No RPC" ];
         _servicePopup.toolTip = nil;
     } else {
         NSString *full = [NSString stringWithFormat:@"%s/%s", g.service.c_str(), g.method.c_str()];
@@ -1693,14 +1693,14 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     BOOL needsHost = (_model.grpc.protoSource.mode == "reflection");
     if (needsHost && _model.grpc.target.empty()) {
         _grpcMethods.clear();
-        _servicePopup.itemTitles = @[ @"No rpc" ];
+        _servicePopup.itemTitles = @[ @"No RPC" ];
         _servicePopup.selectedIndex = 0;
         _servicePopup.toolTip = nil;
         [_servicePopup setNeedsDisplay:YES];
         if (openWhenDone) [self toastWarn:@"Nhập host gRPC trước (vd: localhost:50051)"];
         return;
     }
-    _servicePopup.itemTitles = @[ @"(loading…)" ];
+    _servicePopup.itemTitles = @[ @"Loading..." ];
     _servicePopup.selectedIndex = 0;
     [_servicePopup setNeedsDisplay:YES];
 
@@ -1724,7 +1724,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
                 openMenu:(BOOL)openMenu {
     _grpcMethods = methods;
     if (methods.empty()) {
-        _servicePopup.itemTitles = @[ @"No rpc" ];
+        _servicePopup.itemTitles = @[ @"No RPC" ];
         _servicePopup.selectedIndex = 0;
         _servicePopup.toolTip = nil;
         [_servicePopup setNeedsDisplay:YES];
@@ -1897,7 +1897,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     return [out componentsJoinedByString:@"/"];
 }
 
-#pragma mark Toast (retro, stack góc phải-dưới, đẩy lên)
+#pragma mark Toast (retro phẳng, stack góc phải-trên, đẩy xuống)
 
 - (void)toast:(NSString *)msg     { [self showToast:msg kind:0]; } // info (xám)
 - (void)toastOk:(NSString *)msg   { [self showToast:msg kind:1]; } // success (xanh)
@@ -1908,8 +1908,8 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     NSView *cv = _window.contentView;
     OS9Toast *t = [[OS9Toast alloc] initWithMessage:msg kind:kind];
     NSSize sz = [OS9Toast sizeForMessage:msg];
-    // bắt đầu off-screen bên phải, ở slot dưới cùng -> reflow sẽ trượt vào.
-    t.frame = NSMakeRect(cv.bounds.size.width, cv.bounds.size.height - 14 - sz.height, sz.width, sz.height);
+    // bắt đầu off-screen bên phải, ở slot trên cùng -> reflow sẽ trượt vào.
+    t.frame = NSMakeRect(cv.bounds.size.width, 14, sz.width, sz.height);
     __weak MainWindowController *ws = self;
     __weak OS9Toast *wt = t;
     t.onClose = ^{ [ws dismissToast:wt]; };
@@ -1934,20 +1934,20 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     [self reflowToasts];   // các toast còn lại trượt xuống lấp chỗ
 }
 
-// Xếp toast từ góc phải-DƯỚI lên: mới nhất (cuối mảng) ở dưới cùng (content flipped: y lớn = dưới).
+// Xếp toast từ góc phải-TRÊN xuống: mới nhất (cuối mảng) ở trên cùng (content flipped: y nhỏ = trên).
 - (void)reflowToasts {
     NSView *cv = _window.contentView;
-    CGFloat W = cv.bounds.size.width, H = cv.bounds.size.height;
+    CGFloat W = cv.bounds.size.width;
     const CGFloat margin = 14, gap = 8;
-    CGFloat bottom = H - margin;
+    CGFloat top = margin;
     for (NSInteger i = (NSInteger)_toasts.count - 1; i >= 0; i--) {
         OS9Toast *t = _toasts[i];
         CGFloat tw = t.frame.size.width, th = t.frame.size.height;
-        NSRect target = NSMakeRect(W - tw - margin, bottom - th, tw, th);
+        NSRect target = NSMakeRect(W - tw - margin, top, tw, th);
         [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
             ctx.duration = 0.2; t.animator.frame = target; t.animator.alphaValue = 1.0;
         } completionHandler:nil];
-        bottom = (bottom - th) - gap;
+        top = top + th + gap;
     }
 }
 
