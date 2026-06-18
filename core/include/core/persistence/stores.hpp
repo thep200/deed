@@ -19,11 +19,18 @@ public:
     const std::string& root() const { return root_; }
     void setRoot(std::string root);
 
-    // Lazy: chỉ đọc metadata (name/path/type) để dựng sidebar.
+    // Quét MỘT cấp thư mục, CHỈ metadata (parse tên file, KHÔNG đọc nội dung).
+    // dirRelPath rỗng = cấp gốc. Folder con để trạng thái fold (children rỗng). §3.
+    std::vector<TreeNode> scanLevel(const std::string& dirRelPath) const;
+
+    // Quét đệ quy toàn bộ (metadata-only, content-free). Dùng cho test/tiện ích;
+    // UI dựng cây bằng scanLevel lazy thay vì hàm này.
     TreeNode scanTree() const;
 
     RequestModel loadRequest(const std::string& relPath) const;     // throws nếu lỗi
-    void saveRequest(const std::string& relPath, const RequestModel&) const; // atomic
+    // Ghi atomic; nếu tên file lệch type/method/name -> đổi tên cho khớp (§4).
+    // Trả relPath SAU khi ghi (có thể đổi nếu rename). Atomic.
+    std::string saveRequest(const std::string& relPath, const RequestModel&) const;
 
     // CRUD — trả relPath của item vừa tạo/đổi.
     std::string createRequest(const std::string& folderRel, RequestType, const std::string& name) const;

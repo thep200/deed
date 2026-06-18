@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "core/persistence/stores.hpp"
+#include "core/persistence/request_naming.hpp"
 #include "infra/fs_util.hpp"
 #include "codec/json_codec.hpp"
 
@@ -54,61 +55,117 @@ std::string uniquePath(const fs::path& dir, const std::string& slug, const std::
     throw std::runtime_error("could not find a unique filename for: " + slug);
 }
 
+// Tìm tên file duy nhất theo grammar mã hoá (giữ nguyên prefix http_<method>_ / grpc_,
+// chỉ thêm hậu tố vào slug khi trùng). Trả TÊN FILE (không kèm thư mục).
+std::string uniqueEncodedName(const fs::path& dir, RequestType type,
+                              const std::string& method, const std::string& displayName) {
+    std::string first = encodeRequestFilename(type, method, displayName);
+    if (!fs::exists(dir / first)) return first;
+    for (int i = 2; i < 10000; ++i) {
+        std::string cand = encodeRequestFilename(type, method, displayName + " " + std::to_string(i));
+        if (!fs::exists(dir / cand)) return cand;
+    }
+    throw std::runtime_error("could not find a unique filename for: " + displayName);
+}
+
+// Dựng metadata leaf cho 1 file request — KHÔNG đọc nội dung khi tên file hợp lệ (§2).
+// Chỉ fallback đọc 1 lần nếu tên file sai grammar (§5).
+TreeNode buildRequestLeaf(const fs::path& fullPath, const std::string& relPath) {
+    TreeNode leaf;
+    leaf.isFolder = false;
+    leaf.relPath = relPath;
+    std::string fname = fullPath.filename().string();
+
+    ParsedRequestName p = parseRequestFilename(fname);
+    if (p.ok) {
+        leaf.requestType = p.type;
+        leaf.name = normalizeDisplayName(p.slug);
+        if (p.type == RequestType::Http) {
+            std::string m = p.method;
+            for (auto& c : m) c = static_cast<char>(std::toupper((unsigned char)c));
+            leaf.methodOrType = m;            // badge HTTP method (GET/POST...)
+        } else {
+            leaf.methodOrType.clear();        // gRPC: UI không hiển thị method type
+        }
+        leaf.id.clear();                      // id chỉ có trong nội dung -> nạp khi MỞ
+        return leaf;
+    }
+
+    // Fallback: tên file không đúng grammar -> đọc 1 lần để lấy type/method/name thật.
+    leaf.name = fullPath.stem().string();     // tối thiểu: tên file (bỏ .json)
+    std::string txt;
+    if (fsutil::readFile(fullPath.string(), txt)) {
+        try {
+            auto j = codec::json::parse(txt);
+            if (j.contains("name") && j["name"].is_string())
+                leaf.name = j["name"].get<std::string>();
+            leaf.id = j.value("id", std::string());
+            std::string t = j.value("type", "http");
+            parseRequestType(t, leaf.requestType);
+            if (leaf.requestType == RequestType::Http)
+                leaf.methodOrType = j.value("http", codec::json::object()).value("method", "GET");
+            else
+                leaf.methodOrType.clear();
+        } catch (...) { /* file lỗi -> vẫn hiện tên file */ }
+    }
+    return leaf;
+}
+
 } // namespace
 
 CollectionStore::CollectionStore(std::string root) : root_(std::move(root)) {}
 void CollectionStore::setRoot(std::string root) { root_ = std::move(root); }
 
+// Quét 1 cấp — metadata-only. Folder con để fold (children rỗng). KHÔNG đọc nội dung
+// để render (chỉ fallback khi tên file sai grammar, trong buildRequestLeaf). §3.
+std::vector<TreeNode> CollectionStore::scanLevel(const std::string& dirRelPath) const {
+    std::vector<TreeNode> out;
+    fs::path dir = fs::path(fsutil::join(root_, dirRelPath));
+    std::error_code ec;
+    std::vector<fs::directory_entry> entries;
+    for (const auto& e : fs::directory_iterator(dir, ec)) {
+        // Không đi theo symlink (tránh đệ quy vòng — §10).
+        if (e.is_symlink()) continue;
+        entries.push_back(e);
+    }
+    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+        if (a.is_directory() != b.is_directory()) return a.is_directory(); // folder lên trước
+        return a.path().filename().string() < b.path().filename().string();
+    });
+    for (const auto& e : entries) {
+        std::string fname = e.path().filename().string();
+        std::string childRel = dirRelPath.empty() ? fname : dirRelPath + "/" + fname;
+        if (e.is_directory()) {
+            if (isReservedDir(fname) || isHidden(fname)) continue;
+            TreeNode folder;
+            folder.isFolder = true;
+            folder.relPath = childRel;
+            folder.name = fname;                  // folder: tên thư mục (KHÔNG de-slug)
+            out.push_back(std::move(folder));     // children rỗng -> lazy expand sau
+        } else if (e.is_regular_file()) {
+            if (e.path().extension() != ".json") continue;
+            if (isConfigFile(fname) || isHidden(fname)) continue;
+            out.push_back(buildRequestLeaf(e.path(), childRel));
+        }
+    }
+    return out;
+}
+
 TreeNode CollectionStore::scanTree() const {
-    std::function<TreeNode(const fs::path&, const std::string&)> walk =
-        [&](const fs::path& dir, const std::string& rel) -> TreeNode {
+    std::function<TreeNode(const std::string&)> walk =
+        [&](const std::string& rel) -> TreeNode {
         TreeNode node;
         node.isFolder = true;
         node.relPath = rel;
         node.name = rel.empty() ? fs::path(root_).filename().string()
                                 : fs::path(rel).filename().string();
-        std::error_code ec;
-        std::vector<fs::directory_entry> entries;
-        for (const auto& e : fs::directory_iterator(dir, ec)) entries.push_back(e);
-        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
-            if (a.is_directory() != b.is_directory()) return a.is_directory(); // folder lên trước
-            return a.path().filename().string() < b.path().filename().string();
-        });
-        for (const auto& e : entries) {
-            std::string fname = e.path().filename().string();
-            std::string childRel = rel.empty() ? fname : rel + "/" + fname;
-            if (e.is_directory()) {
-                if (isReservedDir(fname) || isHidden(fname)) continue;
-                node.children.push_back(walk(e.path(), childRel));
-            } else if (e.is_regular_file()) {
-                if (e.path().extension() != ".json") continue;
-                if (isConfigFile(fname) || isHidden(fname)) continue;
-                TreeNode leaf;
-                leaf.isFolder = false;
-                leaf.relPath = childRel;
-                leaf.name = fname; // fallback; ghi đè bằng field name nếu đọc được
-                // Lazy metadata: đọc name/type/method (đọc file nhỏ — chấp nhận).
-                std::string txt;
-                if (fsutil::readFile(e.path().string(), txt)) {
-                    try {
-                        auto j = codec::json::parse(txt);
-                        if (j.contains("name") && j["name"].is_string())
-                            leaf.name = j["name"].get<std::string>();
-                        leaf.id = j.value("id", std::string());
-                        std::string t = j.value("type", "http");
-                        parseRequestType(t, leaf.requestType);
-                        if (leaf.requestType == RequestType::Http)
-                            leaf.methodOrType = j.value("http", codec::json::object()).value("method", "GET");
-                        else
-                            leaf.methodOrType = j.value("grpc", codec::json::object()).value("methodType", "unary");
-                    } catch (...) { /* file lỗi -> vẫn hiện tên file */ }
-                }
-                node.children.push_back(std::move(leaf));
-            }
+        for (auto& child : scanLevel(rel)) {
+            if (child.isFolder) node.children.push_back(walk(child.relPath));
+            else node.children.push_back(std::move(child));
         }
         return node;
     };
-    return walk(fs::path(root_), "");
+    return walk("");
 }
 
 RequestModel CollectionStore::loadRequest(const std::string& relPath) const {
@@ -116,35 +173,67 @@ RequestModel CollectionStore::loadRequest(const std::string& relPath) const {
     if (!fsutil::readFile(fsutil::join(root_, relPath), txt))
         throw std::runtime_error("cannot read request: " + relPath);
     RequestModel m = codec::requestFromJson(codec::json::parse(txt));
-    if (m.id.empty()) {                 // file cũ chưa có id -> gán + ghi lại (migrate 1 lần)
+    if (m.id.empty()) {                 // file cũ chưa có id -> gán + ghi lại tại CHỖ (không rename)
         m.id = genId();
-        try { saveRequest(relPath, m); } catch (...) {}
+        try { fsutil::writeFileAtomic(fsutil::join(root_, relPath), codec::dumpRequest(m)); }
+        catch (...) {}
     }
     return m;
 }
 
 std::string CollectionStore::findRelPathById(const std::string& id) const {
     if (id.empty()) return "";
-    std::string found;
-    std::function<void(const TreeNode&)> walk = [&](const TreeNode& n) {
-        if (!found.empty()) return;
-        if (!n.isFolder && n.id == id) { found = n.relPath; return; }
-        for (const auto& c : n.children) walk(c);
+    // id chỉ nằm trong NỘI DUNG file -> duyệt thư mục, đọc từng .json tới khi khớp.
+    // Chỉ gọi khi resync (rename/move), KHÔNG dùng để render cây.
+    std::function<std::string(const std::string&)> walk =
+        [&](const std::string& rel) -> std::string {
+        fs::path dir = fs::path(fsutil::join(root_, rel));
+        std::error_code ec;
+        for (const auto& e : fs::directory_iterator(dir, ec)) {
+            if (e.is_symlink()) continue;
+            std::string fname = e.path().filename().string();
+            std::string childRel = rel.empty() ? fname : rel + "/" + fname;
+            if (e.is_directory()) {
+                if (isReservedDir(fname) || isHidden(fname)) continue;
+                std::string r = walk(childRel);
+                if (!r.empty()) return r;
+            } else if (e.is_regular_file()) {
+                if (e.path().extension() != ".json" || isConfigFile(fname) || isHidden(fname))
+                    continue;
+                std::string txt;
+                if (fsutil::readFile(e.path().string(), txt)) {
+                    try {
+                        auto j = codec::json::parse(txt);
+                        if (j.value("id", std::string()) == id) return childRel;
+                    } catch (...) {}
+                }
+            }
+        }
+        return "";
     };
-    walk(scanTree());
-    return found;
+    return walk("");
 }
 
-void CollectionStore::saveRequest(const std::string& relPath, const RequestModel& m) const {
-    fsutil::writeFileAtomic(fsutil::join(root_, relPath), codec::dumpRequest(m));
+std::string CollectionStore::saveRequest(const std::string& relPath, const RequestModel& m) const {
+    fs::path cur = fs::path(fsutil::join(root_, relPath));
+    fs::path dir = cur.parent_path();
+    std::string method = (m.type == RequestType::Http) ? m.http.method : std::string();
+    // Ghi nội dung trước (nguồn chân lý), rồi đồng bộ tên file = cache dẫn xuất (§4).
+    fsutil::writeFileAtomic(cur.string(), codec::dumpRequest(m));
+    std::string desired = encodeRequestFilename(m.type, method, m.name);
+    if (cur.filename().string() == desired) return relPath;   // tên đã khớp -> xong
+    std::string newName = uniqueEncodedName(dir, m.type, method, m.name);
+    fs::path dst = dir / newName;
+    std::error_code ec;
+    fs::rename(cur, dst, ec);                  // git phát hiện rename qua nội dung giữ nguyên
+    if (ec) return relPath;                    // rename lỗi -> giữ path cũ (đã có nội dung)
+    return fs::relative(dst, fs::path(root_)).generic_string();
 }
 
 std::string CollectionStore::createRequest(const std::string& folderRel, RequestType type,
                                            const std::string& name) const {
     fs::path dir = fs::path(fsutil::join(root_, folderRel));
     fs::create_directories(dir);
-    std::string slug = fsutil::slugify(name);
-    std::string full = uniquePath(dir, slug, ".json");
     RequestModel m;
     m.id = genId();
     m.name = name;
@@ -164,7 +253,9 @@ std::string CollectionStore::createRequest(const std::string& folderRel, Request
         m.grpc.protoSource.mode = "reflection";
         m.grpc.message = "{}";
     }
-    fsutil::writeFileAtomic(full, codec::dumpRequest(m));
+    std::string method = (type == RequestType::Http) ? m.http.method : std::string();
+    fs::path full = dir / uniqueEncodedName(dir, type, method, name);
+    fsutil::writeFileAtomic(full.string(), codec::dumpRequest(m));
     return fs::relative(full, fs::path(root_)).generic_string();
 }
 
@@ -172,11 +263,11 @@ std::string CollectionStore::createRequestFromModel(const std::string& folderRel
                                                     const std::string& name) const {
     fs::path dir = fs::path(fsutil::join(root_, folderRel));
     fs::create_directories(dir);
-    std::string slug = fsutil::slugify(name);
-    std::string full = uniquePath(dir, slug, ".json");
     m.id = genId();      // id mới, độc lập với nguồn import
     m.name = name;
-    fsutil::writeFileAtomic(full, codec::dumpRequest(m));
+    std::string method = (m.type == RequestType::Http) ? m.http.method : std::string();
+    fs::path full = dir / uniqueEncodedName(dir, m.type, method, name);
+    fsutil::writeFileAtomic(full.string(), codec::dumpRequest(m));
     return fs::relative(full, fs::path(root_)).generic_string();
 }
 
@@ -195,13 +286,14 @@ std::string CollectionStore::rename(const std::string& relPath, const std::strin
         fs::rename(src, dst);
         return fs::relative(dst, fs::path(root_)).generic_string();
     }
-    // request: cập nhật field name + đổi slug file
+    // request: cập nhật field name + đổi tên file theo grammar mã hoá (http_method_slug / grpc_slug).
     RequestModel m = loadRequest(relPath);
     m.name = newName;
-    std::string newFull = uniquePath(src.parent_path(), fsutil::slugify(newName), ".json");
-    fsutil::writeFileAtomic(newFull, codec::dumpRequest(m));
+    std::string method = (m.type == RequestType::Http) ? m.http.method : std::string();
+    fs::path newFull = src.parent_path() / uniqueEncodedName(src.parent_path(), m.type, method, newName);
+    fsutil::writeFileAtomic(newFull.string(), codec::dumpRequest(m));
     fs::remove(src);
-    return fs::relative(fs::path(newFull), fs::path(root_)).generic_string();
+    return fs::relative(newFull, fs::path(root_)).generic_string();
 }
 
 std::string CollectionStore::duplicate(const std::string& relPath) const {
@@ -217,10 +309,10 @@ std::string CollectionStore::duplicate(const std::string& relPath) const {
     RequestModel m = loadRequest(relPath);
     m.id = genId();                 // id mới để không trùng
     m.name = m.name + " copy";
-    std::string slug = src.stem().string() + "-copy";
-    std::string newFull = uniquePath(src.parent_path(), slug, ".json");
-    fsutil::writeFileAtomic(newFull, codec::dumpRequest(m));
-    return fs::relative(fs::path(newFull), fs::path(root_)).generic_string();
+    std::string method = (m.type == RequestType::Http) ? m.http.method : std::string();
+    fs::path newFull = src.parent_path() / uniqueEncodedName(src.parent_path(), m.type, method, m.name);
+    fsutil::writeFileAtomic(newFull.string(), codec::dumpRequest(m));
+    return fs::relative(newFull, fs::path(root_)).generic_string();
 }
 
 std::string CollectionStore::move(const std::string& relPath, const std::string& destFolderRel) const {

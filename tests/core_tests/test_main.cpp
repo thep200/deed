@@ -7,10 +7,11 @@
 #include <string>
 
 #include "core/engine.hpp"
-#include "core/field_codec.hpp"
-#include "core/importer.hpp"
-#include "core/stores.hpp"
-#include "core/variable_resolver.hpp"
+#include "core/codec/field_codec.hpp"
+#include "core/import_export/importer.hpp"
+#include "core/persistence/request_naming.hpp"
+#include "core/persistence/stores.hpp"
+#include "core/variables/variable_resolver.hpp"
 
 namespace fs = std::filesystem;
 using namespace core;
@@ -60,6 +61,45 @@ static void test_variable_resolver() {
     CHECK_EQ(r4.text, std::string("http://x"), "trim khoảng trắng trong {{ }}");
 }
 
+// ---------------- Request filename naming (LAZY_TREE §2) ----------------
+static void test_request_naming() {
+    std::printf("[request_naming]\n");
+
+    // parse: gRPC = 2 phần (slug giữ '-'); HTTP = 3 phần (slug giữ '_').
+    auto g = parseRequestFilename("grpc_get-list-user.json");
+    CHECK(g.ok && g.type == RequestType::Grpc, "grpc parse ok");
+    CHECK_EQ(g.slug, std::string("get-list-user"), "grpc slug = toàn bộ phần sau grpc_");
+    CHECK(g.method.empty(), "grpc KHÔNG có method");
+
+    auto h = parseRequestFilename("http_get_get_list_user.json");
+    CHECK(h.ok && h.type == RequestType::Http, "http parse ok");
+    CHECK_EQ(h.method, std::string("get"), "http method = phần 2");
+    CHECK_EQ(h.slug, std::string("get_list_user"), "http slug giữ nguyên '_'");
+
+    CHECK(!parseRequestFilename("collection.json").ok, "tên không đúng grammar -> ok=false");
+    CHECK(!parseRequestFilename("README.md").ok, "không có '_' -> ok=false");
+
+    // normalizeDisplayName: sentence-case, '_'/'-' -> space, bỏ ký tự đặc biệt.
+    CHECK_EQ(normalizeDisplayName("get-list-user"), std::string("Get list user"), "de-slug grpc");
+    CHECK_EQ(normalizeDisplayName("tours-configs"), std::string("Tours configs"), "de-slug http");
+    CHECK_EQ(normalizeDisplayName("get_list_user"), std::string("Get list user"), "de-slug '_'");
+    CHECK_EQ(normalizeDisplayName("name@of#request!"), std::string("Nameofrequest"),
+             "ký tự đặc biệt bị loại");
+
+    // encode: http có method, grpc KHÔNG; LỆNH §2.2 — không nhúng nguyên prefix vào label.
+    CHECK_EQ(encodeRequestFilename(RequestType::Http, "POST", "Create Tour"),
+             std::string("http_post_create-tour.json"), "encode http lowercase method");
+    CHECK_EQ(encodeRequestFilename(RequestType::Grpc, "", "Get List User"),
+             std::string("grpc_get-list-user.json"), "encode grpc KHÔNG có method");
+
+    // round-trip: encode -> parse -> normalize KHÔNG còn prefix grpc_/http_<method>_.
+    std::string fn = encodeRequestFilename(RequestType::Grpc, "", "Get List User");
+    auto rt = parseRequestFilename(fn);
+    std::string label = normalizeDisplayName(rt.slug);
+    CHECK(label.find("grpc") == std::string::npos, "label KHÔNG chứa prefix 'grpc'");
+    CHECK_EQ(label, std::string("Get list user"), "label = name đã chuẩn hoá");
+}
+
 // ---------------- CollectionStore round-trip + CRUD ----------------
 static void test_collection_store(const std::string& root) {
     std::printf("[collection_store]\n");
@@ -86,12 +126,17 @@ static void test_collection_store(const std::string& root) {
     for (const auto& h : m.http.headers) if (h.key == "Content-Type") hasContentType = true;
     CHECK(hasContentType, "có Content-Type mặc định");
 
-    // sửa + lưu + đọc lại (round-trip).
+    // sửa + lưu + đọc lại (round-trip). Đổi method -> tên file phải đổi http_get_* -> http_post_*.
     m.http.method = "POST";
     m.http.url = "{{baseUrl}}/users";
     m.http.body.mode = "json";
     m.http.body.json = "{\"a\":1}";
-    store.saveRequest(rel, m);
+    std::string relAfterSave = store.saveRequest(rel, m);
+    CHECK(!fs::exists(fs::path(root) / rel), "đổi method -> tên file cũ không còn");
+    CHECK(fs::exists(fs::path(root) / relAfterSave), "tên file mới tồn tại sau save");
+    CHECK(fs::path(relAfterSave).filename().string().rfind("http_post_", 0) == 0,
+          "tên file phản ánh method mới (http_post_)");
+    rel = relAfterSave;
     RequestModel m2 = store.loadRequest(rel);
     CHECK_EQ(m2.http.method, std::string("POST"), "method round-trip");
     CHECK_EQ(m2.http.url, std::string("{{baseUrl}}/users"), "url round-trip");
@@ -110,6 +155,27 @@ static void test_collection_store(const std::string& root) {
     bool foundFolder = false;
     for (const auto& c : tree.children) if (c.isFolder && c.name == "folder-a") foundFolder = true;
     CHECK(foundFolder, "tree có folder con");
+
+    // scanLevel: lazy 1 cấp — folder con KHÔNG nạp sẵn children; request leaf name đã chuẩn hoá.
+    std::vector<TreeNode> rootLevel = store.scanLevel("");
+    bool folderLazy = false, reqLabelOk = false;
+    for (const auto& c : rootLevel) {
+        if (c.isFolder && c.name == "folder-a") {
+            folderLazy = c.children.empty();    // §3: folder fold, con rỗng tới khi expand
+        } else if (!c.isFolder) {
+            // rel hiện là http_post_get-users -> label "Get users", badge "POST".
+            if (c.name == "Get users") { reqLabelOk = (c.methodOrType == "POST"); }
+        }
+    }
+    CHECK(folderLazy, "scanLevel: folder con chưa nạp (lazy)");
+    CHECK(reqLabelOk, "scanLevel: leaf name = de-slug, badge = method từ tên file");
+
+    // scanLevel trong folder: grpc leaf, name de-slug, KHÔNG kèm prefix.
+    std::vector<TreeNode> inFolder = store.scanLevel(folder);
+    bool grpcLeafOk = false;
+    for (const auto& c : inFolder)
+        if (!c.isFolder && c.requestType == RequestType::Grpc && c.name == "Get user") grpcLeafOk = true;
+    CHECK(grpcLeafOk, "scanLevel folder: grpc leaf name = 'Get user' (không prefix grpc_)");
 
     // move (drag-drop): chuyển request vào folder.
     std::string toMove = store.createRequest("", RequestType::Http, "Movable");
@@ -306,6 +372,7 @@ int main() {
     test_variable_resolver();
     test_field_codec();
     test_curl_export();
+    test_request_naming();
     test_collection_store(root);
     test_session_store(root);
     test_env_and_secret(root);

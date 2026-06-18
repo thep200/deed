@@ -10,4 +10,7 @@
 - (instancetype)initEditable:(BOOL)editable;          // tạo + cấu hình JSON + theme Platinum
 - (void)setFontName:(NSString *)name size:(CGFloat)size;
 - (BOOL)hasFocus;                                     // editor đang giữ con trỏ?
+// Giải phóng buffer text + undo (LAZY_TREE §8.3): xoá text rồi empty undo buffer.
+// Gọi khi chuyển/đóng request để không giữ nội dung cũ trong RAM.
+- (void)clearContents;
 @end

@@ -37,6 +37,7 @@
 @property(nonatomic, copy) NSString *badge;
 @property(nonatomic, copy) NSString *mark;   // mốc đầu dòng: HTTP method, hoặc "gRPC"
 @property(nonatomic) BOOL grpc;
+@property(nonatomic) BOOL childrenLoaded;   // lazy: con chỉ nạp khi expand (§3)
 @property(nonatomic, strong) NSMutableArray<TreeItem *> *children;
 @end
 @implementation TreeItem
@@ -61,20 +62,22 @@ static NSString *const kTreeDragType = @"com.example.deed.request";
 - (NSRect)frameOfOutlineCellAtRow:(NSInteger)row { return NSZeroRect; }
 @end
 
-static TreeItem *BuildTree(const core::TreeNode &n) {
+// Dựng MỘT item từ metadata 1 cấp — KHÔNG đệ quy vào con (lazy §3). Folder: con nạp
+// khi expand qua scanLevel; childrenLoaded=NO tới lúc đó.
+static TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     TreeItem *it = [TreeItem new];
     it.name = N(n.name);
     it.relPath = N(n.relPath);
     it.isFolder = n.isFolder;
     it.requestId = N(n.id);
     it.children = [NSMutableArray array];
+    it.childrenLoaded = NO;
     if (!n.isFolder) {
         it.grpc = (n.requestType == core::RequestType::Grpc);
         it.badge = [NSString stringWithFormat:@"%s %s", core::toString(n.requestType).c_str(), n.methodOrType.c_str()];
         // HTTP -> tên method (GET/POST...); gRPC -> "gRPC".
         it.mark = it.grpc ? @"gRPC" : N(n.methodOrType);
     }
-    for (const auto &c : n.children) [it.children addObject:BuildTree(c)];
     return it;
 }
 
@@ -151,7 +154,6 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     TreeItem *_renameItem;
     NSMutableArray<TreeItem *> *_roots;
     NSMutableSet<NSString *> *_expandedFolders; // relPath các folder đang mở (giữ qua reload)
-    BOOL _treeExpandInit;                        // lần nạp đầu -> mở hết
 
     // (3) request editor
     OS9SerratedInset *_reqInset;
@@ -726,8 +728,7 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
 - (void)openCollectionRoot:(NSString *)path {
     [self autosaveCurrent];
-    [_expandedFolders removeAllObjects];   // collection mới: reset trạng thái fold
-    _treeExpandInit = NO;
+    [_expandedFolders removeAllObjects];   // collection mới: reset trạng thái fold (mặc định fold)
     _root = path.UTF8String;
     core::EngineConfig cfg; cfg.collectionRoot = _root;
     _engine = std::make_unique<core::Engine>(cfg);
@@ -762,37 +763,37 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     return YES;
 }
 
+// Nạp con của 1 folder theo yêu cầu (1 lần readdir cấp đó — §3). Không đệ quy.
+- (void)loadChildrenOf:(TreeItem *)folder {
+    if (!folder || folder.childrenLoaded || !_engine) return;
+    [folder.children removeAllObjects];
+    try {
+        for (const auto &c : _engine->collection().scanLevel(folder.relPath.UTF8String))
+            [folder.children addObject:TreeItemFromNode(c)];
+    } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
+    folder.childrenLoaded = YES;
+}
+
 - (void)reloadTree {
     [_roots removeAllObjects];
     if (_engine) {
-        try {
-            core::TreeNode root = _engine->collection().scanTree();
-            for (const auto &c : root.children) [_roots addObject:BuildTree(c)];
+        try {                               // CHỈ quét cấp gốc; folder con fold mặc định (§3)
+            for (const auto &c : _engine->collection().scanLevel(""))
+                [_roots addObject:TreeItemFromNode(c)];
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
     }
     [_tree reloadData];
-    [self applyTreeExpansion];
+    [self restoreExpansion:_roots];         // giữ lại các folder user đang mở qua reload
 }
 
-// Mở/thu folder theo trạng thái đã lưu; lần đầu mở hết.
-- (void)applyTreeExpansion {
-    if (!_treeExpandInit) {
-        for (TreeItem *r in _roots) [_tree expandItem:r expandChildren:YES];
-        [self collectAllFolders:_roots];
-        _treeExpandInit = YES;
-        return;
-    }
-    [self restoreExpansion:_roots];
-}
-- (void)collectAllFolders:(NSArray<TreeItem *> *)items {
-    for (TreeItem *t in items)
-        if (t.isFolder) { [_expandedFolders addObject:t.relPath]; [self collectAllFolders:t.children]; }
-}
+// Mở lại các folder đang trong _expandedFolders (lazy: expandItem kích hoạt nạp con).
 - (void)restoreExpansion:(NSArray<TreeItem *> *)items {
     for (TreeItem *t in items) {
         if (!t.isFolder) continue;
-        if ([_expandedFolders containsObject:t.relPath]) [_tree expandItem:t];
-        [self restoreExpansion:t.children];
+        if ([_expandedFolders containsObject:t.relPath]) {
+            [_tree expandItem:t];           // -> numberOfChildren nạp con nếu cần
+            [self restoreExpansion:t.children];  // đệ quy vào con vừa nạp
+        }
     }
 }
 // Click vào folder -> fold/unfold.
@@ -869,11 +870,19 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 }
 
 - (NSInteger)outlineView:(NSOutlineView *)ov numberOfChildrenOfItem:(id)item {
-    return item == nil ? _roots.count : ((TreeItem *)item).children.count;
+    if (item == nil) return _roots.count;
+    TreeItem *t = item;
+    if (!t.isFolder) return 0;
+    if (!t.childrenLoaded) [self loadChildrenOf:t];   // lazy: chỉ nạp khi cần đếm/hiển thị
+    return t.children.count;
 }
 - (id)outlineView:(NSOutlineView *)ov child:(NSInteger)idx ofItem:(id)item {
-    return item == nil ? _roots[idx] : ((TreeItem *)item).children[idx];
+    if (item == nil) return _roots[idx];
+    TreeItem *t = item;
+    if (!t.childrenLoaded) [self loadChildrenOf:t];
+    return t.children[idx];
 }
+// Folder LUÔN expandable (rẻ, không đọc đĩa); request: không.
 - (BOOL)outlineView:(NSOutlineView *)ov isItemExpandable:(id)item { return ((TreeItem *)item).isFolder; }
 - (NSView *)outlineView:(NSOutlineView *)ov viewForTableColumn:(NSTableColumn *)col item:(id)item {
     TreeItem *t = item;
@@ -931,9 +940,29 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
 
 #pragma mark Load / populate / sync
 
+// Huỷ + vô hiệu request đang bay trước khi chuyển (§8.2 bước 2): callback đến trễ
+// sẽ bị drop vì handle khác _currentHandle.
+- (void)cancelInFlightForSwitch {
+    if (!_sending) return;
+    if (_engine) _engine->cancel(_currentHandle);
+    _currentHandle = 0;                 // invalidate handle
+    [self finishSending];
+}
+
 - (void)loadRequestAtRel:(NSString *)rel {
     if (!_engine) return;
-    if (_hasRequest && S(rel) != _currentRel) [self autosaveCurrent]; // tự lưu trước khi chuyển
+    BOOL switching = (_hasRequest && S(rel) != _currentRel);
+    if (switching) {
+        [self autosaveCurrent];         // 1. A dirty -> tự lưu
+        [self cancelInFlightForSwitch]; // 2. huỷ request đang bay của A
+        // 3. giải phóng buffer text của A (editor + response) + undo (§8.3)
+        [_reqText clearContents];
+        [_respText clearContents];
+        // §8.5: thả response của A — view KHÔNG giữ bản thứ hai (body lớn -> RAM về baseline).
+        [_respBuffers removeAllObjects];
+        _lastResp = core::ApiResponse{};
+        _hasResp = NO;
+    }
     try {
         _model = _engine->collection().loadRequest(rel.UTF8String);
         _currentRel = rel.UTF8String;
@@ -1037,8 +1066,9 @@ static TreeItem *BuildTree(const core::TreeNode &n) {
     if (!_hasRequest || !_engine || _currentRel.empty()) return;
     if (![self resyncCurrentRelById]) return;     // request đã bị xoá/đổi path -> không ghi lại path cũ
     if (![self syncModelFromEditors:YES]) { [self toastWarn:@"Autosave failed: invalid JSON"]; return; }
-    try { _engine->collection().saveRequest(_currentRel, _model); [_tree reloadData];
-          [self applyTreeExpansion]; }
+    try { _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // tên file có thể đổi (sync §4)
+          _engine->session().saveLastOpened(_currentRel);
+          [self reloadTree]; }
     catch (...) {}
 }
 
@@ -1235,7 +1265,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     _settingText.font = mono; _urlField.font = mono;
     _tree.font = [OS9Theme uiFont];
     [_tree reloadData];
-    [self applyTreeExpansion];
+    [self restoreExpansion:_roots];
     [_window.contentView setNeedsDisplay:YES];
 }
 
@@ -1355,7 +1385,8 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     [self updateTitle];
     [self relayout];
     try {
-        _engine->collection().saveRequest(_currentRel, _model);   // lưu ngay tại chỗ
+        _currentRel = _engine->collection().saveRequest(_currentRel, _model);   // lưu + sync tên file (§4)
+        _engine->session().saveLastOpened(_currentRel);
         [self reloadTree];
         [self toastOk:[NSString stringWithFormat:@"Replaced current request (%@)",
                        _model.type == core::RequestType::Grpc ? @"gRPC" : @"HTTP"]];
@@ -1434,7 +1465,8 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     if (![self resyncCurrentRelById]) { [self toastWarn:@"Request no longer exists"]; return; }
     if (![self syncModelFromEditors:NO]) return;
     try {
-        _engine->collection().saveRequest(_currentRel, _model);
+        _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // tên file đồng bộ method/name (§4)
+        _engine->session().saveLastOpened(_currentRel);
         [self reloadTree];
         [self toastOk:@"Saved"];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }

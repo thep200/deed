@@ -25,6 +25,7 @@ add_library(core STATIC
   src/codec/field_codec.cpp
   src/infra/fs_util.cpp
   src/persistence/collection_store.cpp
+  src/persistence/request_naming.cpp
   src/persistence/session_store.cpp
   src/persistence/secret_store.cpp
   src/persistence/environment_store.cpp

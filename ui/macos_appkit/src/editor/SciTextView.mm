@@ -51,6 +51,8 @@
     [self applyPlatinumTheme];
     [_sci setEditable:_editable];
     [self msg:SCI_SETREADONLY w:(_editable ? 0 : 1) l:0];
+    // Response (read-only): KHÔNG tích undo -> response lớn không phình undo buffer (§8.3).
+    if (!_editable) [self msg:SCI_SETUNDOCOLLECTION w:0 l:0];
 
     // Scrollbar RETRO: dùng OS9Scroller (như cây thư mục) thay scroller hệ thống.
     // Overlay + autohide -> ẩn khi không cuộn, chỉ hiện lúc có scroll event.
@@ -117,8 +119,19 @@
     [self msg:SCI_SETREADONLY w:0 l:0];            // mở khoá để set được
     [_sci setString:string ?: @""];
     [self msg:SCI_SETREADONLY w:(_editable ? 0 : 1) l:0];
+    [self msg:SCI_EMPTYUNDOBUFFER w:0 l:0];        // §8.3: bỏ lịch sử undo -> không giữ bản text cũ
     [self msg:SCI_SETSCROLLWIDTH w:1 l:0];         // reset scroll width
     [self msg:SCI_GOTOPOS w:0 l:0];
+    _programmatic = NO;
+}
+
+- (void)clearContents {
+    _programmatic = YES;
+    [self msg:SCI_SETREADONLY w:0 l:0];
+    [self msg:SCI_CLEARALL w:0 l:0];               // xoá toàn bộ text
+    [self msg:SCI_SETREADONLY w:(_editable ? 0 : 1) l:0];
+    [self msg:SCI_EMPTYUNDOBUFFER w:0 l:0];        // xoá undo -> giải phóng bản sao nội dung cũ
+    [self msg:SCI_SETSCROLLWIDTH w:1 l:0];
     _programmatic = NO;
 }
 
