@@ -135,9 +135,11 @@ struct Engine::Impl {
     EnvironmentStore environments;
     AppConfigStore appConfig;
 
-    std::mutex cacheMu;                       // bảo vệ rebuild/đổi con trỏ cache
+    std::mutex cacheMu;                       // bảo vệ rebuild/đổi con trỏ cache (chỉ giữ khi copy con trỏ)
     CacheConfig cacheCfg;
-    std::unique_ptr<ResponseCache> cache;     // null khi tắt cache
+    // shared_ptr: worker copy con trỏ ra NGOÀI lock rồi thao tác (I/O đĩa) -> cacheMu không bị
+    // giữ suốt I/O; rebuild đổi con trỏ vẫn an toàn vì bản cũ sống tới khi worker xong (§1.3).
+    std::shared_ptr<ResponseCache> cache;     // null khi tắt cache
 
     SenderRegistry registry;
 
@@ -298,53 +300,62 @@ void Engine::cancel(RequestHandle handle) {
 }
 
 // --- Response cache ---
+// Mẫu chung: copy shared_ptr cache RA NGOÀI lock (giữ cacheMu chỉ trong ngoặc), rồi thao tác I/O
+// trên bản copy. Bản cache cũ sống tới khi mọi shared_ptr thả -> rebuild song song an toàn (§1.3).
 void Engine::putResponse(const std::string& id, const ApiResponse& resp) {
-    std::lock_guard<std::mutex> lk(impl_->cacheMu);
-    if (!impl_->cache || id.empty()) return;
+    if (id.empty()) return;
+    std::shared_ptr<ResponseCache> c;
+    { std::lock_guard<std::mutex> lk(impl_->cacheMu); c = impl_->cache; }
+    if (!c) return;
     ResponseRecord rec;
     rec.isError = false;
     rec.response = resp;
     rec.receivedAt = nowEpochMs();
     rec.requestRevision = revisionOf(resp.resolvedRequestDump);
-    impl_->cache->put(id, std::move(rec));
+    c->put(id, std::move(rec));
 }
 
 void Engine::putError(const std::string& id, const ApiError& err) {
-    std::lock_guard<std::mutex> lk(impl_->cacheMu);
-    if (!impl_->cache || id.empty()) return;
+    if (id.empty()) return;
+    std::shared_ptr<ResponseCache> c;
+    { std::lock_guard<std::mutex> lk(impl_->cacheMu); c = impl_->cache; }
+    if (!c) return;
     ResponseRecord rec;
     rec.isError = true;
     rec.errorKind = err.kind;
     rec.errorMessage = err.message;
     rec.receivedAt = nowEpochMs();
-    impl_->cache->put(id, std::move(rec));
+    c->put(id, std::move(rec));
 }
 
 std::optional<ResponseRecord> Engine::getResponse(const std::string& id) {
-    std::lock_guard<std::mutex> lk(impl_->cacheMu);
-    if (!impl_->cache) return std::nullopt;
-    return impl_->cache->get(id);
+    std::shared_ptr<ResponseCache> c;
+    { std::lock_guard<std::mutex> lk(impl_->cacheMu); c = impl_->cache; }
+    if (!c) return std::nullopt;
+    return c->get(id);
 }
 
 void Engine::removeResponse(const std::string& id) {
-    std::lock_guard<std::mutex> lk(impl_->cacheMu);
-    if (impl_->cache) impl_->cache->remove(id);
+    std::shared_ptr<ResponseCache> c;
+    { std::lock_guard<std::mutex> lk(impl_->cacheMu); c = impl_->cache; }
+    if (c) c->remove(id);
 }
 
 void Engine::reloadCacheConfig() {
-    bool wasPersist, wasEnabled;
+    std::shared_ptr<ResponseCache> c;
+    CacheConfig fresh;
     {
         std::lock_guard<std::mutex> lk(impl_->cacheMu);
-        wasPersist = impl_->cacheCfg.persist;
-        wasEnabled = impl_->cacheCfg.enabled;
-        CacheConfig fresh = buildCacheConfig(impl_->appConfig.load(), impl_->cacheLimits);
+        bool wasPersist = impl_->cacheCfg.persist;
+        bool wasEnabled = impl_->cacheCfg.enabled;
+        fresh = buildCacheConfig(impl_->appConfig.load(), impl_->cacheLimits);
         // Đổi cap/threshold tại chỗ nếu cấu trúc tầng không đổi (giữ L1) -> evict ngay.
         if (impl_->cache && fresh.enabled == wasEnabled && fresh.persist == wasPersist) {
             impl_->cacheCfg = fresh;
-            impl_->cache->onConfigChanged(fresh);
-            return;
+            c = impl_->cache;            // copy con trỏ; gọi onConfigChanged NGOÀI lock (evict đĩa)
         }
     }
+    if (c) { c->onConfigChanged(fresh); return; }
     // Bật/tắt cache hoặc đổi persist (gắn/tháo L2) -> dựng lại.
     impl_->rebuildCache();
 }

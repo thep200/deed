@@ -30,10 +30,24 @@ add_executable(ApiClientApp MACOSX_BUNDLE
   src/editor/SciTextView.mm
   src/editor/JsonEditorBehavior.mm
   src/dialogs/OS9Dialog.mm
+  src/windows/TreeViews.mm
   src/windows/MainWindowController.mm
+  src/windows/MainWindowController+Tree.mm
+  src/windows/MainWindowController+Editor.mm
+  src/windows/MainWindowController+Send.mm
+  src/windows/MainWindowController+Config.mm
   src/windows/EnvWindowController.mm
   ${DEED_ENV_SRC}
 )
+
+# --- Debug tools (StressRunner — STRESS_TEST.md §5/§9). KHÔNG ship release. ---
+option(DEED_DEBUG_TOOLS "Compile in-app debug tools (StressRunner)" OFF)
+if(DEED_DEBUG_TOOLS)
+  target_sources(ApiClientApp PRIVATE
+    src/debug/StressRunner.mm
+    src/windows/MainWindowController+Stress.mm)
+  target_compile_definitions(ApiClientApp PRIVATE DEED_DEBUG_TOOLS=1)
+endif()
 
 # .env -> Contents/Resources/.env
 set_source_files_properties(${DEED_ENV_SRC} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)

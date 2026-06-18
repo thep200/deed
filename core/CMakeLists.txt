@@ -24,6 +24,7 @@ add_library(core STATIC
   src/codec/json_codec.cpp
   src/codec/field_codec.cpp
   src/infra/fs_util.cpp
+  src/infra/mem_probe.cpp
   src/persistence/collection_store.cpp
   src/persistence/request_naming.cpp
   src/cache/ram_cache_driver.cpp

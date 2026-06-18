@@ -13,4 +13,8 @@
 // Giải phóng buffer text + undo (LAZY_TREE §8.3): xoá text rồi empty undo buffer.
 // Gọi khi chuyển/đóng request để không giữ nội dung cũ trong RAM.
 - (void)clearContents;
+// Teardown an toàn (CRASH_FIX_LIFECYCLE §2.2): resign input context + gỡ delegate Scintilla
+// (unsafe_unretained) trước khi huỷ -> không gửi notification tới object đã chết. Idempotent;
+// cũng được gọi tự động trong dealloc.
+- (void)teardown;
 @end

@@ -1,4 +1,5 @@
 #import "windows/EnvWindowController.h"
+#import "app/OS9Lifecycle.h"
 #import "dialogs/OS9Dialog.h"
 
 #import "theme/OS9Theme.h"
@@ -123,6 +124,9 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)reload {
+    // §2.3: commit + nhả field editor của cell đang sửa trước khi rebuild bảng (reloadData phá
+    // cell -> field editor treo input context của ô đã chết).
+    OS9SafeEndEditing(self.view.window, nil);
     [self view];
     [self loadFromStore];
     [self rebuildColumns];
@@ -253,6 +257,8 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)save {
+    // §2.3: commit cell đang sửa (nếu có) để giá trị mới nhất được ghi và field editor được nhả.
+    OS9SafeEndEditing(self.view.window, nil);
     for (NSString *env in _dirtyEnvs) {
         core::Environment e;
         e.name = env.UTF8String;

@@ -1,4 +1,5 @@
 #import "editor/SciTextView.h"
+#import "app/OS9Lifecycle.h"
 #import "theme/OS9Theme.h"
 #import "widgets/OS9Scroller.h"
 #import "editor/JsonEditorBehavior.h"
@@ -30,6 +31,17 @@
 }
 
 - (void)msg:(unsigned int)m w:(uptr_t)w l:(sptr_t)l { [_sci message:m wParam:w lParam:l]; }
+
+// §2.2: deactivate input context của Scintilla rồi NGẮT delegate (unsafe_unretained) TRƯỚC khi
+// view bị huỷ. Nếu không, ScintillaView có thể bắn notification vào self đã giải phóng, hoặc
+// updateWindows kích hoạt lại input context của content view đã chết -> use-after-free.
+- (void)teardown {
+    OS9SafeEndEditing(self.window, self);
+    _sci.delegate = nil;   // unsafe_unretained -> phải nil thủ công, ARC không lo hộ
+    _behavior = nil;       // thả hành vi JSON (giữ con trỏ ScintillaView)
+}
+
+- (void)dealloc { [self teardown]; }
 
 - (void)configure {
     // Lexer JSON + lề số dòng + idle styling (chi phí ~ vùng nhìn thấy).

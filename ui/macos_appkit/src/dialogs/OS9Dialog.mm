@@ -1,5 +1,6 @@
 #import "dialogs/OS9Dialog.h"
 
+#import "app/OS9Lifecycle.h"
 #import "theme/OS9Theme.h"
 #import "widgets/OS9BevelButton.h"
 
@@ -315,6 +316,7 @@ static const CGFloat kFieldH = 22;
                                                 backing:NSBackingStoreBuffered defer:NO];
     _win.opaque = NO;
     _win.hasShadow = YES;
+    _win.releasedWhenClosed = NO;   // §2.3: controller giữ strong ref suốt modal; ARC quản vòng đời
     _win.level = NSModalPanelWindowLevel;
     __weak OS9DialogController *ws = self;
     _win.onReturn = ^{ [ws fireDefault]; };
@@ -330,6 +332,8 @@ static const CGFloat kFieldH = 22;
     [_win makeKeyAndOrderFront:nil];
     if (fr) { [_win makeFirstResponder:fr]; if ([fr isKindOfClass:[NSTextField class]]) [(NSTextField *)fr selectText:nil]; }
     NSInteger code = [NSApp runModalForWindow:_win];
+    // §2.3: deactivate input context của ô nhập (rename) KHI window còn sống, RỒI mới đóng.
+    OS9SafeEndEditing(_win, _field);
     [_win orderOut:nil];
     return code;
 }

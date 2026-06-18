@@ -1,7 +1,9 @@
 #include "cache/disk_cache_driver.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -38,6 +40,11 @@ DiskCacheDriver::DiskCacheDriver(std::string dir, std::uint64_t capBytes)
     loadIndex();
 }
 
+DiskCacheDriver::~DiskCacheDriver() {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (dirty_) persistIndex();     // flush atime mới nhất (get chỉ cập nhật RAM — §1.1)
+}
+
 void DiskCacheDriver::loadIndex() {
     std::string txt;
     if (!fsutil::readFile((fs::path(dir_) / kIndexFile).string(), txt)) return;
@@ -57,7 +64,17 @@ void DiskCacheDriver::loadIndex() {
             used_ += ie.bytes;
             index_[id] = ie;
         }
-    } catch (...) { index_.clear(); used_ = 0; tick_ = 0; }
+        // Dựng lại LRU list theo atime (mới nhất ở front) -> evict O(1) sau này (§1.2).
+        std::vector<std::pair<std::int64_t, std::string>> byAtime;
+        byAtime.reserve(index_.size());
+        for (const auto& [id, e] : index_) byAtime.emplace_back(e.atime, id);
+        std::sort(byAtime.begin(), byAtime.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; }); // giảm dần
+        for (const auto& [atime, id] : byAtime) {
+            lru_.push_back(id);
+            index_[id].lru = std::prev(lru_.end());
+        }
+    } catch (...) { index_.clear(); lru_.clear(); used_ = 0; tick_ = 0; }
 }
 
 void DiskCacheDriver::persistIndex() const {
@@ -65,20 +82,24 @@ void DiskCacheDriver::persistIndex() const {
     for (const auto& [id, e] : index_)
         entries[id] = {{"bytes", e.bytes}, {"receivedAt", e.receivedAt}, {"atime", e.atime}};
     nlohmann::json j{{"tick", tick_}, {"entries", entries}};
-    try { fsutil::writeFileAtomic((fs::path(dir_) / kIndexFile).string(), j.dump()); }
+    try { fsutil::writeFileAtomic((fs::path(dir_) / kIndexFile).string(), j.dump()); dirty_ = false; }
     catch (...) { /* index là cache dẫn xuất; lỗi ghi -> bỏ qua */ }
 }
 
+void DiskCacheDriver::touch(IndexEntry& e, const std::string& id) {
+    lru_.erase(e.lru);
+    lru_.push_front(id);
+    e.lru = lru_.begin();
+}
+
 void DiskCacheDriver::evictToFit() {
-    while (used_ > cap_ && !index_.empty()) {
-        // chọn entry atime nhỏ nhất (lâu truy cập nhất).
-        auto victim = index_.begin();
-        for (auto it = index_.begin(); it != index_.end(); ++it)
-            if (it->second.atime < victim->second.atime) victim = it;
+    while (used_ > cap_ && !lru_.empty()) {
+        const std::string victim = lru_.back();     // back = lâu truy cập nhất (O(1))
+        auto it = index_.find(victim);
         std::error_code ec;
-        fs::remove(fileFor(victim->first), ec);
-        used_ -= victim->second.bytes;
-        index_.erase(victim);
+        fs::remove(fileFor(victim), ec);
+        if (it != index_.end()) { used_ -= it->second.bytes; index_.erase(it); }
+        lru_.pop_back();
     }
 }
 
@@ -89,14 +110,16 @@ std::optional<ResponseRecord> DiskCacheDriver::get(const std::string& id) {
     std::string txt;
     if (!fsutil::readFile(fileFor(id), txt)) {        // file mất -> dọn index
         used_ -= it->second.bytes;
+        lru_.erase(it->second.lru);
         index_.erase(it);
-        persistIndex();
+        persistIndex();                               // thay đổi cấu trúc -> ghi ngay
         return std::nullopt;
     }
     try {
         ResponseRecord rec = codec::responseRecordFromJson(nlohmann::json::parse(txt));
-        it->second.atime = ++tick_;                   // last-access -> LRU
-        persistIndex();
+        it->second.atime = ++tick_;                   // last-access -> LRU (chỉ RAM)
+        touch(it->second, id);
+        dirty_ = true;                                // §1.1: KHÔNG ghi index mỗi lần đọc; flush sau
         return rec;
     } catch (...) { return std::nullopt; }
 }
@@ -108,6 +131,7 @@ bool DiskCacheDriver::put(const std::string& id, const ResponseRecord& r, std::u
         if (old != index_.end()) {
             std::error_code ec; fs::remove(fileFor(id), ec);
             used_ -= old->second.bytes;
+            lru_.erase(old->second.lru);
             index_.erase(old);
             persistIndex();
         }
@@ -116,11 +140,17 @@ bool DiskCacheDriver::put(const std::string& id, const ResponseRecord& r, std::u
     try { fsutil::writeFileAtomic(fileFor(id), codec::toJson(r).dump()); }
     catch (...) { return false; }
     auto it = index_.find(id);
-    if (it != index_.end()) used_ -= it->second.bytes;   // ghi đè: trừ size cũ
+    if (it != index_.end()) {                         // ghi đè: trừ size cũ + gỡ node LRU cũ
+        used_ -= it->second.bytes;
+        lru_.erase(it->second.lru);
+        index_.erase(it);
+    }
+    lru_.push_front(id);
     IndexEntry ie;
     ie.bytes = bytes;
     ie.receivedAt = r.receivedAt;
     ie.atime = ++tick_;
+    ie.lru = lru_.begin();
     used_ += bytes;
     index_[id] = ie;
     evictToFit();                                     // bound disk
@@ -133,13 +163,19 @@ void DiskCacheDriver::remove(const std::string& id) {
     auto it = index_.find(id);
     std::error_code ec;
     fs::remove(fileFor(id), ec);
-    if (it != index_.end()) { used_ -= it->second.bytes; index_.erase(it); persistIndex(); }
+    if (it != index_.end()) {
+        used_ -= it->second.bytes;
+        lru_.erase(it->second.lru);
+        index_.erase(it);
+        persistIndex();
+    }
 }
 
 void DiskCacheDriver::clear() {
     std::lock_guard<std::mutex> lk(mu_);
     for (const auto& [id, e] : index_) { std::error_code ec; fs::remove(fileFor(id), ec); }
     index_.clear();
+    lru_.clear();
     used_ = 0;
     persistIndex();
 }

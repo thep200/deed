@@ -1,6 +1,10 @@
 # Build & packaging output
 /build/
+/build-*/
 /dist/
+
+# Stress harness artifacts (STRESS_TEST.md)
+/stress-artifacts/
 
 # vcpkg manifest mode (rebuilt tu vcpkg.json)
 /vcpkg_installed/
