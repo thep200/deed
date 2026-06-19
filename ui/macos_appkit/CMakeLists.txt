@@ -34,6 +34,7 @@ add_executable(deed MACOSX_BUNDLE
   src/widgets/OS9Label.mm
   src/widgets/OS9StyleMenu.mm
   src/widgets/OS9Dropdown.mm
+  src/widgets/OS9EnvGrid.mm
   src/editor/SciTextView.mm
   src/editor/JsonEditorBehavior.mm
   src/dialogs/OS9Dialog.mm

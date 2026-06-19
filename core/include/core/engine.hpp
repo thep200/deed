@@ -50,7 +50,6 @@ public:
     CollectionStore& collection();
     SessionStore& session();
     EnvironmentStore& environments();
-    SecretStore& secrets();
     AppConfigStore& appConfig();
 
     // --- Gửi (async, trả handle ngay) ---
@@ -85,7 +84,7 @@ public:
     // Resolve {{var}} theo env active (Global + active) để preview.
     std::string resolvePreview(const std::string& tpl) const;
 
-    // Build map biến hiệu lực (Global <- active env), secret lấy qua SecretStore.
+    // Build map biến hiệu lực (Global <- active env), value plaintext từ EnvironmentStore.
     std::map<std::string, std::string> activeVars() const;
 
     // Resolve toàn bộ model -> ResolvedRequest (áp env + merge settings precedence + auth).

@@ -1,9 +1,8 @@
 #import "windows/EnvWindowController.h"
 #import "app/OS9Lifecycle.h"
 #import "dialogs/OS9Dialog.h"
-
-#import "theme/OS9Theme.h"
-#import "widgets/OS9BevelButton.h"
+#import "widgets/OS9EnvGrid.h"
+#import "widgets/OS9Toast.h"
 
 #include <string>
 #include <vector>
@@ -12,29 +11,24 @@
 #include "core/persistence/stores.hpp"
 #include "core/types.hpp"
 
+// Key nội bộ của cột base. UI hiển thị "Local" (SPEC §T4 / Q2) nhưng key vẫn "Global"
+// để KHÔNG đổi ngữ nghĩa resolve {{var}} ở core.
+static NSString *const kBaseEnv = @"Global";
+static NSString *const kBaseLabel = @"Local";
+
 static NSString *Key(NSString *env, NSString *alias) {
     return [NSString stringWithFormat:@"%@\t%@", env, alias];
 }
 
-@interface EnvFlipped : NSView
-@end
-@implementation EnvFlipped
-- (BOOL)isFlipped { return YES; }
-@end
-
 @implementation EnvWindowController {
     core::Engine *_engine; // không sở hữu
-    NSView *_container;
-    NSView *_delStrip;      // hàng nút ✕ xoá env (trừ Global)
-    NSView *_btnRow;        // hàng +New/+Alias/-Alias/ToggleSecret
-    NSTableView *_table;
-    NSScrollView *_scroll;
+    OS9EnvGrid *_grid;
 
-    NSMutableArray<NSString *> *_envNames;      // Global đầu tiên
+    NSMutableArray<NSString *> *_envNames;  // index 0 = kBaseEnv
     NSMutableArray<NSString *> *_aliases;
-    NSMutableArray<NSNumber *> *_secret;        // per alias
     NSMutableDictionary<NSString *, NSString *> *_values; // Key(env,alias) -> value
     NSMutableSet<NSString *> *_dirtyEnvs;
+    NSMutableSet<NSString *> *_removedEnvs; // env cần xoá file lúc save (rename/delete)
 }
 
 - (instancetype)initWithEngine:(core::Engine *)engine {
@@ -42,112 +36,49 @@ static NSString *Key(NSString *env, NSString *alias) {
         _engine = engine;
         _envNames = [NSMutableArray array];
         _aliases = [NSMutableArray array];
-        _secret = [NSMutableArray array];
         _values = [NSMutableDictionary dictionary];
         _dirtyEnvs = [NSMutableSet set];
+        _removedEnvs = [NSMutableSet set];
     }
     return self;
 }
 
 - (NSView *)view {
-    if (_container) return _container;
-
-    _container = [[EnvFlipped alloc] initWithFrame:NSMakeRect(0, 0, 700, 360)];
-
-    _delStrip = [[EnvFlipped alloc] initWithFrame:NSMakeRect(0, 0, 700, 24)];
-    [_container addSubview:_delStrip];
-
-    _scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 28, 700, 300)];
-    _scroll.hasVerticalScroller = YES;
-    _scroll.hasHorizontalScroller = YES;
-    _scroll.autohidesScrollers = YES;
-    _scroll.scrollerStyle = NSScrollerStyleOverlay;
-    _scroll.borderType = NSBezelBorder;
-    _table = [[NSTableView alloc] initWithFrame:_scroll.bounds];
-    _table.dataSource = self;
-    _table.delegate = self;
-    _table.usesAlternatingRowBackgroundColors = YES;
-    _table.allowsMultipleSelection = YES;
-    _table.font = [OS9Theme uiFont];
-    _scroll.documentView = _table;
-    [_container addSubview:_scroll];
-
-    _btnRow = [[EnvFlipped alloc] initWithFrame:NSMakeRect(0, 332, 700, 26)];
-    OS9BevelButton *newEnv = [[OS9BevelButton alloc] initWithTitle:@"+ New Env" target:self action:@selector(addEnv:)];
-    newEnv.frame = NSMakeRect(0, 0, 90, 24);
-    OS9BevelButton *addAlias = [[OS9BevelButton alloc] initWithTitle:@"+ Alias" target:self action:@selector(addAlias:)];
-    addAlias.frame = NSMakeRect(96, 0, 80, 24);
-    OS9BevelButton *delAlias = [[OS9BevelButton alloc] initWithTitle:@"– Alias" target:self action:@selector(delAlias:)];
-    delAlias.frame = NSMakeRect(182, 0, 80, 24);
-    OS9BevelButton *toggleSecret = [[OS9BevelButton alloc] initWithTitle:@"Toggle Secret" target:self action:@selector(toggleSecret:)];
-    toggleSecret.frame = NSMakeRect(268, 0, 110, 24);
-    for (NSView *v in @[ newEnv, addAlias, delAlias, toggleSecret ]) [_btnRow addSubview:v];
-    [_container addSubview:_btnRow];
-
-    return _container;
+    if (_grid) return _grid;
+    _grid = [[OS9EnvGrid alloc] initWithFrame:NSMakeRect(0, 0, 700, 360)];
+    _grid.delegate = self;
+    _grid.baseDisplayName = kBaseLabel;
+    return _grid;
 }
 
-- (void)layout {
-    if (!_container) return;
-    CGFloat W = _container.bounds.size.width, H = _container.bounds.size.height;
-    _delStrip.frame = NSMakeRect(0, 0, W, 24);
-    _btnRow.frame = NSMakeRect(0, H - 26, W, 26);
-    _scroll.frame = NSMakeRect(0, 28, W, H - 28 - 30);
-}
+- (void)layout { [_grid layout]; }
 
-// Dựng lại hàng nút ✕ xoá env (mỗi env thường một nút; Global không có).
-- (void)rebuildDeleteStrip {
-    for (NSView *v in [_delStrip.subviews copy]) [v removeFromSuperview];
-    CGFloat x = 0;
-    for (NSString *env in _envNames) {
-        if ([env isEqualToString:@"Global"]) continue;
-        OS9BevelButton *b = [[OS9BevelButton alloc] initWithTitle:[NSString stringWithFormat:@"✕ %@", env]
-                                                           target:self action:@selector(deleteEnvClicked:)];
-        b.frame = NSMakeRect(x, 0, 96, 22);
-        b.identifier = env;
-        [_delStrip addSubview:b];
-        x += 100;
-    }
-}
-
-- (void)deleteEnvClicked:(OS9BevelButton *)sender {
-    NSString *env = sender.identifier;
-    if (!env || [env isEqualToString:@"Global"]) return;
-    NSInteger r = [OS9Dialog confirmWithTitle:@"Delete environment"
-                                      message:[NSString stringWithFormat:@"Delete environment \"%@\"? This cannot be undone.", env]
-                                      buttons:@[ @"Cancel", @"Delete" ]
-                                defaultButton:1 cancelButton:0 icon:OS9AlertCaution
-                                       parent:self.view.window];
-    if (r != 1) return;
-    try { _engine->environments().remove(env.UTF8String); } catch (...) {}
-    [self reload];
+- (void)pushToGrid {
+    _grid.envNames = _envNames;
+    _grid.aliases = _aliases;
+    [_grid reloadData];
 }
 
 - (void)reload {
-    // §2.3: commit + nhả field editor của cell đang sửa trước khi rebuild bảng (reloadData phá
-    // cell -> field editor treo input context của ô đã chết).
-    OS9SafeEndEditing(self.view.window, nil);
+    OS9SafeEndEditing(_grid.window, nil);
     [self view];
     [self loadFromStore];
-    [self rebuildColumns];
-    [self rebuildDeleteStrip];
-    [self layout];
-    [_table reloadData];
+    [self pushToGrid];
 }
 
 - (void)loadFromStore {
     [_envNames removeAllObjects];
     [_aliases removeAllObjects];
-    [_secret removeAllObjects];
     [_values removeAllObjects];
     [_dirtyEnvs removeAllObjects];
+    [_removedEnvs removeAllObjects];
+    if (!_engine) return;
 
-    [_envNames addObject:@"Global"];
+    [_envNames addObject:kBaseEnv];
     for (const auto &n : _engine->environments().list())
-        if (n != "Global") [_envNames addObject:[NSString stringWithUTF8String:n.c_str()]];
+        if (n != kBaseEnv.UTF8String) [_envNames addObject:[NSString stringWithUTF8String:n.c_str()]];
 
     NSMutableArray<NSString *> *aliasOrder = [NSMutableArray array];
-    NSMutableDictionary<NSString *, NSNumber *> *secretByAlias = [NSMutableDictionary dictionary];
     for (NSString *env in _envNames) {
         core::Environment e;
         try { e = _engine->environments().load(env.UTF8String); }
@@ -155,138 +86,160 @@ static NSString *Key(NSString *env, NSString *alias) {
         for (const auto &k : e.keys) {
             NSString *alias = [NSString stringWithUTF8String:k.key.c_str()];
             if (![aliasOrder containsObject:alias]) [aliasOrder addObject:alias];
-            if (k.secret) secretByAlias[alias] = @YES;
             _values[Key(env, alias)] = [NSString stringWithUTF8String:k.value.c_str()];
         }
     }
-    for (NSString *a in aliasOrder) {
-        [_aliases addObject:a];
-        [_secret addObject:secretByAlias[a] ?: @NO];
-    }
-}
-
-- (void)rebuildColumns {
-    while (_table.tableColumns.count) [_table removeTableColumn:_table.tableColumns.lastObject];
-    NSTableColumn *aliasCol = [[NSTableColumn alloc] initWithIdentifier:@"__alias__"];
-    aliasCol.title = @"Alias";
-    aliasCol.width = 160;
-    [_table addTableColumn:aliasCol];
-    for (NSString *env in _envNames) {
-        NSTableColumn *c = [[NSTableColumn alloc] initWithIdentifier:env];
-        c.title = [env isEqualToString:@"Global"] ? @"Global 🔒" : env;
-        c.width = 130;
-        [_table addTableColumn:c];
-    }
-}
-
-#pragma mark Data source (cell-based)
-
-- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return _aliases.count; }
-
-- (id)tableView:(NSTableView *)tv objectValueForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
-    BOOL isSecret = _secret[row].boolValue;
-    if ([col.identifier isEqualToString:@"__alias__"])
-        return [NSString stringWithFormat:@"%@%@", isSecret ? @"🔒 " : @"", _aliases[row]];
-    NSString *v = _values[Key(col.identifier, _aliases[row])] ?: @"";
-    if (isSecret && v.length) return @"••••";
-    return v;
-}
-
-- (void)tableView:(NSTableView *)tv setObjectValue:(id)obj forTableColumn:(NSTableColumn *)col row:(NSInteger)row {
-    NSString *val = [obj description];
-    if ([col.identifier isEqualToString:@"__alias__"]) {
-        NSString *clean = [val stringByReplacingOccurrencesOfString:@"🔒 " withString:@""];
-        NSString *old = _aliases[row];
-        if ([clean isEqualToString:old] || clean.length == 0) return;
-        for (NSString *env in _envNames) {
-            NSString *ov = _values[Key(env, old)];
-            if (ov) { _values[Key(env, clean)] = ov; [_values removeObjectForKey:Key(env, old)]; [_dirtyEnvs addObject:env]; }
-        }
-        _aliases[row] = clean;
-        return;
-    }
-    if ([val isEqualToString:@"••••"]) return;
-    _values[Key(col.identifier, _aliases[row])] = val;
-    [_dirtyEnvs addObject:col.identifier];
-}
-
-- (void)tableView:(NSTableView *)tv willDisplayCell:(id)cell forTableColumn:(NSTableColumn *)col row:(NSInteger)row {
-    if ([cell respondsToSelector:@selector(setFont:)]) [cell setFont:[OS9Theme uiFont]];
-}
-
-#pragma mark Actions
-
-- (void)addEnv:(id)sender {
-    NSString *name = [self prompt:@"New environment name" def:@"Dev"];
-    if (!name || name.length == 0) return;
-    if ([_envNames containsObject:name]) { NSBeep(); return; }
-    [_envNames addObject:name];
-    [_dirtyEnvs addObject:name];
-    [self rebuildColumns];
-    [_table reloadData];
-}
-
-- (void)addAlias:(id)sender {
-    NSString *name = [self prompt:@"New alias name" def:@"baseUrl"];
-    if (!name || name.length == 0) return;
-    if ([_aliases containsObject:name]) { NSBeep(); return; }
-    [_aliases addObject:name];
-    [_secret addObject:@NO];
-    for (NSString *env in _envNames) { _values[Key(env, name)] = @""; [_dirtyEnvs addObject:env]; }
-    [_table reloadData];
-}
-
-- (void)delAlias:(id)sender {
-    NSIndexSet *sel = _table.selectedRowIndexes;
-    if (sel.count == 0) return;
-    [[sel mutableCopy] enumerateIndexesWithOptions:NSEnumerationReverse usingBlock:^(NSUInteger idx, BOOL *stop) {
-        NSString *alias = _aliases[idx];
-        for (NSString *env in _envNames) { [_values removeObjectForKey:Key(env, alias)]; [_dirtyEnvs addObject:env]; }
-        [_aliases removeObjectAtIndex:idx];
-        [_secret removeObjectAtIndex:idx];
-    }];
-    [_table reloadData];
-}
-
-- (void)toggleSecret:(id)sender {
-    NSInteger row = _table.selectedRow;
-    if (row < 0) return;
-    _secret[row] = @(!_secret[row].boolValue);
-    for (NSString *env in _envNames) [_dirtyEnvs addObject:env];
-    [_table reloadData];
+    [_aliases addObjectsFromArray:aliasOrder];
 }
 
 - (void)save {
-    // §2.3: commit cell đang sửa (nếu có) để giá trị mới nhất được ghi và field editor được nhả.
-    OS9SafeEndEditing(self.view.window, nil);
+    if (!_engine) return;
+    OS9SafeEndEditing(_grid.window, nil);
+    [_grid commitEditing];
     for (NSString *env in _dirtyEnvs) {
+        if ([_removedEnvs containsObject:env]) continue;
         core::Environment e;
         e.name = env.UTF8String;
-        for (NSUInteger i = 0; i < _aliases.count; i++) {
+        for (NSString *alias in _aliases) {
             core::EnvKey k;
-            k.key = _aliases[i].UTF8String;
-            k.secret = _secret[i].boolValue;
+            k.key = alias.UTF8String;
             k.enabled = true;
-            k.value = (_values[Key(env, _aliases[i])] ?: @"").UTF8String;
+            k.value = (_values[Key(env, alias)] ?: @"").UTF8String;
             e.keys.push_back(k);
         }
         try { _engine->environments().save(e); } catch (...) {}
     }
+    for (NSString *env in _removedEnvs) {
+        try { _engine->environments().remove(env.UTF8String); } catch (...) {}
+    }
     [_dirtyEnvs removeAllObjects];
+    [_removedEnvs removeAllObjects];
 }
 
-- (NSString *)prompt:(NSString *)title def:(NSString *)def {
-    return [OS9Dialog promptWithTitle:title
-                              message:nil
-                          defaultText:(def ?: @"")
-                          placeholder:nil
-                             okButton:@"OK"
-                         cancelButton:@"Cancel"
-                             validate:^NSString *(NSString *s) {
-        NSString *t = [s stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-        return t.length ? nil : @"Name cannot be empty";
+#pragma mark OS9EnvGridDelegate
+
+- (NSString *)envGrid:(OS9EnvGrid *)g valueForAlias:(NSString *)alias env:(NSString *)env {
+    return _values[Key(env, alias)] ?: @"";
+}
+
+- (void)envGrid:(OS9EnvGrid *)g setValue:(NSString *)val forAlias:(NSString *)alias env:(NSString *)env {
+    _values[Key(env, alias)] = val;
+    [_dirtyEnvs addObject:env];
+    [_removedEnvs removeObject:env];
+    [g reloadData];
+}
+
+- (void)envGrid:(OS9EnvGrid *)g renameAlias:(NSString *)oldAlias to:(NSString *)newAlias {
+    if ([_aliases containsObject:newAlias]) {
+        [self errorDialog:[NSString stringWithFormat:@"Alias \"%@\" đã tồn tại.", newAlias]];
+        return;
     }
-                               parent:self.view.window];
+    for (NSString *env in _envNames) {
+        NSString *ov = _values[Key(env, oldAlias)];
+        if (ov != nil) {
+            _values[Key(env, newAlias)] = ov;
+            [_values removeObjectForKey:Key(env, oldAlias)];
+            [_dirtyEnvs addObject:env];
+        }
+    }
+    NSInteger idx = [_aliases indexOfObject:oldAlias];
+    if (idx != NSNotFound) _aliases[idx] = newAlias;
+    [self pushToGrid];
+    [self warnVarRename:oldAlias];
+}
+
+- (void)envGrid:(OS9EnvGrid *)g renameEnv:(NSString *)oldEnv to:(NSString *)newEnv {
+    if ([oldEnv isEqualToString:kBaseEnv]) return;   // base không đổi tên
+    if ([_envNames containsObject:newEnv]) {
+        [self errorDialog:[NSString stringWithFormat:@"Environment \"%@\" đã tồn tại.", newEnv]];
+        return;
+    }
+    for (NSString *alias in _aliases) {
+        NSString *ov = _values[Key(oldEnv, alias)];
+        if (ov != nil) {
+            _values[Key(newEnv, alias)] = ov;
+            [_values removeObjectForKey:Key(oldEnv, alias)];
+        }
+    }
+    NSInteger idx = [_envNames indexOfObject:oldEnv];
+    if (idx != NSNotFound) _envNames[idx] = newEnv;
+    [_dirtyEnvs addObject:newEnv];
+    [_removedEnvs addObject:oldEnv];   // xoá file cũ khi save
+    // Cập nhật activeEnv nếu trùng.
+    if (_engine && _engine->session().getActiveEnv() == std::string(oldEnv.UTF8String))
+        _engine->session().setActiveEnv(newEnv.UTF8String);
+    [self pushToGrid];
+}
+
+- (void)envGrid:(OS9EnvGrid *)g addEnvNamed:(NSString *)name {
+    if (!name.length || [_envNames containsObject:name]) return;   // grid đã validate; thủ thêm lần nữa
+    [_envNames addObject:name];
+    [_dirtyEnvs addObject:name];
+    [_removedEnvs removeObject:name];
+    for (NSString *alias in _aliases) _values[Key(name, alias)] = @"";
+    [self pushToGrid];
+}
+
+- (void)envGrid:(OS9EnvGrid *)g deleteEnv:(NSString *)env {
+    if ([env isEqualToString:kBaseEnv]) return;
+    NSInteger r = [OS9Dialog confirmWithTitle:@"Xoá environment"
+                                      message:[NSString stringWithFormat:@"Xoá env \"%@\"? Mọi giá trị trong cột sẽ mất.", env]
+                                      buttons:@[ @"Cancel", @"Xoá" ]
+                                defaultButton:1 cancelButton:0 icon:OS9AlertCaution
+                                       parent:_grid.window];
+    if (r != 1) return;
+    for (NSString *alias in _aliases) [_values removeObjectForKey:Key(env, alias)];
+    [_envNames removeObject:env];
+    [_dirtyEnvs removeObject:env];
+    [_removedEnvs addObject:env];
+    if (_engine && _engine->session().getActiveEnv() == std::string(env.UTF8String))
+        _engine->session().setActiveEnv(kBaseEnv.UTF8String);   // reset về base
+    [self pushToGrid];
+}
+
+- (void)envGrid:(OS9EnvGrid *)g addAliasNamed:(NSString *)name {
+    if (!name.length || [_aliases containsObject:name]) return;
+    [_aliases addObject:name];
+    for (NSString *env in _envNames) { _values[Key(env, name)] = @""; [_dirtyEnvs addObject:env]; }
+    [self pushToGrid];
+}
+
+- (void)envGrid:(OS9EnvGrid *)g deleteAlias:(NSString *)alias {
+    NSInteger r = [OS9Dialog confirmWithTitle:@"Xoá alias"
+                                      message:[NSString stringWithFormat:@"Xoá alias \"%@\"? Giá trị trên mọi env sẽ mất.", alias]
+                                      buttons:@[ @"Cancel", @"Xoá" ]
+                                defaultButton:1 cancelButton:0 icon:OS9AlertCaution
+                                       parent:_grid.window];
+    if (r != 1) return;
+    for (NSString *env in _envNames) { [_values removeObjectForKey:Key(env, alias)]; [_dirtyEnvs addObject:env]; }
+    [_aliases removeObject:alias];
+    [self pushToGrid];
+}
+
+#pragma mark helpers
+
+- (void)errorDialog:(NSString *)msg {
+    [OS9Dialog confirmWithTitle:@"Không hợp lệ" message:msg
+                        buttons:@[ @"OK" ] defaultButton:0 cancelButton:-1
+                           icon:OS9AlertStop parent:_grid.window];
+}
+
+- (void)warnVarRename:(NSString *)oldAlias {
+    // SPEC §T3: đổi tên alias KHÔNG tự sửa {{old}} trong request đã lưu -> cảnh báo.
+    NSWindow *win = _grid.window;
+    if (!win) return;
+    NSString *msg = [NSString stringWithFormat:@"Đã đổi tên biến; request dùng {{%@}} cần cập nhật thủ công.", oldAlias];
+    OS9Toast *t = [[OS9Toast alloc] initWithMessage:msg kind:0];
+    NSSize sz = [OS9Toast sizeForMessage:msg];
+    NSView *cv = win.contentView;
+    t.frame = NSMakeRect((cv.bounds.size.width - sz.width) / 2, 24, sz.width, sz.height);
+    t.autoresizingMask = NSViewMinXMargin | NSViewMaxXMargin | NSViewMaxYMargin;
+    __weak OS9Toast *wt = t;
+    t.onClose = ^{ [wt removeFromSuperview]; };
+    [cv addSubview:t];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [wt removeFromSuperview];
+    });
 }
 
 @end

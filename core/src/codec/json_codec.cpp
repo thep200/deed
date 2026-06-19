@@ -246,9 +246,7 @@ std::string dumpRequest(const RequestModel& m) { return toJson(m).dump(2); }
 json toJson(const Environment& e) {
     json keys = json::array();
     for (const auto& k : e.keys) {
-        json kj = {{"key", k.key}, {"secret", k.secret}, {"enabled", k.enabled}};
-        if (!k.secret) kj["value"] = k.value; // secret -> không ghi value vào file env
-        keys.push_back(kj);
+        keys.push_back(json{{"key", k.key}, {"value", k.value}, {"enabled", k.enabled}});
     }
     return json{{"schemaVersion", e.schemaVersion}, {"name", e.name}, {"keys", keys}};
 }
@@ -261,8 +259,8 @@ Environment envFromJson(const json& j) {
         for (const auto& k : *it) {
             EnvKey ek;
             ek.key = getStr(k, "key");
-            ek.value = getStr(k, "value");
-            ek.secret = getBool(k, "secret");
+            ek.value = getStr(k, "value");   // file env cũ có thể thiếu value nếu từng là secret;
+                                             // migrateLegacySecrets() đã gộp value lại trước đó.
             ek.enabled = getBool(k, "enabled", true);
             e.keys.push_back(ek);
         }

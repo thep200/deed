@@ -2,6 +2,7 @@
 // Harness tối giản: đếm pass/fail, trả mã != 0 khi có lỗi (CTest đọc exit code).
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -9,6 +10,7 @@
 
 #include "core/cache.hpp"
 #include "core/engine.hpp"
+#include "core/codec/comment.hpp"
 #include "core/codec/field_codec.hpp"
 #include "core/import_export/importer.hpp"
 #include "core/persistence/request_naming.hpp"
@@ -260,16 +262,15 @@ static void test_session_store(const std::string& root) {
     }
 }
 
-// ---------------- Secret + Environment ----------------
+// ---------------- Environment (plaintext) + rename + migration ----------------
 static void test_env_and_secret(const std::string& root) {
-    std::printf("[environment + secret]\n");
-    auto secrets = std::make_shared<FileSecretStore>(root);
-    EnvironmentStore env(root, secrets);
+    std::printf("[environment]\n");
+    EnvironmentStore env(root);
 
     Environment dev;
     dev.name = "Dev";
-    dev.keys.push_back({"baseUrl", "http://dev", false, true});
-    dev.keys.push_back({"token", "s3cr3t", true, true}); // secret
+    dev.keys.push_back({"baseUrl", "http://dev", true});
+    dev.keys.push_back({"token", "s3cr3t", true});
     env.save(dev);
 
     auto names = env.list();
@@ -279,34 +280,73 @@ static void test_env_and_secret(const std::string& root) {
 
     Environment loaded = env.load("Dev");
     CHECK_EQ(loaded.keys.size(), size_t(2), "2 key");
-    // secret value KHÔNG nằm trong file env nhưng load() bù lại từ SecretStore.
+    // Value plaintext nằm thẳng trong file env (không còn SecretStore).
     std::string tokVal;
-    bool tokSecret = false;
-    for (auto& k : loaded.keys) if (k.key == "token") { tokVal = k.value; tokSecret = k.secret; }
-    CHECK(tokSecret, "token đánh dấu secret");
-    CHECK_EQ(tokVal, std::string("s3cr3t"), "secret value lấy từ SecretStore");
+    for (auto& k : loaded.keys) if (k.key == "token") tokVal = k.value;
+    CHECK_EQ(tokVal, std::string("s3cr3t"), "value đọc thẳng từ file env");
 
-    // File env không được chứa giá trị secret.
     std::string envFileTxt;
     fs::path ef = fs::path(root) / "environments" / "Dev.json";
     std::FILE* f = std::fopen(ef.string().c_str(), "rb");
     if (f) { char buf[4096]; size_t n = std::fread(buf, 1, sizeof(buf), f); envFileTxt.assign(buf, n); std::fclose(f); }
-    CHECK(envFileTxt.find("s3cr3t") == std::string::npos, "secret KHÔNG ghi vào file env");
-    CHECK(fs::exists(fs::path(root) / ".secrets" / "secrets.json"), ".secrets/secrets.json tồn tại");
+    CHECK(envFileTxt.find("s3cr3t") != std::string::npos, "value ghi plaintext vào file env");
+    CHECK(!fs::exists(fs::path(root) / ".secrets"), "không tạo .secrets/");
 
-    secrets->remove("Dev", "token");
-    CHECK_EQ(secrets->get("Dev", "token"), std::string(""), "remove secret");
+    // renameEnv: đổi tên file, nội dung giữ nguyên.
+    CHECK(env.renameEnv("Dev", "Dev2"), "renameEnv thành công");
+    CHECK(!fs::exists(ef), "file env cũ biến mất");
+    CHECK_EQ(env.load("Dev2").keys.size(), size_t(2), "env mới giữ key");
+    CHECK(!env.renameEnv("Dev2", ""), "renameEnv rỗng bị chặn");
+
+    // renameAlias: đổi key trên mọi env.
+    Environment stg; stg.name = "Stg"; stg.keys.push_back({"baseUrl", "http://stg", true});
+    env.save(stg);
+    CHECK(env.renameAlias("baseUrl", "apiUrl"), "renameAlias thành công");
+    bool found = false;
+    for (auto& k : env.load("Dev2").keys) if (k.key == "apiUrl") found = true;
+    CHECK(found, "alias đổi trên Dev2");
+    found = false;
+    for (auto& k : env.load("Stg").keys) if (k.key == "apiUrl") found = true;
+    CHECK(found, "alias đổi đồng thời trên Stg");
+}
+
+// ---------------- Migration secret -> plaintext (idempotent) ----------------
+static void test_secret_migration(const std::string& root) {
+    std::printf("[secret migration]\n");
+    // Dựng trạng thái CŨ: file env thiếu value + .secrets/secrets.json giữ value.
+    fs::create_directories(fs::path(root) / "environments");
+    fs::create_directories(fs::path(root) / ".secrets");
+    {
+        std::FILE* f = std::fopen((fs::path(root) / "environments" / "Dev.json").string().c_str(), "wb");
+        const char* env = "{\"schemaVersion\":1,\"name\":\"Dev\",\"keys\":[{\"key\":\"token\",\"enabled\":true}]}";
+        std::fwrite(env, 1, std::strlen(env), f); std::fclose(f);
+    }
+    {
+        std::FILE* f = std::fopen((fs::path(root) / ".secrets" / "secrets.json").string().c_str(), "wb");
+        const char* sec = "{\"Dev\":{\"token\":\"s3cr3t\"}}";
+        std::fwrite(sec, 1, std::strlen(sec), f); std::fclose(f);
+    }
+    EnvironmentStore env(root);
+    env.migrateLegacySecrets();
+    std::string tokVal;
+    for (auto& k : env.load("Dev").keys) if (k.key == "token") tokVal = k.value;
+    CHECK_EQ(tokVal, std::string("s3cr3t"), "value secret gộp ngược vào env");
+    CHECK(!fs::exists(fs::path(root) / ".secrets"), ".secrets/ bị xoá sau migrate");
+    // Idempotent: chạy lại không throw, không đổi gì.
+    env.migrateLegacySecrets();
+    tokVal.clear();
+    for (auto& k : env.load("Dev").keys) if (k.key == "token") tokVal = k.value;
+    CHECK_EQ(tokVal, std::string("s3cr3t"), "migrate lần 2 no-op");
 }
 
 // ---------------- Engine resolve + validate ----------------
 static void test_engine(const std::string& root) {
     std::printf("[engine]\n");
     // chuẩn bị env Global + active.
-    auto secrets = std::make_shared<FileSecretStore>(root);
-    EnvironmentStore env(root, secrets);
-    Environment g; g.name = "Global"; g.keys.push_back({"baseUrl", "http://global", false, true});
+    EnvironmentStore env(root);
+    Environment g; g.name = "Global"; g.keys.push_back({"baseUrl", "http://global", true});
     env.save(g);
-    Environment d; d.name = "Stage"; d.keys.push_back({"baseUrl", "http://stage", false, true});
+    Environment d; d.name = "Stage"; d.keys.push_back({"baseUrl", "http://stage", true});
     env.save(d);
 
     Engine engine(EngineConfig{root, (fs::path(root) / "appconfig.json").string()});
@@ -332,6 +372,39 @@ static void test_engine(const std::string& root) {
     auto rr = engine.resolveRequest(m);
     CHECK_EQ(rr.model.http.url, std::string("http://global/u"), "resolveRequest resolve url");
     CHECK_EQ(rr.model.http.settings.timeoutMs, 12345, "timeout lấy từ app-global khi chưa set");
+
+    // --- SPEC §T7: validate tolerant comment + strip TRƯỚC resolve ---
+    CHECK(engine.validateJson("{\n  // ghi chú\n  \"a\": 1\n}").ok, "validateJson bỏ qua // comment");
+
+    RequestModel cm; cm.type = RequestType::Http; cm.http.body.mode = "json";
+    cm.http.body.json = "{\n  // dùng {{baseUrl}} ở đây phải bị bỏ\n  \"u\": \"{{baseUrl}}/x\"\n}";
+    auto rc = engine.resolveRequest(cm);
+    CHECK(rc.model.http.body.json.find("phải bị bỏ") == std::string::npos, "dòng comment bị strip khi gửi");
+    CHECK(rc.model.http.body.json.find("baseUrl") == std::string::npos,
+          "{{var}} trên dòng comment KHÔNG resolve (đã bị strip)");
+    CHECK(rc.model.http.body.json.find("http://global/x") != std::string::npos,
+          "{{var}} trên dòng thường vẫn resolve");
+}
+
+// ---------------- stripComments (SPEC §T7.C) ----------------
+static void test_comment_strip() {
+    std::printf("[comment_strip]\n");
+    using core::codec::stripComments;
+    // JSON: strip dòng // đầu dòng, GIỮ // trong chuỗi (URL).
+    CHECK_EQ(stripComments("// c\n{\"x\":1}", "json"), std::string("{\"x\":1}"),
+             "json: bỏ dòng // đầu dòng");
+    CHECK_EQ(stripComments("  // thụt lề vẫn là comment\n{\"x\":1}", "json"),
+             std::string("{\"x\":1}"), "json: comment sau whitespace");
+    CHECK_EQ(stripComments("{\"u\":\"https://a.com\"}", "json"),
+             std::string("{\"u\":\"https://a.com\"}"), "json: // trong URL KHÔNG bị strip");
+    // graphql: '#'
+    CHECK_EQ(stripComments("# c\nquery{a}", "graphql"), std::string("query{a}"), "graphql: bỏ #");
+    // text default '#'
+    CHECK_EQ(stripComments("# c\nhello", "text"), std::string("hello"), "text: bỏ #");
+    // xml block
+    CHECK_EQ(stripComments("<!-- c -->\n<a/>", "xml"), std::string("\n<a/>"), "xml: bỏ block");
+    // chỉ có comment -> rỗng
+    CHECK_EQ(stripComments("// only", "json"), std::string(""), "json: chỉ comment -> rỗng");
 }
 
 // ---------------- ResponseCache (RESPONSE_CACHE.md §10) ----------------
@@ -599,7 +672,9 @@ int main() {
     test_collection_store(root);
     test_session_store(root);
     test_env_and_secret(root);
+    test_secret_migration(root);
     test_engine(root);
+    test_comment_strip();
     test_importers();
 
     fs::remove_all(root);

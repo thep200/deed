@@ -114,6 +114,7 @@
     _activeReqTab = li;
     _reqText.string = _reqBuffers.count ? _reqBuffers[li] : @"";
     [self highlightActiveTab:_reqTabButtons active:li];
+    [self updateReqCommentMode];
 }
 
 // Index của tab theo KHOÁ (title) trong bộ titles; không khớp/nil -> 0 (tab đầu của loại đó).
@@ -295,6 +296,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     if (bi < (NSInteger)_reqTabTitles.count) _leftPaneActiveTabKey = _reqTabTitles[bi];
     _reqText.string = _reqBuffers[bi];
     [self highlightActiveTab:_reqTabButtons active:bi];
+    [self updateReqCommentMode];
 }
 
 #pragma mark Tabs
@@ -307,6 +309,25 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     if (tab < (NSInteger)_reqTabTitles.count) _leftPaneActiveTabKey = _reqTabTitles[tab];  // nhớ pane trái
     _reqText.string = _reqBuffers[tab];
     [self highlightActiveTab:_reqTabButtons active:tab];
+    [self updateReqCommentMode];
+}
+
+// SPEC §T7: chỉ bật comment toggle cho pane free-text được strip lúc gửi — tab "Body"
+// (json/text/xml/graphql) và tab gRPC "Message". Còn lại đặt nil -> tắt toggle.
+- (void)updateReqCommentMode {
+    NSString *mode = nil;
+    if (_activeReqTab >= 0 && _activeReqTab < (NSInteger)_reqTabTitles.count) {
+        NSString *title = _reqTabTitles[_activeReqTab];
+        if ([title isEqualToString:@"Body"]) {
+            NSString *bm = _bodyMode.length ? _bodyMode : @"json";
+            if ([bm isEqualToString:@"json"] || [bm isEqualToString:@"text"] ||
+                [bm isEqualToString:@"xml"] || [bm isEqualToString:@"graphql"])
+                mode = bm;
+        } else if ([title isEqualToString:@"Message"]) {
+            mode = @"grpc";
+        }
+    }
+    _reqText.commentMode = mode;
 }
 - (void)respTabClicked:(OS9BevelButton *)b {
     NSInteger tab = b.tag;

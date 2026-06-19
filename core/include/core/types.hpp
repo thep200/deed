@@ -189,8 +189,7 @@ struct TreeNode {
 // ---- Environment ----
 struct EnvKey {
     std::string key;
-    std::string value;      // rỗng nếu secret (giá trị nằm ở SecretStore)
-    bool secret = false;
+    std::string value;
     bool enabled = true;
 };
 

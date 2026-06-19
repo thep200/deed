@@ -84,6 +84,15 @@
 }
 
 - (void)reloadTree {
+    // T6: reloadData reset selection -> highlight folder/request đang chọn biến mất khi Cmd+S.
+    // Lưu relPath đang chọn TRƯỚC reload, khôi phục theo relPath SAU reload (index có thể đổi).
+    NSString *selRel = nil;
+    NSInteger selRow = _tree.selectedRow;
+    if (selRow >= 0) {
+        id it = [_tree itemAtRow:selRow];
+        if ([it isKindOfClass:[TreeItem class]]) selRel = ((TreeItem *)it).relPath;
+    }
+
     [_roots removeAllObjects];
     if (_engine) {
         try {                               // CHỈ quét cấp gốc; folder con fold mặc định (§3)
@@ -93,6 +102,30 @@
     }
     [_tree reloadData];
     [self restoreExpansion:_roots];         // giữ lại các folder user đang mở qua reload
+    if (selRel.length) [self reselectTreeByRel:selRel];
+}
+
+// Chọn lại node (folder hoặc request) theo relPath sau reload, KHÔNG kích hoạt auto-load.
+- (void)reselectTreeByRel:(NSString *)rel {
+    TreeItem *t = [self loadedItemForRel:rel inItems:_roots];
+    if (!t) return;
+    NSInteger row = [_tree rowForItem:t];
+    if (row < 0) return;
+    _revealingSelection = YES;
+    [_tree selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
+    _revealingSelection = NO;
+}
+
+// Tìm TreeItem (folder hoặc request) theo relPath trong các item ĐÃ NẠP (đệ quy). nil nếu không thấy.
+- (TreeItem *)loadedItemForRel:(NSString *)rel inItems:(NSArray<TreeItem *> *)items {
+    for (TreeItem *t in items) {
+        if ([t.relPath isEqualToString:rel]) return t;
+        if (t.isFolder && t.childrenLoaded) {
+            TreeItem *found = [self loadedItemForRel:rel inItems:t.children];
+            if (found) return found;
+        }
+    }
+    return nil;
 }
 
 // Mở lại các folder đang trong _expandedFolders (lazy: expandItem kích hoạt nạp con).

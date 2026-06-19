@@ -23,6 +23,7 @@ add_library(core STATIC
   src/variables/variable_resolver.cpp
   src/codec/json_codec.cpp
   src/codec/field_codec.cpp
+  src/codec/comment_strip.cpp
   src/infra/fs_util.cpp
   src/infra/mem_probe.cpp
   src/persistence/collection_store.cpp
@@ -31,7 +32,6 @@ add_library(core STATIC
   src/cache/disk_cache_driver.cpp
   src/cache/response_cache.cpp
   src/persistence/session_store.cpp
-  src/persistence/secret_store.cpp
   src/persistence/environment_store.cpp
   src/persistence/app_config_store.cpp
   src/sending/http_sender.cpp

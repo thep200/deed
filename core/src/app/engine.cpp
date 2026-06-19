@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/cache.hpp"
+#include "core/codec/comment.hpp"
 
 #include "core/sending/i_request_sender.hpp"
 #include "core/variables/variable_resolver.hpp"
@@ -105,11 +106,11 @@ struct Engine::Impl {
           cacheLimits(cfg.cacheLimits),
           collection(collectionRoot),
           session(collectionRoot),
-          secrets(std::make_shared<FileSecretStore>(collectionRoot)),
-          environments(collectionRoot, secrets),
+          environments(collectionRoot),
           appConfig(cfg.appConfigPath.empty() ? AppConfigStore()
                                               : AppConfigStore(cfg.appConfigPath)) {
         appConfig.setDefaults(cfg.appDefaults);   // defaults .env cho key thiếu trong config.json
+        environments.migrateLegacySecrets();      // SPEC §T5: gộp .secrets/ -> plaintext (một lần)
         registry.registerSender(RequestType::Http, std::make_unique<HttpSender>());
         registry.registerSender(RequestType::Grpc, std::make_unique<GrpcSender>());
         rebuildCache();
@@ -131,7 +132,6 @@ struct Engine::Impl {
     CacheLimits cacheLimits;                  // trần/sàn cache từ .env (qua EngineConfig)
     CollectionStore collection;
     SessionStore session;
-    std::shared_ptr<FileSecretStore> secrets;
     EnvironmentStore environments;
     AppConfigStore appConfig;
 
@@ -168,8 +168,8 @@ void Engine::openCollection(const std::string& root) {
     impl_->collectionRoot = root;
     impl_->collection.setRoot(root);
     impl_->session.setRoot(root);
-    impl_->secrets->setRoot(root);
     impl_->environments.setRoot(root);
+    impl_->environments.migrateLegacySecrets(); // collection mới có thể còn .secrets/ cũ
     impl_->collection.ensureGitignore();
     impl_->rebuildCache();        // disk cache dir đổi theo collection -> dựng lại
 }
@@ -177,7 +177,6 @@ void Engine::openCollection(const std::string& root) {
 CollectionStore& Engine::collection() { return impl_->collection; }
 SessionStore& Engine::session() { return impl_->session; }
 EnvironmentStore& Engine::environments() { return impl_->environments; }
-SecretStore& Engine::secrets() { return *impl_->secrets; }
 AppConfigStore& Engine::appConfig() { return impl_->appConfig; }
 
 std::map<std::string, std::string> Engine::activeVars() const {
@@ -216,11 +215,12 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
         resolveKv(h.pathVariables, vars);
         resolveKv(h.params, vars);
         resolveKv(h.headers, vars);
-        h.body.json = resolveStr(h.body.json, vars);
-        h.body.text = resolveStr(h.body.text, vars);
-        h.body.xml = resolveStr(h.body.xml, vars);
-        h.body.graphqlQuery = resolveStr(h.body.graphqlQuery, vars);
-        h.body.graphqlVariables = resolveStr(h.body.graphqlVariables, vars);
+        // Strip comment TRƯỚC resolve: {{var}} nằm trên dòng comment bị loại hẳn (SPEC §T7.C).
+        h.body.json = resolveStr(codec::stripComments(h.body.json, "json"), vars);
+        h.body.text = resolveStr(codec::stripComments(h.body.text, "text"), vars);
+        h.body.xml = resolveStr(codec::stripComments(h.body.xml, "xml"), vars);
+        h.body.graphqlQuery = resolveStr(codec::stripComments(h.body.graphqlQuery, "graphql"), vars);
+        h.body.graphqlVariables = resolveStr(codec::stripComments(h.body.graphqlVariables, "json"), vars);
         resolveKv(h.body.formUrlEncoded, vars);
         h.auth.bearerToken = resolveStr(h.auth.bearerToken, vars);
         h.auth.basicUsername = resolveStr(h.auth.basicUsername, vars);
@@ -229,7 +229,7 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
     } else {
         auto& g = rr.model.grpc;
         g.target = resolveStr(g.target, vars);
-        g.message = resolveStr(g.message, vars);
+        g.message = resolveStr(codec::stripComments(g.message, "grpc"), vars);
         resolveKv(g.metadata, vars);
     }
     return rr;
@@ -371,7 +371,9 @@ ImportResult Engine::importFromGrpc(const std::string& text) const { return Grpc
 
 ValidationResult Engine::validateJson(const std::string& text) const {
     try {
-        auto _ = nlohmann::json::parse(text);
+        // ignore_comments=true: editor không báo đỏ khi body JSON có comment (SPEC §T7.C).
+        auto _ = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/true,
+                                       /*ignore_comments=*/true);
         return ValidationResult{true, 0, 0, ""};
     } catch (const nlohmann::json::parse_error& e) {
         // e.byte -> line/col bằng cách đếm '\n' trước offset.

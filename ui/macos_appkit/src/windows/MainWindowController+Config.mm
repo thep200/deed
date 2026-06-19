@@ -1,17 +1,28 @@
 #import "windows/MainWindowController+Private.h"
 
+// Cột nền: KEY nội bộ "Global" (giữ ngữ nghĩa resolve {{var}}) nhưng HIỂN THỊ "Local"
+// (SPEC §T4). Map qua lại ở lớp UI.
+static NSString *const kBaseEnvKey = @"Global";
+static NSString *const kBaseEnvLabel = @"Local";
+static NSString *EnvDisplay(NSString *key) {
+    return [key isEqualToString:kBaseEnvKey] ? kBaseEnvLabel : key;
+}
+static NSString *EnvKeyFromDisplay(NSString *disp) {
+    return [disp isEqualToString:kBaseEnvLabel] ? kBaseEnvKey : disp;
+}
+
 @implementation MainWindowController (Config)
 
 #pragma mark ENV
 
 - (void)envClicked:(id)sender {
     if (!_engine) { [self toastWarn:@"Open a collection folder first"]; return; }
-    NSMutableArray<NSString *> *items = [@[ @"Global" ] mutableCopy];
+    NSMutableArray<NSString *> *items = [@[ kBaseEnvLabel ] mutableCopy];   // base hiển thị "Local"
     for (const auto &name : _engine->environments().list())
-        if (name != "Global") [items addObject:N(name)];
+        if (name != kBaseEnvKey.UTF8String) [items addObject:N(name)];
     [items addObject:@"Manage…"];
-    NSString *active = N(_engine->session().getActiveEnv());
-    NSInteger sel = [items indexOfObject:active]; if (sel == NSNotFound) sel = 0;
+    NSString *activeDisp = EnvDisplay(N(_engine->session().getActiveEnv()));
+    NSInteger sel = [items indexOfObject:activeDisp]; if (sel == NSNotFound) sel = 0;
     __weak MainWindowController *ws = self;
     OS9ShowDropdown(items, sel, _envButton, ^(NSInteger idx) {
         MainWindowController *s = ws; if (!s) return;
@@ -21,12 +32,12 @@
 }
 - (void)pickEnvNamed:(NSString *)name {
     if (!_engine) return;
-    _engine->session().setActiveEnv(name.UTF8String);
+    _engine->session().setActiveEnv(EnvKeyFromDisplay(name).UTF8String);   // "Local" -> key "Global"
     [self refreshEnvButton];
     [self toast:[NSString stringWithFormat:@"ENV: %@", name]];
 }
 - (void)refreshEnvButton {
-    _envButton.title = _engine ? N(_engine->session().getActiveEnv()) : @"Global";
+    _envButton.title = _engine ? EnvDisplay(N(_engine->session().getActiveEnv())) : kBaseEnvLabel;
 }
 
 #pragma mark Config screen (ENV + Setting)

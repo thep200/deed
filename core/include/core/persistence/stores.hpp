@@ -2,7 +2,6 @@
 // Tất cả I/O file nằm trong Core; UI chỉ gọi load/save. Atomic write cho mọi ghi.
 #pragma once
 
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -79,44 +78,30 @@ private:
 };
 
 // EnvironmentStore — mỗi env một file trong environments/ (README §8.3).
-// Secret KHÔNG ghi vào file env; đẩy qua SecretStore.
-class SecretStore; // fwd
-
+// Giá trị biến lưu plaintext trong chính file env (cơ chế secret đã gỡ — SPEC §T5).
 class EnvironmentStore {
 public:
-    EnvironmentStore(std::string root, std::shared_ptr<SecretStore> secrets);
+    explicit EnvironmentStore(std::string root);
     void setRoot(std::string root);
 
     std::vector<std::string> list() const;          // tên env (không gồm "Global" ảo)
     Environment load(const std::string& name) const;
-    void save(const Environment&);                   // atomic; secret -> SecretStore
+    void save(const Environment&);                   // atomic
     void remove(const std::string& name);
 
+    // Đổi tên env (rename file atomic). Trả false nếu rỗng/trùng tên env khác.
+    bool renameEnv(const std::string& oldName, const std::string& newName);
+    // Đổi key alias trên TẤT CẢ env cùng lúc (alias là khoá hàng dùng chung).
+    // Trả false nếu rỗng/trùng alias khác trên bất kỳ env nào.
+    bool renameAlias(const std::string& oldAlias, const std::string& newAlias);
+
+    // Migration một lần (SPEC §T5): gộp value trong .secrets/secrets.json (định dạng
+    // cũ {env:{key:value}}) ngược vào file env như biến thường, rồi xoá .secrets/.
+    // No-op nếu .secrets/ không tồn tại (đã migrate hoặc chưa từng có secret).
+    void migrateLegacySecrets();
+
 private:
     std::string root_;
-    std::shared_ptr<SecretStore> secrets_;
-};
-
-// SecretStore — tách dữ liệu nhạy cảm khỏi session (README §8.3).
-class SecretStore {
-public:
-    virtual ~SecretStore() = default;
-    virtual std::string get(const std::string& env, const std::string& key) = 0;
-    virtual void set(const std::string& env, const std::string& key, const std::string& value) = 0;
-    virtual void remove(const std::string& env, const std::string& key) = 0;
-};
-
-// FileSecretStore — POC: .secrets/secrets.json (git-ignored).
-class FileSecretStore : public SecretStore {
-public:
-    explicit FileSecretStore(std::string root);
-    void setRoot(std::string root);
-    std::string get(const std::string& env, const std::string& key) override;
-    void set(const std::string& env, const std::string& key, const std::string& value) override;
-    void remove(const std::string& env, const std::string& key) override;
-private:
-    std::string root_;
-    std::string filePath() const;
 };
 
 // AppConfigStore — app-global ở OS app-support, NGOÀI collection (README §12.1).

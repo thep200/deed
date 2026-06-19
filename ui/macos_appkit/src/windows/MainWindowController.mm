@@ -229,7 +229,7 @@
     _settingButton = [[OS9BevelButton alloc] initWithTitle:@"" target:self action:@selector(settingClicked:)];
     _settingButton.icon = OS9GearImage(16);   // bánh răng cổ điển thay cho chữ "Setting"
     _settingButton.toolTip = @"Settings";
-    _envButton = [[OS9BevelButton alloc] initWithTitle:@"Global" target:self action:@selector(envClicked:)];
+    _envButton = [[OS9BevelButton alloc] initWithTitle:@"Local" target:self action:@selector(envClicked:)];
     _envButton.dropdown = YES;   // hiển thị mũi tên dropdown như method
     _sendButton = [[OS9BevelButton alloc] initWithTitle:@"" target:self action:@selector(sendRequest:)];
     _sendButton.isDefault = YES;

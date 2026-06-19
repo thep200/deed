@@ -2,6 +2,8 @@
 #include <filesystem>
 #include <stdexcept>
 
+#include <nlohmann/json.hpp>
+
 #include "core/persistence/stores.hpp"
 #include "infra/fs_util.hpp"
 #include "codec/json_codec.hpp"
@@ -10,8 +12,7 @@ namespace fs = std::filesystem;
 
 namespace core {
 
-EnvironmentStore::EnvironmentStore(std::string root, std::shared_ptr<SecretStore> secrets)
-    : root_(std::move(root)), secrets_(std::move(secrets)) {}
+EnvironmentStore::EnvironmentStore(std::string root) : root_(std::move(root)) {}
 
 void EnvironmentStore::setRoot(std::string root) { root_ = std::move(root); }
 
@@ -43,30 +44,97 @@ Environment EnvironmentStore::load(const std::string& name) const {
         throw std::runtime_error("env not found: " + name);
     Environment e = codec::envFromJson(codec::json::parse(txt));
     if (e.name.empty()) e.name = name;
-    // Bù value cho key secret từ SecretStore (để Engine resolve được).
-    if (secrets_) {
-        for (auto& k : e.keys) {
-            if (k.secret) k.value = secrets_->get(name, k.key);
-        }
-    }
     return e;
 }
 
 void EnvironmentStore::save(const Environment& e) {
     if (e.name.empty()) throw std::runtime_error("env must have a name");
-    if (e.name == "Global" && false) {} // Global cũng lưu file được; UI khoá rename/xoá
-    // Secret -> SecretStore; file env chỉ giữ cờ + non-secret (codec đã bỏ value khi secret).
-    if (secrets_) {
-        for (const auto& k : e.keys) {
-            if (k.secret) secrets_->set(e.name, k.key, k.value);
-        }
-    }
     fsutil::writeFileAtomic(envFile(root_, e.name), codec::toJson(e).dump(2));
 }
 
 void EnvironmentStore::remove(const std::string& name) {
     std::error_code ec;
     fs::remove(fs::path(envFile(root_, name)), ec);
+}
+
+bool EnvironmentStore::renameEnv(const std::string& oldName, const std::string& newName) {
+    if (newName.empty() || oldName.empty()) return false;
+    if (oldName == newName) return true;
+    std::error_code ec;
+    // Trùng tên env khác -> từ chối.
+    if (fs::exists(fs::path(envFile(root_, newName)), ec)) return false;
+    fs::path src(envFile(root_, oldName));
+    if (!fs::exists(src, ec)) return false;
+    // Đọc, đổi tên trong nội dung, ghi file mới atomic rồi xoá file cũ.
+    Environment e = load(oldName);
+    e.name = newName;
+    fsutil::writeFileAtomic(envFile(root_, newName), codec::toJson(e).dump(2));
+    fs::remove(src, ec);
+    return true;
+}
+
+bool EnvironmentStore::renameAlias(const std::string& oldAlias, const std::string& newAlias) {
+    if (newAlias.empty() || oldAlias.empty()) return false;
+    if (oldAlias == newAlias) return true;
+    // Cross-env: kiểm tra trùng trên TẤT CẢ env trước, rồi mới ghi (atomic về mặt logic).
+    auto names = list();
+    std::vector<Environment> envs;
+    envs.reserve(names.size());
+    for (const auto& n : names) {
+        Environment e;
+        try { e = load(n); } catch (...) { continue; }
+        bool hasOld = false, hasNew = false;
+        for (const auto& k : e.keys) {
+            if (k.key == oldAlias) hasOld = true;
+            if (k.key == newAlias) hasNew = true;
+        }
+        if (hasOld && hasNew) return false; // sẽ tạo trùng khoá -> từ chối
+        envs.push_back(std::move(e));
+    }
+    bool changedAny = false;
+    for (auto& e : envs) {
+        bool changed = false;
+        for (auto& k : e.keys) {
+            if (k.key == oldAlias) { k.key = newAlias; changed = true; }
+        }
+        if (changed) { save(e); changedAny = true; }
+    }
+    return changedAny;
+}
+
+void EnvironmentStore::migrateLegacySecrets() {
+    fs::path secretsDir = fs::path(root_) / ".secrets";
+    fs::path secretsFile = secretsDir / "secrets.json";
+    std::error_code ec;
+    if (!fs::exists(secretsDir, ec)) return; // đã migrate / chưa từng có secret -> no-op
+
+    std::string txt;
+    if (fsutil::readFile(secretsFile.string(), txt)) {
+        try {
+            auto j = nlohmann::json::parse(txt);
+            if (j.is_object()) {
+                // Layout cũ: { "<env>": { "<key>": "<value>" } }
+                for (auto it = j.begin(); it != j.end(); ++it) {
+                    const std::string& envName = it.key();
+                    if (!it->is_object()) continue;
+                    Environment e;
+                    try { e = load(envName); } catch (...) { e.name = envName; }
+                    for (auto kit = it->begin(); kit != it->end(); ++kit) {
+                        if (!kit->is_string()) continue;
+                        const std::string& key = kit.key();
+                        const std::string val = kit->get<std::string>();
+                        bool found = false;
+                        for (auto& ek : e.keys)
+                            if (ek.key == key) { ek.value = val; found = true; break; }
+                        if (!found) e.keys.push_back(EnvKey{key, val, true});
+                    }
+                    if (!e.name.empty()) save(e);
+                }
+            }
+        } catch (...) { /* .secrets hỏng -> bỏ qua, vẫn cho mở app (SPEC edge case) */ }
+    }
+    // Xoá .secrets/ -> đây cũng là cờ "đã migrate" (lần sau exists() == false -> no-op).
+    fs::remove_all(secretsDir, ec);
 }
 
 } // namespace core
