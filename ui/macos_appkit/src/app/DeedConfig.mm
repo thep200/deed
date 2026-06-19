@@ -1,4 +1,5 @@
 #import "app/DeedConfig.h"
+#import "app/DeedConfigData.h" // kDeedEnvData — nội dung .env nhúng lúc build (TỰ SINH)
 
 @implementation DeedConfig {
     NSMutableDictionary<NSString *, NSString *> *_kv;
@@ -14,33 +15,14 @@
 - (instancetype)initLoad {
     if ((self = [super init])) {
         _kv = [NSMutableDictionary dictionary];
-        [self loadFromCandidates];
+        // Cấu hình là compile-time constant: parse chuỗi đã nhúng vào binary lúc build,
+        // không đọc file .env khi chạy.
+        [self parseContent:[NSString stringWithUTF8String:kDeedEnvData]];
     }
     return self;
 }
 
-- (void)loadFromCandidates {
-    NSMutableArray<NSString *> *paths = [NSMutableArray array];
-    const char *envp = getenv("DEED_ENV");
-    if (envp && *envp) [paths addObject:[NSString stringWithUTF8String:envp]];
-    [paths addObject:[[[NSFileManager defaultManager] currentDirectoryPath] stringByAppendingPathComponent:@".env"]];
-    NSString *res = [[NSBundle mainBundle] pathForResource:@"env" ofType:@""]; // Resources/.env -> "env"
-    if (res) [paths addObject:res];
-    NSString *bundleEnv = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@".env"];
-    if (bundleEnv) [paths addObject:bundleEnv];
-    [paths addObject:[NSHomeDirectory() stringByAppendingPathComponent:@".deed.env"]];
-
-    for (NSString *p in paths) {
-        if ([[NSFileManager defaultManager] fileExistsAtPath:p]) {
-            [self parseFile:p];
-            NSLog(@"[deed] loaded config: %@", p);
-            return; // dùng file đầu tiên tìm thấy
-        }
-    }
-}
-
-- (void)parseFile:(NSString *)path {
-    NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+- (void)parseContent:(NSString *)content {
     for (NSString *raw in [content componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
         NSString *line = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         if (line.length == 0 || [line hasPrefix:@"#"]) continue;

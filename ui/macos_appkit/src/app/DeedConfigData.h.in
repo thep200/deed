@@ -1,0 +1,8 @@
+// TỰ SINH bởi CMake (configure_file) từ ${CMAKE_SOURCE_DIR}/.env — KHÔNG sửa tay.
+// Nội dung .env được nhúng thẳng vào binary lúc build => cấu hình là compile-time constant,
+// app KHÔNG cần file .env khi chạy. Muốn đổi cấu hình: sửa .env rồi build lại.
+#pragma once
+
+static const char *const kDeedEnvData = R"DEEDENV(
+@DEED_ENV_CONTENT@
+)DEEDENV";

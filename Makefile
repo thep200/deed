@@ -17,8 +17,8 @@ else
 endif
 
 # --- Bien cho packaging (truyen khi chay `make package`) ---
-# App build ra trong cay con ui/macos_appkit/ (theo CMake target ApiClientApp).
-APP_PATH       ?= $(BUILD_DIR)/ui/macos_appkit/ApiClient.app
+# App build ra trong cay con ui/macos_appkit/ (theo CMake target deed).
+APP_PATH       ?= $(BUILD_DIR)/ui/macos_appkit/deed.app
 DEV_ID_APP     ?=
 NOTARY_PROFILE ?=
 
@@ -62,9 +62,9 @@ configure-release: ## CMake configure Release
 	@test -x "$(VCPKG_ROOT)/vcpkg" || { echo "Chua co vcpkg -> make bootstrap"; exit 1; }
 	$(RUN) cmake --preset release
 
-# build = ra file .app tren macOS (target ApiClientApp; keo theo core).
+# build = ra file .app tren macOS (target deed; keo theo core).
 build: configure ## Build ra file app macOS (.app bundle)
-	$(RUN) cmake --build $(BUILD_DIR) --target ApiClientApp
+	$(RUN) cmake --build $(BUILD_DIR) --target deed
 	@echo "App: $(APP_PATH)"
 
 app: build ## Alias cua `build`
@@ -83,7 +83,7 @@ smoke: ## Build + chay smoke test toolchain (cpr/grpc/json link duoc)
 # test = build NHANH app (incremental, khong configure lai neu da co) roi mo de test UI.
 test: ## Build nhanh app + mo de test (incremental)
 	@test -f "$(BUILD_DIR)/build.ninja" || $(RUN) cmake --preset default
-	$(RUN) cmake --build $(BUILD_DIR) --target ApiClientApp
+	$(RUN) cmake --build $(BUILD_DIR) --target deed
 	open "$(APP_PATH)"
 
 run-ui: test ## Alias cua `test` (build nhanh + mo app)
@@ -97,7 +97,7 @@ core-test: configure ## Build + chay unit test cua Core (ctest)
 run-ui-smoke: build ## Build + chay app headless: mo COLLECTION, tu Send (in [smoke] log)
 	@test -n "$(COLLECTION)" || { echo "Thieu COLLECTION=<duong dan collection>"; exit 1; }
 	APICLIENT_OPEN="$(COLLECTION)" APICLIENT_SEND=1 \
-	  "$(APP_PATH)/Contents/MacOS/ApiClient"
+	  "$(APP_PATH)/Contents/MacOS/deed"
 
 setup: ## Chay tat ca buoc cai dat lan dau + verify (tuan tu)
 	$(MAKE) tools

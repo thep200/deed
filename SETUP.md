@@ -104,11 +104,11 @@ Mục tiêu: `.app` → `.dmg` đã **ký Developer ID** + **notarize** + **stap
 cmake --preset release
 cmake --build build
 
-APP_PATH="build/ApiClient.app" \
+APP_PATH="build/ui/macos_appkit/deed.app" \
 DEV_ID_APP="Developer ID Application: Ten Ban (TEAMID)" \
 NOTARY_PROFILE="api-client-notary" \
 ./scripts/package_macos.sh
-# -> dist/ApiClient.dmg (da ky, notarize, staple)
+# -> dist/deed.dmg (da ky, notarize, staple)
 ```
 
 Script làm 5 bước: ký inner→outer với `--options runtime --timestamp` (+ `entitlements.plist` nếu có) → tạo `.dmg` kèm symlink `/Applications` → ký dmg → `notarytool submit --wait` → `stapler staple` + verify.
@@ -129,7 +129,7 @@ Mọi bước trên đã gói vào `Makefile` (gọi tool qua `mise exec --` nê
 ```
 make doctor     # kiem tra xcode/mise/cmake/ninja/vcpkg
 make setup      # tools + bootstrap vcpkg + unit test Core (lan dau)
-make build      # build ra file .app macOS (target ApiClientApp)
+make build      # build ra file .app macOS (target deed)
 make test       # build nhanh .app (incremental) + mo app de test UI
 make build-all  # build toan bo (core + cli + tests + app)
 make core-test  # build + chay unit test Core (ctest)

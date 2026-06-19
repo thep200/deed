@@ -6,10 +6,10 @@
 #   - Xcode day du (cung cap: codesign, hdiutil, xcrun notarytool, xcrun stapler).
 #   - Chung chi "Developer ID Application" da import vao Keychain.
 #   - Mot notary profile da luu san trong Keychain (xem SETUP.md, muc Packaging).
-#   - Da build san file .app (vd: cmake --preset release && ... -> build/ApiClient.app).
+#   - Da build san file .app (vd: cmake --preset release && ... -> build/ui/macos_appkit/deed.app).
 #
 # CACH CHAY (truyen qua bien moi truong, KHONG hardcode secret vao file):
-#   APP_PATH="build/ApiClient.app" \
+#   APP_PATH="build/ui/macos_appkit/deed.app" \
 #   DEV_ID_APP="Developer ID Application: Ten Ban (TEAMID)" \
 #   NOTARY_PROFILE="api-client-notary" \
 #   ./scripts/package_macos.sh
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 # ---- Cau hinh ----
-: "${APP_PATH:?Can APP_PATH= duong dan toi .app da build (vd build/ApiClient.app)}"
+: "${APP_PATH:?Can APP_PATH= duong dan toi .app da build (vd build/ui/macos_appkit/deed.app)}"
 : "${DEV_ID_APP:?Can DEV_ID_APP='Developer ID Application: Ten Ban (TEAMID)'}"
 : "${NOTARY_PROFILE:?Can NOTARY_PROFILE=ten keychain profile (notarytool store-credentials)}"
 

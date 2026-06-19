@@ -5,10 +5,17 @@ if(NOT APPLE)
   return()
 endif()
 
-# Đưa .env (ở gốc repo) vào bundle Resources để app đọc cấu hình khi chạy.
+# Nhúng .env (ở gốc repo) thành compile-time constant: sinh header chứa nội dung .env,
+# app đọc từ binary nên KHÔNG cần file .env khi chạy. Sửa .env -> tự reconfigure.
 set(DEED_ENV_SRC ${CMAKE_SOURCE_DIR}/.env)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${DEED_ENV_SRC})
+file(READ ${DEED_ENV_SRC} DEED_ENV_CONTENT)
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DeedConfigData.h.in
+  ${CMAKE_CURRENT_BINARY_DIR}/generated/app/DeedConfigData.h
+  @ONLY)
 
-add_executable(ApiClientApp MACOSX_BUNDLE
+add_executable(deed MACOSX_BUNDLE
   src/main.mm
   src/app/AppController.mm
   src/app/DeedConfig.mm
@@ -37,30 +44,29 @@ add_executable(ApiClientApp MACOSX_BUNDLE
   src/windows/MainWindowController+Send.mm
   src/windows/MainWindowController+Config.mm
   src/windows/EnvWindowController.mm
-  ${DEED_ENV_SRC}
 )
 
 # --- Debug tools (StressRunner — STRESS_TEST.md §5/§9). KHÔNG ship release. ---
 option(DEED_DEBUG_TOOLS "Compile in-app debug tools (StressRunner)" OFF)
 if(DEED_DEBUG_TOOLS)
-  target_sources(ApiClientApp PRIVATE
+  target_sources(deed PRIVATE
     src/debug/StressRunner.mm
     src/windows/MainWindowController+Stress.mm)
-  target_compile_definitions(ApiClientApp PRIVATE DEED_DEBUG_TOOLS=1)
+  target_compile_definitions(deed PRIVATE DEED_DEBUG_TOOLS=1)
 endif()
 
-# .env -> Contents/Resources/.env
-set_source_files_properties(${DEED_ENV_SRC} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
-
 # Import có tiền tố thư mục (vd "widgets/OS9Button.h", "theme/OS9Theme.h").
-target_include_directories(ApiClientApp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# generated/ chứa DeedConfigData.h (nhúng .env) -> import "app/DeedConfigData.h".
+target_include_directories(deed PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
-target_link_libraries(ApiClientApp PRIVATE core scintilla "-framework Cocoa" "-framework QuartzCore")
+target_link_libraries(deed PRIVATE core scintilla "-framework Cocoa" "-framework QuartzCore")
 
 # ARC cho Objective-C++ (quản lý retain/release + __weak trong CoreBridge).
-target_compile_options(ApiClientApp PRIVATE -fobjc-arc -fobjc-weak)
+target_compile_options(deed PRIVATE -fobjc-arc -fobjc-weak)
 
-set_target_properties(ApiClientApp PROPERTIES
-  OUTPUT_NAME "ApiClient"
+set_target_properties(deed PROPERTIES
+  OUTPUT_NAME "deed"     # -> deed.app + Contents/MacOS/deed (khớp CFBundleExecutable)
   MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/resources/Info.plist
 )

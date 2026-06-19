@@ -1,6 +1,6 @@
-// DeedConfig — đọc cấu hình từ file .env để chỉnh giao diện không cần sửa code.
-// Thứ tự tìm .env: $DEED_ENV > ./.env (cwd, tiện khi dev) > Resources/.env (trong bundle)
-//                  > ~/.deed.env. Dòng dạng KEY=VALUE, bỏ qua dòng trống và '#'.
+// DeedConfig — cấu hình giao diện. Giá trị lấy từ .env (gốc repo) nhưng được NHÚNG vào
+// binary lúc build (compile-time constant), nên app KHÔNG cần file .env khi chạy.
+// Đổi cấu hình: sửa .env rồi build lại. Dòng dạng KEY=VALUE, bỏ qua dòng trống và '#'.
 #import <Cocoa/Cocoa.h>
 
 @interface DeedConfig : NSObject
