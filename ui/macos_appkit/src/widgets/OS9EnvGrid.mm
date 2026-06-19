@@ -386,7 +386,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     }
 
     DrawPlus(NSMakeRect(8, nRows * kRowH + (kAddRowH - kGlyph) / 2, kGlyph, kGlyph), [OS9Theme shadow]);
-    DrawCellText(@"Thêm alias", NSMakeRect(kGlyph + 14, nRows * kRowH, _aliasW, kAddRowH), [OS9Theme shadow]);
+    DrawCellText(@"Add alias", NSMakeRect(kGlyph + 14, nRows * kRowH, _aliasW, kAddRowH), [OS9Theme shadow]);
 }
 
 #pragma mark hit-testing
@@ -554,10 +554,10 @@ static NSString *Trim(NSString *s) {
 - (void)promptRenameAliasAtRow:(NSInteger)row {
     NSString *old = _aliases[row];
     __weak OS9EnvGrid *ws = self;
-    NSString *nn = [self promptTitle:@"Đổi tên alias" default:old validate:^NSString *(NSString *s) {
+    NSString *nn = [self promptTitle:@"Rename alias" default:old validate:^NSString *(NSString *s) {
         NSString *t = Trim(s);
-        if (!t.length) return @"Tên không được rỗng";
-        if (![t isEqualToString:old] && [ws.aliases containsObject:t]) return @"Alias đã tồn tại";
+        if (!t.length) return @"Name cannot be empty";
+        if (![t isEqualToString:old] && [ws.aliases containsObject:t]) return @"Alias already exists";
         return nil;
     }];
     NSString *t = Trim(nn);
@@ -568,7 +568,7 @@ static NSString *Trim(NSString *s) {
 - (void)promptRenameEnvAtCol:(NSInteger)col {
     if (col == 0) return;   // cột base không đổi tên
     NSString *old = _envNames[col];
-    NSString *nn = [self promptTitle:@"Đổi tên environment" default:old
+    NSString *nn = [self promptTitle:@"Rename environment" default:old
                             validate:[self envNameValidatorExcluding:old]];
     NSString *t = Trim(nn);
     if (nn && t.length && ![t isEqualToString:old]) [self.delegate envGrid:self renameEnv:old to:t];
@@ -576,7 +576,7 @@ static NSString *Trim(NSString *s) {
 
 // --- Thêm env (prompt tên + chặn rỗng/trùng -> không tạo nếu sai) ---
 - (void)promptAddEnv {
-    NSString *nn = [self promptTitle:@"Environment mới" default:@""
+    NSString *nn = [self promptTitle:@"New environment" default:@""
                             validate:[self envNameValidatorExcluding:nil]];
     NSString *t = Trim(nn);
     if (nn && t.length) [self.delegate envGrid:self addEnvNamed:t];
@@ -585,10 +585,10 @@ static NSString *Trim(NSString *s) {
 // --- Thêm alias (prompt tên + chặn rỗng/trùng) ---
 - (void)promptAddAlias {
     __weak OS9EnvGrid *ws = self;
-    NSString *nn = [self promptTitle:@"Alias mới" default:@"" validate:^NSString *(NSString *s) {
+    NSString *nn = [self promptTitle:@"New alias" default:@"" validate:^NSString *(NSString *s) {
         NSString *t = Trim(s);
-        if (!t.length) return @"Tên không được rỗng";
-        if ([ws.aliases containsObject:t]) return @"Alias đã tồn tại";
+        if (!t.length) return @"Name cannot be empty";
+        if ([ws.aliases containsObject:t]) return @"Alias already exists";
         return nil;
     }];
     NSString *t = Trim(nn);
@@ -601,12 +601,12 @@ static NSString *Trim(NSString *s) {
     __weak OS9EnvGrid *ws = self;
     return ^NSString *(NSString *s) {
         NSString *t = Trim(s);
-        if (!t.length) return @"Tên không được rỗng";
+        if (!t.length) return @"Name cannot be empty";
         if ([t caseInsensitiveCompare:(ws.baseDisplayName ?: @"Local")] == NSOrderedSame ||
             [t caseInsensitiveCompare:@"Global"] == NSOrderedSame)
-            return @"Tên này dành riêng cho cột nền";
+            return @"This name is reserved for the base column";
         for (NSString *n in ws.envNames)
-            if (![n isEqualToString:exclude] && [n isEqualToString:t]) return @"Environment đã tồn tại";
+            if (![n isEqualToString:exclude] && [n isEqualToString:t]) return @"Environment already exists";
         return nil;
     };
 }

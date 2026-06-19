@@ -15,13 +15,16 @@ int getInt(const json& j, const char* k, int def = 0) {
 }
 bool getBool(const json& j, const char* k, bool def = false) {
     auto it = j.find(k);
-    return (it != j.end() && it->is_boolean()) ? it->get<bool>() : def;
+    if (it == j.end()) return def;
+    if (it->is_boolean()) return it->get<bool>();
+    if (it->is_number()) return it->get<double>() != 0;   // chấp nhận 0/1 (dạng mới)
+    return def;
 }
 
 json kvArray(const std::vector<KeyValue>& v) {
     json a = json::array();
     for (const auto& kv : v) {
-        a.push_back({{"key", kv.key}, {"value", kv.value}, {"enabled", kv.enabled}});
+        a.push_back({{"key", kv.key}, {"value", kv.value}, {"enabled", kv.enabled ? 1 : 0}});
     }
     return a;
 }
@@ -46,7 +49,7 @@ json bodyToJson(const Body& b) {
         json a = json::array();
         for (const auto& p : b.multipart) {
             a.push_back({{"key", p.key}, {"value", p.value}, {"type", p.type},
-                         {"filePath", p.filePath}, {"enabled", p.enabled}});
+                         {"filePath", p.filePath}, {"enabled", p.enabled ? 1 : 0}});
         }
         j["multipart"] = a;
     } else if (b.mode == "binary") {
@@ -246,7 +249,7 @@ std::string dumpRequest(const RequestModel& m) { return toJson(m).dump(2); }
 json toJson(const Environment& e) {
     json keys = json::array();
     for (const auto& k : e.keys) {
-        keys.push_back(json{{"key", k.key}, {"value", k.value}, {"enabled", k.enabled}});
+        keys.push_back(json{{"key", k.key}, {"value", k.value}, {"enabled", k.enabled ? 1 : 0}});
     }
     return json{{"schemaVersion", e.schemaVersion}, {"name", e.name}, {"keys", keys}};
 }

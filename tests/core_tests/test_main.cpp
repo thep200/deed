@@ -563,7 +563,9 @@ static void test_importers() {
     CHECK_EQ(r.model.http.url, std::string("http://api.test/users?q=1"), "url giữ nguyên");
     CHECK_EQ(r.model.http.body.mode, std::string("json"), "body json từ content-type");
     CHECK_EQ(r.model.http.body.json, std::string("{\"name\":\"Alice\"}"), "body content");
-    CHECK_EQ(r.model.http.headers.size(), size_t(2), "2 headers");
+    CHECK_EQ(r.model.http.headers.size(), size_t(1), "1 header (Authorization -> Auth)");
+    CHECK_EQ(r.model.http.auth.type, std::string("bearer"), "Authorization Bearer -> bearer auth");
+    CHECK_EQ(r.model.http.auth.bearerToken, std::string("abc"), "bearer token vào nút Auth");
 
     auto rb = curl.parse("curl -u user:pass http://api.test/secure");
     CHECK_EQ(rb.model.http.auth.type, std::string("basic"), "-u -> basic auth");

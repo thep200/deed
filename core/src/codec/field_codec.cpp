@@ -13,14 +13,17 @@ std::string gs(const json& j, const char* k, const std::string& d = "") {
 }
 bool gb(const json& j, const char* k, bool d = false) {
     auto it = j.find(k);
-    return (it != j.end() && it->is_boolean()) ? it->get<bool>() : d;
+    if (it == j.end()) return d;
+    if (it->is_boolean()) return it->get<bool>();
+    if (it->is_number()) return it->get<double>() != 0;   // chấp nhận 0/1 (dạng mới)
+    return d;
 }
 } // namespace
 
 std::string keyValuesToJson(const std::vector<KeyValue>& kvs) {
     json a = json::array();
     for (const auto& kv : kvs)
-        a.push_back({{"key", kv.key}, {"value", kv.value}, {"enabled", kv.enabled}});
+        a.push_back({{"key", kv.key}, {"value", kv.value}, {"enabled", kv.enabled ? 1 : 0}});
     return a.dump(2);
 }
 
@@ -46,13 +49,13 @@ std::string bodyToJson(const Body& b) {
     else if (b.mode == "form-urlencoded") {
         json a = json::array();
         for (const auto& kv : b.formUrlEncoded)
-            a.push_back({{"key", kv.key}, {"value", kv.value}, {"enabled", kv.enabled}});
+            a.push_back({{"key", kv.key}, {"value", kv.value}, {"enabled", kv.enabled ? 1 : 0}});
         j["formUrlEncoded"] = a;
     } else if (b.mode == "multipart") {
         json a = json::array();
         for (const auto& p : b.multipart)
             a.push_back({{"key", p.key}, {"value", p.value}, {"type", p.type},
-                         {"filePath", p.filePath}, {"enabled", p.enabled}});
+                         {"filePath", p.filePath}, {"enabled", p.enabled ? 1 : 0}});
         j["multipart"] = a;
     } else if (b.mode == "binary") {
         j["binary"] = {{"filePath", b.binaryFilePath}};

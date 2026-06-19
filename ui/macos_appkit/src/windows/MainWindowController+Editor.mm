@@ -558,8 +558,22 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         NSRange eq = [seg rangeOfString:@"="];
         NSString *k = (eq.location == NSNotFound) ? seg : [seg substringToIndex:eq.location];
         NSString *v = (eq.location == NSNotFound) ? @"" : [seg substringFromIndex:eq.location + 1];
-        [items addObject:@{@"key" : [self urlDecodeComponent:k],
-                           @"value" : [self urlDecodeComponent:v], @"enabled" : @YES}];
+        NSString *dk = [self urlDecodeComponent:k];
+        NSString *dv = [self urlDecodeComponent:v];
+        // Cùng key đã có trong tab Query -> GHI ĐÈ giá trị mới (không thêm dòng trùng).
+        NSUInteger hit = NSNotFound;
+        for (NSUInteger idx = 0; idx < items.count; idx++) {
+            id it = items[idx];
+            if ([it isKindOfClass:[NSDictionary class]] && [[it objectForKey:@"key"] isEqual:dk]) { hit = idx; break; }
+        }
+        if (hit != NSNotFound) {
+            NSMutableDictionary *md = [items[hit] mutableCopy];
+            md[@"value"] = dv;
+            md[@"enabled"] = @YES;
+            items[hit] = md;
+        } else {
+            [items addObject:@{@"key" : dk, @"value" : dv, @"enabled" : @YES}];
+        }
     }
     NSData *out = [NSJSONSerialization dataWithJSONObject:items options:NSJSONWritingPrettyPrinted error:nil];
     if (out) _reqBuffers[qi] = [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding];

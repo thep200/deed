@@ -3,6 +3,7 @@
 #import "app/OS9Lifecycle.h"
 #import "theme/OS9Theme.h"
 #import "widgets/OS9BevelButton.h"
+#import "widgets/OS9SerratedInset.h"
 
 // --- Metrics (CUSTOM_DIALOG §8) ---
 static const CGFloat kPad = 16;
@@ -250,18 +251,24 @@ static const CGFloat kFieldH = 22;
         y += msgH + kBtnGap;
     }
 
-    // input field (bevel lõm Platinum vẽ sau; field borderless nền trắng).
-    _field = [[NSTextField alloc] initWithFrame:NSMakeRect(kPad, y, contentW - 2 * kPad, kFieldH)];
+    // Ô nhập: bọc trong OS9SerratedInset (góc răng cưa) GIỐNG ô URL ngoài pane chính.
+    // Field borderless, nền trắng do inset vẽ.
+    OS9SerratedInset *fieldInset =
+        [[OS9SerratedInset alloc] initWithFrame:NSMakeRect(kPad, y, contentW - 2 * kPad, kFieldH)];
+    _field = [[NSTextField alloc] initWithFrame:NSInsetRect(fieldInset.bounds, 4, 3)];
     _field.stringValue = text ?: @"";
     if (placeholder.length) _field.placeholderString = placeholder;
     _field.font = [OS9Theme uiFont];
-    _field.bordered = YES;
-    _field.bezeled = YES;
-    _field.bezelStyle = NSTextFieldSquareBezel;
+    _field.bezeled = NO;
+    _field.bordered = NO;
+    _field.drawsBackground = NO;                  // nền trắng do OS9SerratedInset vẽ
+    _field.textColor = [NSColor blackColor];
     _field.focusRingType = NSFocusRingTypeNone;   // tắt focus ring xanh
-    _field.drawsBackground = YES;
+    _field.usesSingleLineMode = YES;
+    _field.cell.scrollable = YES;
     _field.delegate = self;
-    [_view addSubview:_field];
+    [fieldInset addSubview:_field];
+    [_view addSubview:fieldInset];
     y += kFieldH + 4;
 
     _errorLabel = [self labelWithText:@"" frame:NSMakeRect(kPad, y, contentW - 2 * kPad, 16)];

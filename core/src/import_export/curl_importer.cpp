@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -37,6 +38,48 @@ KeyValue parseHeader(const std::string& raw) {
 bool isJsonLike(const std::string& s) {
     std::string t = trim(s);
     return !t.empty() && (t.front() == '{' || t.front() == '[');
+}
+
+// Decode base64 (bỏ qua ký tự lạ/whitespace; dừng ở '='). Dùng để tách user:pass của Basic.
+std::string base64Decode(const std::string& in) {
+    static const std::string chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::vector<int> T(256, -1);
+    for (int i = 0; i < 64; i++) T[(unsigned char)chars[i]] = i;
+    std::string out;
+    int val = 0, bits = -8;
+    for (unsigned char c : in) {
+        if (c == '=') break;
+        if (T[c] == -1) continue;
+        val = (val << 6) + T[c];
+        bits += 6;
+        if (bits >= 0) { out.push_back(char((val >> bits) & 0xFF)); bits -= 8; }
+    }
+    return out;
+}
+
+// Đưa giá trị header Authorization vào nút Auth của pane (thay vì để ở danh sách headers).
+// Bearer -> bearer token; Basic -> giải mã base64 thành user:pass; scheme khác -> apikey header.
+void applyAuthHeader(HttpRequest& h, const std::string& rawValue) {
+    std::string v = trim(rawValue);
+    size_t sp = v.find(' ');
+    std::string scheme = (sp == std::string::npos) ? "" : lower(v.substr(0, sp));
+    std::string rest = (sp == std::string::npos) ? "" : trim(v.substr(sp + 1));
+    if (scheme == "bearer") {
+        h.auth.type = "bearer";
+        h.auth.bearerToken = rest;
+    } else if (scheme == "basic") {
+        std::string decoded = base64Decode(rest);
+        size_t c = decoded.find(':');
+        h.auth.type = "basic";
+        h.auth.basicUsername = (c == std::string::npos) ? decoded : decoded.substr(0, c);
+        h.auth.basicPassword = (c == std::string::npos) ? "" : decoded.substr(c + 1);
+    } else {
+        h.auth.type = "apikey";          // scheme lạ/không có -> giữ nguyên trong nút Auth
+        h.auth.apikeyKey = "Authorization";
+        h.auth.apikeyValue = v;
+        h.auth.apikeyIn = "header";
+    }
 }
 
 } // namespace
@@ -85,7 +128,9 @@ ImportResult CurlImporter::parse(const std::string& input) const {
             h.method = val(i); explicitMethod = true;
         } else if (flag == "-H" || flag == "--header") {
             KeyValue kv = parseHeader(val(i));
-            if (lower(kv.key) == "content-type") contentType = lower(kv.value);
+            std::string lk = lower(kv.key);
+            if (lk == "content-type") contentType = lower(kv.value);
+            if (lk == "authorization") { applyAuthHeader(h, kv.value); continue; }  // -> nút Auth
             h.headers.push_back(kv);
         } else if (flag == "-u" || flag == "--user") {
             std::string up = val(i);
