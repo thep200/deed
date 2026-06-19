@@ -17,6 +17,7 @@ public:
 
     std::optional<ResponseRecord> get(const std::string& id) override;
     bool put(const std::string& id, const ResponseRecord& r, std::uint64_t bytes) override;
+    bool put(const std::string& id, ResponseRecord&& r, std::uint64_t bytes) override;  // move vào RAM
     void remove(const std::string& id) override;
     void clear() override;
     void setCapBytes(std::uint64_t cap) override;
@@ -31,6 +32,8 @@ private:
     };
     void touch(const std::string& id);          // đưa id lên front LRU
     void evictToFit();                          // evict back (cũ nhất) tới khi used_ <= cap_
+    // Thân chung cho 2 overload put: forward r -> copy nếu lvalue, move nếu rvalue (định nghĩa cùng .cpp).
+    template <class R> bool putImpl(const std::string& id, R&& r, std::uint64_t bytes);
 
     mutable std::mutex mu_;
     std::unordered_map<std::string, Entry> map_;

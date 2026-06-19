@@ -8,3 +8,6 @@ NSImage *OS9GearImage(CGFloat size);
 NSImage *OS9SendImage(CGFloat size);
 // Icon loading (spinner nan hoa) tại pha quay phase∈[0,1) — animate bằng timer.
 NSImage *OS9SpinnerImage(CGFloat size, CGFloat phase);
+// Mảng `frameCount` ảnh spinner dựng sẵn (pha chia đều) + CACHE theo (size,frameCount).
+// Dùng cho animation: timer chỉ index vào mảng thay vì cấp phát NSImage mỗi tick.
+NSArray<NSImage *> *OS9SpinnerFrames(CGFloat size, int frameCount);

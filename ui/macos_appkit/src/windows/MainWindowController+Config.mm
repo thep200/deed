@@ -56,12 +56,12 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
         NSView *ev = _envVC.view;
         if (ev.superview != _configPane) [_configPane addSubview:ev];
         ev.hidden = NO;
-        _settingEditor.hidden = YES;
+        _settingInset.hidden = YES;
         [_envVC reload];
     } else {
         _configTitle.stringValue = @"Settings";
         if (_envVC.view) _envVC.view.hidden = YES;
-        _settingEditor.hidden = NO;
+        _settingInset.hidden = NO;
         core::AppConfig c = _engine->appConfig().load();
         _settingEditor.string = [NSString stringWithFormat:
             @"{\n  \"default_timeout_ms\": %d,\n  \"verify_tls\": %@,\n  \"font_name\": \"%s\",\n  \"font_size\": %d,\n"

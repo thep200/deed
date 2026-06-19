@@ -14,7 +14,6 @@
 #include <nlohmann/json.hpp>
 
 #include "core/cache.hpp"
-#include "core/codec/comment.hpp"
 
 #include "core/sending/i_request_sender.hpp"
 #include "core/variables/variable_resolver.hpp"
@@ -215,12 +214,11 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
         resolveKv(h.pathVariables, vars);
         resolveKv(h.params, vars);
         resolveKv(h.headers, vars);
-        // Strip comment TRƯỚC resolve: {{var}} nằm trên dòng comment bị loại hẳn (SPEC §T7.C).
-        h.body.json = resolveStr(codec::stripComments(h.body.json, "json"), vars);
-        h.body.text = resolveStr(codec::stripComments(h.body.text, "text"), vars);
-        h.body.xml = resolveStr(codec::stripComments(h.body.xml, "xml"), vars);
-        h.body.graphqlQuery = resolveStr(codec::stripComments(h.body.graphqlQuery, "graphql"), vars);
-        h.body.graphqlVariables = resolveStr(codec::stripComments(h.body.graphqlVariables, "json"), vars);
+        h.body.json = resolveStr(h.body.json, vars);
+        h.body.text = resolveStr(h.body.text, vars);
+        h.body.xml = resolveStr(h.body.xml, vars);
+        h.body.graphqlQuery = resolveStr(h.body.graphqlQuery, vars);
+        h.body.graphqlVariables = resolveStr(h.body.graphqlVariables, vars);
         resolveKv(h.body.formUrlEncoded, vars);
         h.auth.bearerToken = resolveStr(h.auth.bearerToken, vars);
         h.auth.basicUsername = resolveStr(h.auth.basicUsername, vars);
@@ -229,7 +227,7 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
     } else {
         auto& g = rr.model.grpc;
         g.target = resolveStr(g.target, vars);
-        g.message = resolveStr(codec::stripComments(g.message, "grpc"), vars);
+        g.message = resolveStr(g.message, vars);
         resolveKv(g.metadata, vars);
     }
     return rr;
@@ -371,9 +369,7 @@ ImportResult Engine::importFromGrpc(const std::string& text) const { return Grpc
 
 ValidationResult Engine::validateJson(const std::string& text) const {
     try {
-        // ignore_comments=true: editor không báo đỏ khi body JSON có comment (SPEC §T7.C).
-        auto _ = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/true,
-                                       /*ignore_comments=*/true);
+        auto _ = nlohmann::json::parse(text);
         return ValidationResult{true, 0, 0, ""};
     } catch (const nlohmann::json::parse_error& e) {
         // e.byte -> line/col bằng cách đếm '\n' trước offset.

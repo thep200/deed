@@ -23,7 +23,6 @@ add_library(core STATIC
   src/variables/variable_resolver.cpp
   src/codec/json_codec.cpp
   src/codec/field_codec.cpp
-  src/codec/comment_strip.cpp
   src/infra/fs_util.cpp
   src/infra/mem_probe.cpp
   src/persistence/collection_store.cpp

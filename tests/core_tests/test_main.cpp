@@ -10,7 +10,6 @@
 
 #include "core/cache.hpp"
 #include "core/engine.hpp"
-#include "core/codec/comment.hpp"
 #include "core/codec/field_codec.hpp"
 #include "core/import_export/importer.hpp"
 #include "core/persistence/request_naming.hpp"
@@ -372,39 +371,6 @@ static void test_engine(const std::string& root) {
     auto rr = engine.resolveRequest(m);
     CHECK_EQ(rr.model.http.url, std::string("http://global/u"), "resolveRequest resolve url");
     CHECK_EQ(rr.model.http.settings.timeoutMs, 12345, "timeout lấy từ app-global khi chưa set");
-
-    // --- SPEC §T7: validate tolerant comment + strip TRƯỚC resolve ---
-    CHECK(engine.validateJson("{\n  // ghi chú\n  \"a\": 1\n}").ok, "validateJson bỏ qua // comment");
-
-    RequestModel cm; cm.type = RequestType::Http; cm.http.body.mode = "json";
-    cm.http.body.json = "{\n  // dùng {{baseUrl}} ở đây phải bị bỏ\n  \"u\": \"{{baseUrl}}/x\"\n}";
-    auto rc = engine.resolveRequest(cm);
-    CHECK(rc.model.http.body.json.find("phải bị bỏ") == std::string::npos, "dòng comment bị strip khi gửi");
-    CHECK(rc.model.http.body.json.find("baseUrl") == std::string::npos,
-          "{{var}} trên dòng comment KHÔNG resolve (đã bị strip)");
-    CHECK(rc.model.http.body.json.find("http://global/x") != std::string::npos,
-          "{{var}} trên dòng thường vẫn resolve");
-}
-
-// ---------------- stripComments (SPEC §T7.C) ----------------
-static void test_comment_strip() {
-    std::printf("[comment_strip]\n");
-    using core::codec::stripComments;
-    // JSON: strip dòng // đầu dòng, GIỮ // trong chuỗi (URL).
-    CHECK_EQ(stripComments("// c\n{\"x\":1}", "json"), std::string("{\"x\":1}"),
-             "json: bỏ dòng // đầu dòng");
-    CHECK_EQ(stripComments("  // thụt lề vẫn là comment\n{\"x\":1}", "json"),
-             std::string("{\"x\":1}"), "json: comment sau whitespace");
-    CHECK_EQ(stripComments("{\"u\":\"https://a.com\"}", "json"),
-             std::string("{\"u\":\"https://a.com\"}"), "json: // trong URL KHÔNG bị strip");
-    // graphql: '#'
-    CHECK_EQ(stripComments("# c\nquery{a}", "graphql"), std::string("query{a}"), "graphql: bỏ #");
-    // text default '#'
-    CHECK_EQ(stripComments("# c\nhello", "text"), std::string("hello"), "text: bỏ #");
-    // xml block
-    CHECK_EQ(stripComments("<!-- c -->\n<a/>", "xml"), std::string("\n<a/>"), "xml: bỏ block");
-    // chỉ có comment -> rỗng
-    CHECK_EQ(stripComments("// only", "json"), std::string(""), "json: chỉ comment -> rỗng");
 }
 
 // ---------------- ResponseCache (RESPONSE_CACHE.md §10) ----------------
@@ -674,7 +640,6 @@ int main() {
     test_env_and_secret(root);
     test_secret_migration(root);
     test_engine(root);
-    test_comment_strip();
     test_importers();
 
     fs::remove_all(root);

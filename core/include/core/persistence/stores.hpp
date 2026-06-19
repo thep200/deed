@@ -2,7 +2,10 @@
 // Tất cả I/O file nằm trong Core; UI chỉ gọi load/save. Atomic write cho mọi ghi.
 #pragma once
 
+#include <condition_variable>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/types.hpp"
@@ -58,23 +61,37 @@ private:
 };
 
 // SessionStore — app-state (.session/session.json), KHÔNG version git.
+// Ghi có DEBOUNCE: nhiều thay đổi liên tiếp (vd click qua nhiều request) gộp thành 1 lần ghi đĩa
+// sau ~kDebounceMs, do 1 worker thread đảm nhiệm. flush()/destructor ghi nốt phần còn treo.
 class SessionStore {
 public:
     explicit SessionStore(std::string root);
-    void setRoot(std::string root);
+    ~SessionStore();                                 // flush phần treo + dừng worker
+    void setRoot(std::string root);                  // flush root cũ trước khi đổi
 
     // Fail-safe: file thiếu/hỏng -> trả Session mặc định, không throw.
     Session load() const;
 
     std::string loadLastOpened() const;
-    void saveLastOpened(const std::string& relPath); // atomic
+    void saveLastOpened(const std::string& relPath); // debounce
     std::string getActiveEnv() const;
-    void setActiveEnv(const std::string& name);      // atomic
+    void setActiveEnv(const std::string& name);      // debounce
+
+    void flush();                                    // ghi NGAY nếu đang treo (quit/đổi collection)
 
 private:
     Session current_;
     std::string root_;
-    void persist() const;
+
+    // --- Debounce ghi đĩa ---
+    mutable std::mutex mu_;                           // bảo vệ current_/root_/cờ; worker + main truy cập
+    std::condition_variable cv_;
+    std::thread worker_;
+    bool dirty_ = false;                              // có thay đổi chưa ghi
+    bool stop_ = false;                               // tín hiệu dừng worker (destructor)
+    void markDirtyLocked();                           // set dirty_ + đánh thức worker (giữ lock khi gọi)
+    void workerLoop();                                // chờ debounce rồi ghi snapshot
+    static void writeSnapshot(const std::string& root, const Session& s);  // ghi atomic (ngoài lock)
 };
 
 // EnvironmentStore — mỗi env một file trong environments/ (README §8.3).

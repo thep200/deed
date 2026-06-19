@@ -61,6 +61,21 @@ NSImage *OS9SendImage(CGFloat size) {
     }];
 }
 
+NSArray<NSImage *> *OS9SpinnerFrames(CGFloat size, int frameCount) {
+    static NSMutableDictionary<NSString *, NSArray<NSImage *> *> *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache = [NSMutableDictionary dictionary]; });
+    NSString *key = [NSString stringWithFormat:@"%.0fx%d", size, frameCount];
+    NSArray<NSImage *> *frames = cache[key];
+    if (frames) return frames;                       // đã dựng -> tái dùng (không cấp phát lại)
+    NSMutableArray<NSImage *> *fs = [NSMutableArray arrayWithCapacity:frameCount];
+    for (int i = 0; i < frameCount; i++)
+        [fs addObject:OS9SpinnerImage(size, (CGFloat)i / frameCount)];
+    frames = [fs copy];
+    cache[key] = frames;
+    return frames;
+}
+
 NSImage *OS9SpinnerImage(CGFloat size, CGFloat phase) {
     return [NSImage imageWithSize:NSMakeSize(size, size) flipped:NO
                    drawingHandler:^BOOL(NSRect r) {

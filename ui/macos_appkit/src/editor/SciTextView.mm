@@ -9,9 +9,6 @@
 #include <SciLexer.h>
 #include "deed_lexers.h"
 
-#include <string>
-#include "core/codec/comment.hpp"
-
 @interface SciTextView () <ScintillaNotificationProtocol>
 @end
 
@@ -172,115 +169,6 @@
         if (content) return content;
     }
     return v;
-}
-
-#pragma mark Comment toggle (Ctrl+/ / Cmd+/) — SPEC §T7
-
-// performKeyEquivalent được gọi cho MỌI keyDown trước khi Scintilla xử lý -> chặn được
-// "/" + Ctrl/Cmd. Chỉ tác động nếu view này đang focus + editable + có commentMode.
-- (BOOL)performKeyEquivalent:(NSEvent *)event {
-    if (_editable && _commentMode.length && [self hasFocus]) {
-        NSString *ch = event.charactersIgnoringModifiers;
-        NSEventModifierFlags m = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
-        BOOL hasCmdOrCtrl = (m & (NSEventModifierFlagCommand | NSEventModifierFlagControl)) != 0;
-        BOOL noShift = (m & NSEventModifierFlagShift) == 0;   // Shift+/ = '?'
-        // KHÔNG yêu cầu "chỉ Cmd/Ctrl" (bàn phím có thể kèm cờ Function/NumericPad cho '/').
-        if ([ch isEqualToString:@"/"] && hasCmdOrCtrl && noShift) {
-            [self toggleCommentSelection];
-            return YES;
-        }
-    }
-    return [super performKeyEquivalent:event];
-}
-
-// Dòng L có bắt đầu (sau indent) bằng prefix không? -1 = dòng trắng, 0 = không, 1 = có.
-- (int)line:(sptr_t)L startsWith:(const std::string &)prefix {
-    sptr_t ip = [self q:SCI_GETLINEINDENTPOSITION w:(uptr_t)L l:0];
-    sptr_t le = [self q:SCI_GETLINEENDPOSITION w:(uptr_t)L l:0];
-    if (ip >= le) return -1; // trắng
-    for (size_t k = 0; k < prefix.size(); k++) {
-        if (ip + (sptr_t)k >= le) return 0;
-        if ((char)[self q:SCI_GETCHARAT w:(uptr_t)(ip + k) l:0] != prefix[k]) return 0;
-    }
-    return 1;
-}
-
-- (void)toggleLineComment:(const std::string &)prefix {
-    sptr_t selStart = [self q:SCI_GETSELECTIONSTART w:0 l:0];
-    sptr_t selEnd = [self q:SCI_GETSELECTIONEND w:0 l:0];
-    sptr_t lineFrom = [self q:SCI_LINEFROMPOSITION w:(uptr_t)selStart l:0];
-    sptr_t lineTo = [self q:SCI_LINEFROMPOSITION w:(uptr_t)selEnd l:0];
-    // selection kết thúc đúng đầu dòng cuối -> không tính dòng đó.
-    if (lineTo > lineFrom && selEnd == [self q:SCI_POSITIONFROMLINE w:(uptr_t)lineTo l:0]) lineTo--;
-
-    // Quyết định comment/uncomment: TẤT CẢ dòng không-trắng đã có prefix -> uncomment.
-    BOOL allCommented = YES; BOOL anyNonBlank = NO;
-    for (sptr_t L = lineFrom; L <= lineTo; L++) {
-        int r = [self line:L startsWith:prefix];
-        if (r == -1) continue;
-        anyNonBlank = YES;
-        if (r == 0) { allCommented = NO; break; }
-    }
-    BOOL uncomment = (anyNonBlank && allCommented);
-    std::string ins = prefix + " ";
-
-    [self msg:SCI_BEGINUNDOACTION w:0 l:0];
-    for (sptr_t L = lineFrom; L <= lineTo; L++) {
-        sptr_t ip = [self q:SCI_GETLINEINDENTPOSITION w:(uptr_t)L l:0];
-        sptr_t le = [self q:SCI_GETLINEENDPOSITION w:(uptr_t)L l:0];
-        if (ip >= le) continue; // bỏ qua dòng trắng
-        if (uncomment) {
-            sptr_t del = (sptr_t)prefix.size();
-            // xoá thêm 1 space sau marker nếu có.
-            if (ip + del < le && (char)[self q:SCI_GETCHARAT w:(uptr_t)(ip + del) l:0] == ' ') del++;
-            [self msg:SCI_DELETERANGE w:(uptr_t)ip l:del];
-        } else {
-            [self msg:SCI_INSERTTEXT w:(uptr_t)ip l:(sptr_t)ins.c_str()];
-        }
-    }
-    [self msg:SCI_ENDUNDOACTION w:0 l:0];
-
-    // chọn lại trọn vùng dòng đã đổi.
-    sptr_t a = [self q:SCI_POSITIONFROMLINE w:(uptr_t)lineFrom l:0];
-    sptr_t b = [self q:SCI_GETLINEENDPOSITION w:(uptr_t)lineTo l:0];
-    [self msg:SCI_SETSEL w:(uptr_t)a l:b];
-}
-
-- (void)toggleBlockComment:(const core::codec::CommentMarker &)mk {
-    sptr_t s = [self q:SCI_GETSELECTIONSTART w:0 l:0];
-    sptr_t e = [self q:SCI_GETSELECTIONEND w:0 l:0];
-    if (s == e) { // không chọn -> trọn dòng hiện tại
-        sptr_t L = [self q:SCI_LINEFROMPOSITION w:(uptr_t)s l:0];
-        s = [self q:SCI_GETLINEINDENTPOSITION w:(uptr_t)L l:0];
-        e = [self q:SCI_GETLINEENDPOSITION w:(uptr_t)L l:0];
-    }
-    // Đã là block? kiểm ký tự đầu == blockOpen.
-    auto charsAt = [&](sptr_t pos, size_t n) {
-        std::string out;
-        for (size_t k = 0; k < n; k++) out.push_back((char)[self q:SCI_GETCHARAT w:(uptr_t)(pos + k) l:0]);
-        return out;
-    };
-    BOOL wrapped = (charsAt(s, mk.blockOpen.size()) == mk.blockOpen) &&
-                   (e - (sptr_t)mk.blockClose.size() >= s) &&
-                   (charsAt(e - (sptr_t)mk.blockClose.size(), mk.blockClose.size()) == mk.blockClose);
-    [self msg:SCI_BEGINUNDOACTION w:0 l:0];
-    if (wrapped) {
-        [self msg:SCI_DELETERANGE w:(uptr_t)(e - (sptr_t)mk.blockClose.size()) l:(sptr_t)mk.blockClose.size()];
-        [self msg:SCI_DELETERANGE w:(uptr_t)s l:(sptr_t)mk.blockOpen.size()];
-    } else {
-        std::string close = " " + mk.blockClose;
-        std::string open = mk.blockOpen + " ";
-        [self msg:SCI_INSERTTEXT w:(uptr_t)e l:(sptr_t)close.c_str()];
-        [self msg:SCI_INSERTTEXT w:(uptr_t)s l:(sptr_t)open.c_str()];
-    }
-    [self msg:SCI_ENDUNDOACTION w:0 l:0];
-}
-
-- (void)toggleCommentSelection {
-    if (!_editable || !_commentMode.length) return;
-    core::codec::CommentMarker mk = core::codec::commentMarkerFor(_commentMode.UTF8String);
-    if (mk.hasBlock()) [self toggleBlockComment:mk];
-    else if (mk.hasLine()) [self toggleLineComment:mk.linePrefix];
 }
 
 #pragma mark Scintilla notifications

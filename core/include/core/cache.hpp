@@ -43,6 +43,11 @@ public:
     virtual std::optional<ResponseRecord> get(const std::string& id) = 0;
     // false = từ chối (vd record đơn lẻ > cap -> không cache tầng này).
     virtual bool put(const std::string& id, const ResponseRecord& r, std::uint64_t bytes) = 0;
+    // Overload rvalue: driver GIỮ bản sao (vd RAM) có thể move thay vì copy -> tránh copy body lớn.
+    // Mặc định ủy quyền cho bản const& (driver không giữ bản sao, vd disk, không cần override).
+    virtual bool put(const std::string& id, ResponseRecord&& r, std::uint64_t bytes) {
+        return put(id, static_cast<const ResponseRecord&>(r), bytes);
+    }
     virtual void remove(const std::string& id) = 0;
     virtual void clear() = 0;
     virtual void setCapBytes(std::uint64_t cap) = 0;   // đổi cap runtime -> evict nếu cần

@@ -1,5 +1,7 @@
 #include "core/cache.hpp"
 
+#include <utility>   // std::move
+
 #include "cache/disk_cache_driver.hpp"
 #include "cache/ram_cache_driver.hpp"
 #include "infra/fs_util.hpp"
@@ -53,8 +55,8 @@ void ResponseCache::put(const std::string& id, ResponseRecord r) {
     if (id.empty()) return;
     if (r.bytes == 0) r.bytes = estimateBytes(r);
     std::uint64_t b = r.bytes;
-    if (l2_) l2_->put(id, r, b);                      // write-through (bền, sống sót restart)
-    if (b < ramThresholdBytes_) l1_->put(id, r, b);   // ưu tiên RAM cho response nhỏ
+    if (l2_) l2_->put(id, r, b);                          // write-through (đọc r, serialize -> đĩa)
+    if (b < ramThresholdBytes_) l1_->put(id, std::move(r), b);  // ưu tiên RAM; move (lần dùng r cuối)
     // b >= threshold -> chỉ nằm disk (không chiếm RAM)
 }
 

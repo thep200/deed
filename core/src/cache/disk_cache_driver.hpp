@@ -33,7 +33,8 @@ private:
         std::list<std::string>::iterator lru;  // vị trí trong lru_ (front = mới dùng nhất)
     };
     void loadIndex();               // đọc _index.json (gọi 1 lần lúc khởi tạo)
-    void persistIndex() const;      // ghi lại _index.json (atomic) + clear dirty_
+    void persistIndex() const;      // ghi lại _index.json (atomic) + clear dirty_/unflushed_
+    void noteIndexDirty();          // đánh dấu bẩn + flush GỘP sau mỗi N thay đổi (tránh ghi mỗi put)
     void touch(IndexEntry& e, const std::string& id);  // đưa id lên front LRU (O(1))
     void evictToFit();              // pop back (oldest-atime) tới khi used_ <= cap_ (O(1)/victim)
     std::string fileFor(const std::string& id) const;  // <dir>/<safeId>.json
@@ -45,6 +46,7 @@ private:
     std::uint64_t used_ = 0;
     std::int64_t tick_ = 0;         // tăng mỗi truy cập -> thứ tự LRU
     mutable bool dirty_ = false;    // atime đổi khi get (chỉ RAM) -> cần flush; tránh ghi mỗi đọc (§1.1)
+    mutable int unflushed_ = 0;     // số thay đổi index chưa ghi đĩa (put/remove gộp -> flush mỗi N)
     std::map<std::string, IndexEntry> index_;
     std::list<std::string> lru_;    // front = vừa dùng, back = lâu nhất (evict O(1) — §1.2)
 };

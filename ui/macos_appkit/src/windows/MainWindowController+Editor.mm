@@ -73,7 +73,7 @@
             } else {
                 s2->_lastResp = recCopy.response;
                 s2->_hasResp = YES;
-                [s2 rebuildResponseBuffers];
+                [s2 rebuildResponseBuffersAsync];   // format ngoài main -> response cache lớn không freeze (U2)
                 [s2 updateStatusFromResponse:recCopy.response error:NO endMs:recCopy.receivedAt];
             }
         });
@@ -113,9 +113,7 @@
     if (li >= (NSInteger)_reqBuffers.count) li = 0;
     _activeReqTab = li;
     _reqText.string = _reqBuffers.count ? _reqBuffers[li] : @"";
-    [self highlightActiveTab:_reqTabButtons active:li];
-    [self updateReqCommentMode];
-}
+    [self highlightActiveTab:_reqTabButtons active:li];}
 
 // Index của tab theo KHOÁ (title) trong bộ titles; không khớp/nil -> 0 (tab đầu của loại đó).
 - (NSInteger)tabIndexForKey:(NSString *)key inTitles:(NSArray<NSString *> *)titles {
@@ -181,7 +179,10 @@
     if (![self syncModelFromEditors:YES]) { [self toastWarn:@"Autosave failed: invalid JSON"]; return; }
     try { _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // tên file có thể đổi (sync §4)
           _engine->session().saveLastOpened(_currentRel);
-          [self reloadTree]; }
+          // §T1: autosave chỉ đụng 1 request -> cập nhật cấp chứa nó, KHÔNG re-scan gốc + reloadData toàn cây.
+          NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];
+          [self refreshTreeLevel:parentRel];
+          [self reselectTreeByRel:N(_currentRel)]; }   // giữ highlight (tên file có thể đổi do sync §4)
     catch (...) {}
 }
 
@@ -295,9 +296,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     _activeReqTab = bi;                          // kích hoạt + hiện body
     if (bi < (NSInteger)_reqTabTitles.count) _leftPaneActiveTabKey = _reqTabTitles[bi];
     _reqText.string = _reqBuffers[bi];
-    [self highlightActiveTab:_reqTabButtons active:bi];
-    [self updateReqCommentMode];
-}
+    [self highlightActiveTab:_reqTabButtons active:bi];}
 
 #pragma mark Tabs
 
@@ -308,27 +307,8 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     _activeReqTab = tab;
     if (tab < (NSInteger)_reqTabTitles.count) _leftPaneActiveTabKey = _reqTabTitles[tab];  // nhớ pane trái
     _reqText.string = _reqBuffers[tab];
-    [self highlightActiveTab:_reqTabButtons active:tab];
-    [self updateReqCommentMode];
-}
+    [self highlightActiveTab:_reqTabButtons active:tab];}
 
-// SPEC §T7: chỉ bật comment toggle cho pane free-text được strip lúc gửi — tab "Body"
-// (json/text/xml/graphql) và tab gRPC "Message". Còn lại đặt nil -> tắt toggle.
-- (void)updateReqCommentMode {
-    NSString *mode = nil;
-    if (_activeReqTab >= 0 && _activeReqTab < (NSInteger)_reqTabTitles.count) {
-        NSString *title = _reqTabTitles[_activeReqTab];
-        if ([title isEqualToString:@"Body"]) {
-            NSString *bm = _bodyMode.length ? _bodyMode : @"json";
-            if ([bm isEqualToString:@"json"] || [bm isEqualToString:@"text"] ||
-                [bm isEqualToString:@"xml"] || [bm isEqualToString:@"graphql"])
-                mode = bm;
-        } else if ([title isEqualToString:@"Message"]) {
-            mode = @"grpc";
-        }
-    }
-    _reqText.commentMode = mode;
-}
 - (void)respTabClicked:(OS9BevelButton *)b {
     NSInteger tab = b.tag;
     if (tab < 0 || tab >= (NSInteger)_respBuffers.count) return;

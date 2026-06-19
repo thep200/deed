@@ -26,7 +26,7 @@
     NSLog(@"[smoke] onCoreResponse status=%d bytes=%lld", resp.statusCode, (long long)resp.sizeBytes);
     [self finishSending];
     _lastResp = resp; _hasResp = YES;
-    [self rebuildResponseBuffers];
+    [self rebuildResponseBuffersAsync];   // format ngoài main thread -> response lớn không freeze UI (U2)
     int64_t endMs = (int64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);  // mốc kết thúc = lúc nhận
     [self updateStatusFromResponse:resp error:NO endMs:endMs];
     [self cacheResponseAsync:resp forId:_currentId];   // lưu cache (nền) — khoá theo id
@@ -88,42 +88,75 @@
 
 // Spinner trong nút Send khi đang gửi: quay 1 nan mỗi tick (8 nan -> ~mượt).
 - (void)startSendSpinner {
-    _spinPhase = 0;
     [_spinTimer invalidate];
-    _sendButton.icon = OS9SpinnerImage(16, 0);
+    NSArray<NSImage *> *frames = OS9SpinnerFrames(16, 8);   // 8 frame dựng sẵn (cache) -> index, không cấp phát mỗi tick
+    _sendButton.icon = frames.firstObject;
     __weak MainWindowController *ws = self;
+    __block NSUInteger idx = 0;
     _spinTimer = [NSTimer scheduledTimerWithTimeInterval:0.09 repeats:YES block:^(NSTimer *t) {
         MainWindowController *s = ws; if (!s) { [t invalidate]; return; }
-        s->_spinPhase += 1.0 / 8.0;
-        if (s->_spinPhase >= 1.0) s->_spinPhase -= 1.0;
-        s->_sendButton.icon = OS9SpinnerImage(16, s->_spinPhase);
+        idx = (idx + 1) % frames.count;
+        s->_sendButton.icon = frames[idx];
     }];
 }
 - (void)stopSendSpinner { [_spinTimer invalidate]; _spinTimer = nil; }
 
-- (void)rebuildResponseBuffers {
-    [_respBuffers removeAllObjects];
+// Tính các buffer hiển thị (format JSON body/headers/cookie) — phần NẶNG, KHÔNG đụng UI ->
+// gọi được từ thread nền. Chỉ phụ thuộc tham số (r/type/prettyMode), không đọc ivar.
+- (NSArray<NSString *> *)computeResponseBuffersFor:(const core::ApiResponse &)r
+                                              type:(core::RequestType)type
+                                        prettyMode:(int)prettyMode {
     using namespace core;
-    const ApiResponse &r = _lastResp;
-    if (_model.type == RequestType::Http) {
-        [_respBuffers addObject:[self applyView:r.body]]; // body theo chế độ Pretty/Raw/Encode/Decode
-        [_respBuffers addObject:N(fieldcodec::formatJson(fieldcodec::keyValuesToJson(r.headers), true))];
-        [_respBuffers addObject:N(fieldcodec::formatJson(r.resolvedRequestDump, true))];
+    NSMutableArray<NSString *> *bufs = [NSMutableArray array];
+    [bufs addObject:[self applyView:r.body mode:prettyMode]];   // body theo Pretty/Raw/Encode/Decode
+    if (type == RequestType::Http) {
+        [bufs addObject:N(fieldcodec::formatJson(fieldcodec::keyValuesToJson(r.headers), true))];
+        [bufs addObject:N(fieldcodec::formatJson(r.resolvedRequestDump, true))];
         NSMutableString *ck = [NSMutableString string];
         for (const auto &c : r.cookies)
             [ck appendFormat:@"%s=%s  (domain=%s path=%s expires=%s)\n", c.name.c_str(), c.value.c_str(),
                              c.domain.c_str(), c.path.c_str(), c.expires.c_str()];
-        [_respBuffers addObject:(ck.length ? ck : @"(no Set-Cookie)")];
+        [bufs addObject:(ck.length ? ck : @"(no Set-Cookie)")];
     } else {
-        [_respBuffers addObject:[self applyView:r.body]];
-        [_respBuffers addObject:N(fieldcodec::formatJson(r.resolvedRequestDump, true))];
+        [bufs addObject:N(fieldcodec::formatJson(r.resolvedRequestDump, true))];
     }
+    return bufs;
+}
+
+// Gắn buffer đã tính vào UI + chọn tab đã nhớ (NHẸ, chạy trên main thread).
+- (void)applyResponseBuffers:(NSArray<NSString *> *)bufs {
+    [_respBuffers removeAllObjects];
+    [_respBuffers addObjectsFromArray:bufs];
     // Áp lại tab đã nhớ của pane phải (khoá ngữ nghĩa); không khớp -> tab đầu.
     NSInteger ri = [self tabIndexForKey:_rightPaneActiveTabKey inTitles:_respTabTitles];
     if (ri >= (NSInteger)_respBuffers.count) ri = 0;
     _activeRespTab = ri;
     _respText.string = _respBuffers.count ? _respBuffers[ri] : @"";
     [self highlightActiveTab:_respTabButtons active:ri];
+}
+
+// Đồng bộ: dùng cho re-render rẻ (đổi view mode, đổi tab, stress).
+- (void)rebuildResponseBuffers {
+    [self applyResponseBuffers:[self computeResponseBuffersFor:_lastResp type:_model.type prettyMode:_prettyMode]];
+}
+
+// Bất đồng bộ: format response NGOÀI main thread rồi áp về main (U2 — response lớn không freeze UI).
+// Bỏ kết quả nếu đã có request mới (so _currentHandle) -> tránh hiển thị buffer cũ.
+- (void)rebuildResponseBuffersAsync {
+    core::ApiResponse r = _lastResp;            // copy để chạy nền an toàn (main không sửa song song)
+    core::RequestType type = _model.type;
+    int pm = _prettyMode;
+    uint64_t handle = _currentHandle;
+    __weak MainWindowController *ws = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        MainWindowController *s = ws; if (!s) return;
+        NSArray<NSString *> *bufs = [s computeResponseBuffersFor:r type:type prettyMode:pm];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MainWindowController *s2 = ws; if (!s2) return;
+            if (handle != s2->_currentHandle) return;   // đã gửi/nhận request mới -> bỏ buffer cũ
+            [s2 applyResponseBuffers:bufs];
+        });
+    });
 }
 
 #pragma mark Status line

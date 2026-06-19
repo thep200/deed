@@ -143,6 +143,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     NSTextField *_configTitle;
     NSInteger _configKind; // 0 = Environments, 1 = Settings
     EnvWindowController *_envVC;
+    OS9SerratedInset *_settingInset;   // viền răng cưa bao editor Settings (giống các pane khác)
     SciTextView *_settingEditor;   // editor JSON cho Settings (Scintilla — lexer JSON + theme Platinum)
 
     BOOL _sending;
@@ -168,6 +169,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)buildEditors;
 - (NSString *)prettyTitle;
 - (NSString *)applyView:(const std::string &)body;
+- (NSString *)applyView:(const std::string &)body mode:(int)mode;   // U2: không đọc ivar -> chạy nền được
 - (void)buildStatusBar;
 - (void)buildToolbar;
 - (void)buildDividers;
@@ -188,6 +190,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 // Cập nhật tăng dần (§T1): chỉ quét lại cấp `parentRel` ("" = gốc), giữ nguyên các TreeItem
 // (và con đã nạp) của nhánh khác -> không re-scan toàn bộ folder đang mở.
 - (void)refreshTreeLevel:(NSString *)parentRel;
+- (void)reselectTreeByRel:(NSString *)rel;   // chọn lại node theo relPath sau cập nhật (không auto-load)
 - (TreeItem *)loadedFolderItemForRel:(NSString *)rel;
 - (void)mergeScanLevel:(const std::string &)rel into:(NSMutableArray<TreeItem *> *)items;
 // §T3: đổi prefix relPath trong _expandedFolders khi rename/move folder để giữ trạng thái mở.
@@ -258,6 +261,11 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)startSendSpinner;
 - (void)stopSendSpinner;
 - (void)rebuildResponseBuffers;
+- (void)rebuildResponseBuffersAsync;   // U2: format response ngoài main thread
+- (NSArray<NSString *> *)computeResponseBuffersFor:(const core::ApiResponse &)r
+                                              type:(core::RequestType)type
+                                        prettyMode:(int)prettyMode;
+- (void)applyResponseBuffers:(NSArray<NSString *> *)bufs;
 - (void)updateStatus:(NSString *)text;
 - (NSString *)clockFromEpochMs:(int64_t)ms;
 - (void)updateStatusFromResponse:(const core::ApiResponse &)r error:(BOOL)isErr endMs:(int64_t)endMs;

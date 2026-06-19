@@ -208,8 +208,10 @@
 
 // Nhãn + biến đổi body theo chế độ hiện tại của nút pretty.
 - (NSString *)prettyTitle { return @[ @"Pretty", @"Raw", @"Encode", @"Decode" ][_prettyMode]; }
-- (NSString *)applyView:(const std::string &)body {
-    switch (_prettyMode) {
+- (NSString *)applyView:(const std::string &)body { return [self applyView:body mode:_prettyMode]; }
+// Biến đổi body theo `mode` rõ ràng (KHÔNG đọc ivar) -> an toàn gọi từ thread nền (U2).
+- (NSString *)applyView:(const std::string &)body mode:(int)mode {
+    switch (mode) {
         case 1: return N(core::fieldcodec::formatJson(body, false));
         case 2: return N(core::fieldcodec::jsonEncodeString(body));
         case 3: return N(core::fieldcodec::jsonDecodeString(body));
@@ -307,8 +309,11 @@
 
     // Settings = JSON -> dùng SciTextView (Scintilla) như editor request: tô màu JSON,
     // số dòng, theme Platinum, scrollbar OS9. Scintilla tự quản buffer (không spawn AppleSpell).
+    // Bọc trong OS9SerratedInset để có viền răng cưa giống màn Environments (OS9EnvGrid) + pane khác.
+    _settingInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
+    [_configPane addSubview:_settingInset];
     _settingEditor = [[SciTextView alloc] initEditable:YES];
-    [_configPane addSubview:_settingEditor];
+    [_settingInset addSubview:_settingEditor];
 }
 
 #pragma mark Layout
@@ -437,7 +442,8 @@
     if (_configKind == 0) {                                          // Environments
         if (_envVC.view) { _envVC.view.frame = body; [_envVC layout]; }
     } else {                                                         // Settings
-        _settingEditor.frame = body;
+        _settingInset.frame = body;
+        _settingEditor.frame = NSInsetRect(_settingInset.bounds, 2, 2);   // chừa viền răng cưa
     }
 }
 

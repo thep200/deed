@@ -1,5 +1,7 @@
 #include "cache/ram_cache_driver.hpp"
 
+#include <utility>   // std::move, std::forward
+
 namespace core {
 
 void RamCacheDriver::touch(const std::string& id) {
@@ -30,7 +32,10 @@ std::optional<ResponseRecord> RamCacheDriver::get(const std::string& id) {
     return it->second.rec;
 }
 
-bool RamCacheDriver::put(const std::string& id, const ResponseRecord& r, std::uint64_t bytes) {
+// Thân chung: R&& là forwarding ref -> `e.rec = std::forward<R>(r)` copy nếu lvalue (const&),
+// move nếu rvalue. Định nghĩa ở đây (cùng TU với 2 overload dưới) nên không cần instantiate tường minh.
+template <class R>
+bool RamCacheDriver::putImpl(const std::string& id, R&& r, std::uint64_t bytes) {
     std::lock_guard<std::mutex> lk(mu_);
     // Record đơn lẻ lớn hơn cap -> không cache RAM (caller dùng disk). §5.
     if (bytes > cap_) {
@@ -47,13 +52,20 @@ bool RamCacheDriver::put(const std::string& id, const ResponseRecord& r, std::ui
     }
     lru_.push_front(id);
     Entry e;
-    e.rec = r;
+    e.rec = std::forward<R>(r);      // move nếu caller truyền rvalue -> không copy body lớn
     e.bytes = bytes;
     e.lru = lru_.begin();
     used_ += bytes;
     map_.emplace(id, std::move(e));
     evictToFit();                    // bound: evict LRU tới khi vừa cap
     return true;
+}
+
+bool RamCacheDriver::put(const std::string& id, const ResponseRecord& r, std::uint64_t bytes) {
+    return putImpl(id, r, bytes);                 // lvalue -> copy
+}
+bool RamCacheDriver::put(const std::string& id, ResponseRecord&& r, std::uint64_t bytes) {
+    return putImpl(id, std::move(r), bytes);       // rvalue -> move
 }
 
 void RamCacheDriver::remove(const std::string& id) {

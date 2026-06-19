@@ -16,6 +16,10 @@ namespace core {
 
 namespace {
 const char* kIndexFile = "_index.json";
+// Gộp ghi index: chỉ flush _index.json sau mỗi N thay đổi cấu trúc (put/remove) thay vì mỗi lần.
+// File response đã ghi bền ngay (durable); index chỉ là metadata dẫn xuất — entry thiếu sau crash
+// thành file mồ côi (cache miss, dọn ở clear), entry thừa tự lành ở loadIndex (kiểm fs::exists).
+const int kIndexFlushEvery = 8;
 }
 
 std::string DiskCacheDriver::safeId(const std::string& id) {
@@ -82,8 +86,15 @@ void DiskCacheDriver::persistIndex() const {
     for (const auto& [id, e] : index_)
         entries[id] = {{"bytes", e.bytes}, {"receivedAt", e.receivedAt}, {"atime", e.atime}};
     nlohmann::json j{{"tick", tick_}, {"entries", entries}};
-    try { fsutil::writeFileAtomic((fs::path(dir_) / kIndexFile).string(), j.dump()); dirty_ = false; }
+    try { fsutil::writeFileAtomic((fs::path(dir_) / kIndexFile).string(), j.dump()); dirty_ = false; unflushed_ = 0; }
     catch (...) { /* index là cache dẫn xuất; lỗi ghi -> bỏ qua */ }
+}
+
+// put/remove gọi đây thay vì persistIndex() trực tiếp: gộp tối đa kIndexFlushEvery thay đổi
+// vào 1 lần ghi đĩa. Destructor flush phần dư khi dirty_ còn set.
+void DiskCacheDriver::noteIndexDirty() {
+    dirty_ = true;
+    if (++unflushed_ >= kIndexFlushEvery) persistIndex();
 }
 
 void DiskCacheDriver::touch(IndexEntry& e, const std::string& id) {
@@ -112,7 +123,7 @@ std::optional<ResponseRecord> DiskCacheDriver::get(const std::string& id) {
         used_ -= it->second.bytes;
         lru_.erase(it->second.lru);
         index_.erase(it);
-        persistIndex();                               // thay đổi cấu trúc -> ghi ngay
+        noteIndexDirty();                             // file mất -> gỡ index (gộp ghi)
         return std::nullopt;
     }
     try {
@@ -133,7 +144,7 @@ bool DiskCacheDriver::put(const std::string& id, const ResponseRecord& r, std::u
             used_ -= old->second.bytes;
             lru_.erase(old->second.lru);
             index_.erase(old);
-            persistIndex();
+            noteIndexDirty();
         }
         return false;
     }
@@ -154,7 +165,7 @@ bool DiskCacheDriver::put(const std::string& id, const ResponseRecord& r, std::u
     used_ += bytes;
     index_[id] = ie;
     evictToFit();                                     // bound disk
-    persistIndex();
+    noteIndexDirty();                                 // gộp ghi index (file response đã bền)
     return true;
 }
 
@@ -167,7 +178,7 @@ void DiskCacheDriver::remove(const std::string& id) {
         used_ -= it->second.bytes;
         lru_.erase(it->second.lru);
         index_.erase(it);
-        persistIndex();
+        noteIndexDirty();
     }
 }
 
