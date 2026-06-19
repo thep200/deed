@@ -81,22 +81,20 @@ static int gButtonStyle = 0;
 
 // Retro border-line: nền phẳng trắng/sáng + viền nét đậm, góc VUÔNG. Nhấn -> đảo (nền tối).
 + (void)drawLineButtonInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault {
-    NSRect inner = NSInsetRect(r, 0.5, 0.5);
+    // Fill TOÀN BỘ bounds (không inset) để xoá sạch mép mỗi lần vẽ -> tránh viền antialias
+    // cộng dồn alpha khi vẽ lại (view không layer-backed, vẽ source-over vào backing chung).
     [(pressed ? G(0.20) : [NSColor whiteColor]) set];   // nhấn: nền đen-xám (đảo)
-    NSRectFill(inner);
+    NSRectFill(r);
     [G(0.15) set];                                       // viền #262626
-    NSBezierPath *p = [NSBezierPath bezierPathWithRect:inner];
-    p.lineWidth = isDefault ? 2.0 : 1.0;
-    [p stroke];
+    NSFrameRectWithWidth(r, isDefault ? 2.0 : 1.0);      // viền crisp (no AA), idempotent
 }
 
 // btn-new.svg: nền #CCCCCC, góc vuông, viền #484848 1px, bevel trắng (trên-trái) / #808080 (dưới-phải).
 + (void)drawNewBevelInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault {
-    NSRect inner = NSInsetRect(r, 0.5, 0.5);
     [(pressed ? G(0.70) : G(0.80)) set]; // #CCCCCC
-    NSRectFill(inner);
+    NSRectFill(r);                       // fill full bounds (xem ghi chú drawLineButtonInRect)
 
-    NSRect bz = NSInsetRect(inner, 1, 1);
+    NSRect bz = NSInsetRect(r, 1, 1);    // bevel ngay trong viền 1px
     NSColor *tl = pressed ? G(0.5) : [NSColor whiteColor];
     NSColor *br = pressed ? [NSColor whiteColor] : G(0.5); // #808080
     CGFloat x0 = bz.origin.x, x1 = NSMaxX(bz), y0 = bz.origin.y, y1 = NSMaxY(bz);
@@ -108,9 +106,7 @@ static int gButtonStyle = 0;
     NSRectFill(NSMakeRect(x1 - 2, y0, 2, bz.size.height));   // right
 
     [G(0.282) set]; // viền #484848
-    NSBezierPath *p = [NSBezierPath bezierPathWithRect:inner];
-    p.lineWidth = isDefault ? 2.0 : 1.0;
-    [p stroke];
+    NSFrameRectWithWidth(r, isDefault ? 2.0 : 1.0);          // viền crisp (no AA), idempotent
 }
 
 + (void)drawBevelInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault {
@@ -119,6 +115,11 @@ static int gButtonStyle = 0;
     // nền #DDDDDD (lõm khi nhấn)
     [(pressed ? G(0.62) : [self buttonFace]) set];
     [path fill];
+
+    // Tắt antialias cho các nét viền: stroke phủ NGUYÊN pixel (alpha 1) nên vẽ lại không
+    // cộng dồn -> tránh "viền đậm dần" khi click nhanh (view không layer-backed, vẽ source-over).
+    [NSGraphicsContext saveGraphicsState];
+    [[NSGraphicsContext currentContext] setShouldAntialias:NO];
 
     // bevel trong: vẽ theo PATH RĂNG CƯA (inset) nên góc — kể cả góc trái-trên — cũng có răng cưa.
     // highlight trên-trái, shadow dưới-phải; mỗi nửa cắt theo tam giác chéo.
@@ -148,6 +149,8 @@ static int gButtonStyle = 0;
     [[self frame] set];
     path.lineWidth = isDefault ? 2.4 : 1.4;
     [path stroke];
+
+    [NSGraphicsContext restoreGraphicsState];
 }
 
 + (void)drawInsetInRect:(NSRect)r {

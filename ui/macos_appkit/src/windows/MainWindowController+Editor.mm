@@ -317,7 +317,8 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     [self highlightActiveTab:_respTabButtons active:tab];
 }
 - (void)highlightActiveTab:(NSArray<OS9BevelButton *> *)buttons active:(NSInteger)active {
-    for (OS9BevelButton *b in buttons) b.isDefault = (b.tag == active);
+    // Tab đang chọn vẽ LÕM (selected) thay vì viền đậm (isDefault) — hợp phong cách OS9.
+    for (OS9BevelButton *b in buttons) b.selected = (b.tag == active);
 }
 - (void)prettyToggle:(id)sender {
     _prettyMode = (_prettyMode + 1) % 4;   // Pretty -> Raw -> Encode -> Decode -> ...

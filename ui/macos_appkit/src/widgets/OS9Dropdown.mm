@@ -121,10 +121,10 @@
                                      NSMaxX(_listRect) - textX - 6, sz.height);
         [_items[i] drawInRect:textRect withAttributes:trAttrs];
     }
+    // Viền hộp: NSFrameRect (no AA, crisp, vẽ trong _listRect) — vẽ lại khi hover không cộng
+    // dồn alpha ở mép như NSBezierPath stroke antialias (view không layer-backed).
     [[NSColor colorWithCalibratedWhite:0.15 alpha:1] set];
-    NSBezierPath *border = [NSBezierPath bezierPathWithRect:NSInsetRect(_listRect, 0.5, 0.5)];
-    border.lineWidth = 1.0;
-    [border stroke];
+    NSFrameRect(_listRect);
 }
 
 @end
