@@ -1,6 +1,8 @@
+<h1 align="center">Deed</h1>
+
 ![Deed main](images/main.png)
 
-Deed is MacOS native API client
+<h1 align="center">Deed is MacOS native API client</h1>
 
 Supported type of request:
 
@@ -13,7 +15,9 @@ Supported type of request:
 - Theme retro MacOS
 - REST / HTTP
 - gRPC (unary)
-- Collection dạng cây
+- Collection tree (lazy load)
+- Request editor (JSON)
+- Response viewer (JSON)
 - Environment & Alias
 - Import curl
 
@@ -27,7 +31,7 @@ Supported type of request:
 - nlohmann/json
 - CMake + Ninja
 
-# Status & Roadmap
+# Upcomming features
 
-- [x] Search & filter request
-- [x] gRPC : streaming (client/server)
+- Search & filter
+- gRPC streaming
