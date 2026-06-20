@@ -9,7 +9,7 @@
     [self parseUrlQueryIntoQueryTab];   // user gõ query vào URL -> tách vào tab Query trước khi sync
     if (![self syncModelFromEditors:NO]) return;
     if (_model.type == core::RequestType::Grpc && _model.grpc.methodType != "unary") {
-        [self toastWarn:@"POC supports unary gRPC only"]; return;
+        [self toastWarn:StrToastUnaryOnly]; return;
     }
     _sending = YES;
     [self startSendSpinner];           // icon loading quay thay cho label
@@ -44,7 +44,10 @@
 // Hiển thị trạng thái lỗi vào pane response (dùng chung cho lỗi mới lẫn lỗi từ cache).
 - (void)displayErrorKind:(core::ErrorKind)kind message:(NSString *)msg {
     NSString *k = N(core::toString(kind));
-    _statusLabel.stringValue = (kind == core::ErrorKind::Cancelled) ? @"Cancelled" : [NSString stringWithFormat:@"✕ %@", k];
+    NSString *statusText = k;                                       // bỏ dấu ✕ trước tên lỗi
+    if (kind == core::ErrorKind::Cancelled) statusText = StrStatusCancelled;
+    else if (kind == core::ErrorKind::Network) statusText = StrStatusNetworkError;   // lỗi mạng -> báo rõ
+    _statusLabel.stringValue = statusText;
     _statusLabel.textColor = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
     _hasResp = NO;
     [_respBuffers removeAllObjects];
@@ -116,7 +119,7 @@
         for (const auto &c : r.cookies)
             [ck appendFormat:@"%s=%s  (domain=%s path=%s expires=%s)\n", c.name.c_str(), c.value.c_str(),
                              c.domain.c_str(), c.path.c_str(), c.expires.c_str()];
-        [bufs addObject:(ck.length ? ck : @"(no Set-Cookie)")];
+        [bufs addObject:(ck.length ? ck : StrNoSetCookie)];
     } else {
         [bufs addObject:N(fieldcodec::formatJson(r.resolvedRequestDump, true))];
     }
@@ -177,7 +180,7 @@
 
 // status | size | time | start - end. endMs = lúc nhận response; start = end - elapsed.
 - (void)updateStatusFromResponse:(const core::ApiResponse &)r error:(BOOL)isErr endMs:(int64_t)endMs {
-    NSString *code = r.statusCode ? [NSString stringWithFormat:@"%d", r.statusCode] : @"OK";
+    NSString *code = r.statusCode ? [NSString stringWithFormat:@"%d", r.statusCode] : StrOK;
     NSString *size = (r.sizeBytes >= 1024) ? [NSString stringWithFormat:@"%.1fkb", r.sizeBytes / 1024.0]
                                            : [NSString stringWithFormat:@"%lldb", (long long)r.sizeBytes];
     int64_t startMs = (endMs > 0) ? endMs - (int64_t)r.elapsedMs : 0;   // suy ra mốc bắt đầu

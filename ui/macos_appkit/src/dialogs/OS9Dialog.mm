@@ -10,8 +10,12 @@ static const CGFloat kPad = 16;
 static const CGFloat kBtnGap = 8;
 static const CGFloat kBtnMinW = 70;
 static const CGFloat kBtnH = 22;
-static const CGFloat kMinW = 300;
+static const CGFloat kMinW = 340;
 static const CGFloat kMaxW = 460;
+// NSTextField vẽ chữ với line-fragment padding (~vài px mỗi bên) mà phép đo chuỗi thô
+// KHÔNG tính tới -> nếu cấp đúng bằng bề rộng đo được, từ cuối bị wrap xuống dòng 2 rồi
+// bị cắt (label chỉ cao 1 dòng). Cộng thêm slack để label luôn rộng hơn chữ một chút.
+static const CGFloat kTextSlack = 12;
 static const CGFloat kTitleH = 20;     // pinstripe title bar (movable)
 static const CGFloat kIconW = 40;      // cột icon cảnh báo
 static const CGFloat kFieldH = 22;
@@ -196,7 +200,7 @@ static const CGFloat kFieldH = 22;
     CGFloat topInset = (movable ? kTitleH : 0) + kPad;
 
     NSRect tb = [self measureMessage:message width:(kMaxW - 2 * kPad - iconW)];
-    CGFloat textW = ceil(tb.size.width), textH = MAX(ceil(tb.size.height), iconW ? 28 : 16);
+    CGFloat textW = ceil(tb.size.width) + kTextSlack, textH = MAX(ceil(tb.size.height), iconW ? 28 : 16);
 
     // bề rộng theo nút.
     NSMutableArray<OS9BevelButton *> *btns = [NSMutableArray array];

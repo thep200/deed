@@ -7,7 +7,7 @@
 - (void)openFolder:(id)sender {
     NSOpenPanel *p = [NSOpenPanel openPanel];
     p.canChooseDirectories = YES; p.canChooseFiles = NO; p.allowsMultipleSelection = NO;
-    p.prompt = @"Open Collection";
+    p.prompt = StrOpenCollection;
     if ([p runModal] == NSModalResponseOK) [self openCollectionRoot:p.URL.path];
 }
 
@@ -57,7 +57,7 @@
         if (!last.empty()) {
             NSString *full = N(_root + "/" + last);
             if ([[NSFileManager defaultManager] fileExistsAtPath:full]) [self loadRequestAtRel:N(last)];
-            else [self toast:[NSString stringWithFormat:@"Not found: %s (skipped)", last.c_str()]];
+            else [self toast:[NSString stringWithFormat:StrFmtToastNotFound, last.c_str()]];
         }
     } catch (...) {}
 }
@@ -229,15 +229,15 @@
 // Rename qua dialog Platinum (CUSTOM_DIALOG §6.1): prompt + validate, rồi đồng bộ tên file (LAZY_TREE §4).
 - (void)promptRenameItem:(TreeItem *)t {
     if (!t || t.relPath.length == 0 || !_engine) return;
-    NSString *newName = [OS9Dialog promptWithTitle:@"Rename"
-                                           message:@"New name:"
+    NSString *newName = [OS9Dialog promptWithTitle:StrRename
+                                           message:StrDlgRenameMsg
                                        defaultText:(t.name ?: @"")
-                                       placeholder:@"Name"
-                                          okButton:@"Rename"
-                                      cancelButton:@"Cancel"
+                                       placeholder:StrPhName
+                                          okButton:StrRename
+                                      cancelButton:StrCancel
                                           validate:^NSString *(NSString *s) {
         NSString *tr = [s stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-        if (tr.length == 0) return @"Name cannot be empty";
+        if (tr.length == 0) return StrValNameEmpty;
         return nil;
     }
                                             parent:_window];
@@ -257,7 +257,7 @@
         }
         [self refreshTreeLevel:parentRel];   // §T1: chỉ quét lại cấp chứa item, không re-scan toàn cây
         if (wasCurrent) [self revealAndSelectRequestById:N(_currentId) relPath:N(_currentRel)];
-        [self toastOk:@"Renamed"];
+        [self toastOk:StrToastRenamed];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 
@@ -418,7 +418,7 @@
 
     // Chọn nhiều -> chỉ Delete.
     if (selCount > 1) {
-        [[m addItemWithTitle:[NSString stringWithFormat:@"Delete %lu items", (unsigned long)selCount]
+        [[m addItemWithTitle:[NSString stringWithFormat:StrFmtDeleteItems, (unsigned long)selCount]
                       action:@selector(deleteSelectedMulti:) keyEquivalent:@""] setTarget:self];
         return m;
     }
@@ -426,20 +426,20 @@
     TreeItem *t = (row >= 0) ? [_tree itemAtRow:row] : nil;
     if (t == nil || t.isFolder) {
         // Vùng trống hoặc folder -> thêm request/folder.
-        [[m addItemWithTitle:@"New HTTP Request" action:@selector(newHttp:) keyEquivalent:@""] setTarget:self];
-        [[m addItemWithTitle:@"New gRPC Request" action:@selector(newGrpc:) keyEquivalent:@""] setTarget:self];
-        [[m addItemWithTitle:@"New Folder" action:@selector(newFolder:) keyEquivalent:@""] setTarget:self];
+        [[m addItemWithTitle:StrMenuNewHttp action:@selector(newHttp:) keyEquivalent:@""] setTarget:self];
+        [[m addItemWithTitle:StrMenuNewGrpc action:@selector(newGrpc:) keyEquivalent:@""] setTarget:self];
+        [[m addItemWithTitle:StrNewFolder action:@selector(newFolder:) keyEquivalent:@""] setTarget:self];
         if (t != nil) { // folder cũng cho rename/dup/delete
             [m addItem:[NSMenuItem separatorItem]];
-            [[m addItemWithTitle:@"Rename" action:@selector(renameSel:) keyEquivalent:@""] setTarget:self];
-            [[m addItemWithTitle:@"Duplicate" action:@selector(dupSel:) keyEquivalent:@""] setTarget:self];
-            [[m addItemWithTitle:@"Delete" action:@selector(deleteSel:) keyEquivalent:@""] setTarget:self];
+            [[m addItemWithTitle:StrRename action:@selector(renameSel:) keyEquivalent:@""] setTarget:self];
+            [[m addItemWithTitle:StrDuplicate action:@selector(dupSel:) keyEquivalent:@""] setTarget:self];
+            [[m addItemWithTitle:StrDelete action:@selector(deleteSel:) keyEquivalent:@""] setTarget:self];
         }
     } else {
         // Request -> rename / duplicate / delete.
-        [[m addItemWithTitle:@"Rename" action:@selector(renameSel:) keyEquivalent:@""] setTarget:self];
-        [[m addItemWithTitle:@"Duplicate" action:@selector(dupSel:) keyEquivalent:@""] setTarget:self];
-        [[m addItemWithTitle:@"Delete" action:@selector(deleteSel:) keyEquivalent:@""] setTarget:self];
+        [[m addItemWithTitle:StrRename action:@selector(renameSel:) keyEquivalent:@""] setTarget:self];
+        [[m addItemWithTitle:StrDuplicate action:@selector(dupSel:) keyEquivalent:@""] setTarget:self];
+        [[m addItemWithTitle:StrDelete action:@selector(deleteSel:) keyEquivalent:@""] setTarget:self];
     }
     return m;
 }
@@ -474,11 +474,11 @@
         if (t.relPath.length) [items addObject:t];
     }];
     if (items.count == 0) return;
-    NSInteger r = [OS9Dialog confirmWithTitle:@"Delete"
-                                      message:[NSString stringWithFormat:@"Delete %lu selected items? This cannot be undone.",
+    NSInteger r = [OS9Dialog confirmWithTitle:StrDelete
+                                      message:[NSString stringWithFormat:StrFmtConfirmDeleteMulti,
                                                (unsigned long)items.count]
-                                      buttons:@[ @"Cancel", @"Delete" ]
-                                defaultButton:1 cancelButton:0 icon:OS9AlertCaution parent:_window];
+                                      buttons:@[ StrCancel, StrDelete ]
+                                defaultButton:1 cancelButton:0 icon:OS9AlertNone parent:_window];
     if (r != 1) return;
     [self closeEditorIfDeleted:items];    // tránh autosave tạo lại file vừa xoá
     NSMutableSet<NSString *> *parents = [NSMutableSet set];
@@ -494,25 +494,25 @@
     if (t.isFolder) return t.relPath.UTF8String;
     return [t.relPath stringByDeletingLastPathComponent].UTF8String;
 }
-- (void)newHttp:(id)s { [self createRequest:core::RequestType::Http name:@"New Request"]; }
-- (void)newGrpc:(id)s { [self createRequest:core::RequestType::Grpc name:@"New RPC"]; }
+- (void)newHttp:(id)s { [self createRequest:core::RequestType::Http name:StrDefaultRequestName]; }
+- (void)newGrpc:(id)s { [self createRequest:core::RequestType::Grpc name:StrDefaultRpcName]; }
 // Tên mặc định, KHÔNG popup. Đổi tên sau bằng inline-rename trên cây. loadRequestAtRel
 // tự autosave request đang mở trước khi chuyển.
 - (void)createRequest:(core::RequestType)t name:(NSString *)name {
-    if (!_engine) { [self toastWarn:@"Open a collection folder first"]; return; }
+    if (!_engine) { [self toastWarn:StrToastOpenFolderFirst]; return; }
     try {
         std::string folderRel = [self selectedFolderRel];
         std::string rel = _engine->collection().createRequest(folderRel, t, name.UTF8String);
         [self refreshTreeLevel:N(folderRel)];   // §T1: chỉ quét lại folder đích (reveal sẽ mở nếu đang đóng)
         [self loadRequestAtRel:N(rel)];
-        [self toastOk:[NSString stringWithFormat:@"Created: %@", name]];
+        [self toastOk:[NSString stringWithFormat:StrFmtToastCreated, name]];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 - (void)newFolder:(id)s {
-    if (!_engine) { [self toastWarn:@"Open a collection folder first"]; return; }
+    if (!_engine) { [self toastWarn:StrToastOpenFolderFirst]; return; }
     try {
         std::string folderRel = [self selectedFolderRel];
-        _engine->collection().createFolder(folderRel, "New Folder");
+        _engine->collection().createFolder(folderRel, StrNewFolder.UTF8String);
         [self refreshTreeLevel:N(folderRel)];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
@@ -530,16 +530,16 @@
         std::string dupRel = _engine->collection().duplicate(t.relPath.UTF8String);
         [self refreshTreeLevel:parentRel];   // §T1: bản sao nằm cùng cấp -> chỉ quét lại cấp đó
         if (!t.isFolder) [self loadRequestAtRel:N(dupRel)];   // mở bản sao -> _currentRel đúng
-        [self toastOk:@"Duplicated"];
+        [self toastOk:StrToastDuplicated];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 - (void)deleteSel:(id)s {
     NSInteger row = _tree.selectedRow; if (row < 0) return;
     TreeItem *t = [_tree itemAtRow:row];
-    NSInteger r = [OS9Dialog confirmWithTitle:@"Delete"
-                                      message:[NSString stringWithFormat:@"Delete \"%@\"? This cannot be undone.", t.name]
-                                      buttons:@[ @"Cancel", @"Delete" ]
-                                defaultButton:1 cancelButton:0 icon:OS9AlertCaution parent:_window];
+    NSInteger r = [OS9Dialog confirmWithTitle:StrDelete
+                                      message:[NSString stringWithFormat:StrFmtConfirmDelete, t.name]
+                                      buttons:@[ StrCancel, StrDelete ]
+                                defaultButton:1 cancelButton:0 icon:OS9AlertNone parent:_window];
     if (r != 1) return;
     [self closeEditorIfDeleted:@[ t ]];   // tránh autosave tạo lại file vừa xoá
     [self purgeCacheAtRel:t.relPath isFolder:t.isFolder];

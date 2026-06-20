@@ -12,6 +12,7 @@
 
 #import "windows/MainWindowController.h"
 
+#import "app/AppStrings.h"
 #import "app/DeedConfig.h"
 #import "app/OS9Lifecycle.h"
 #import "dialogs/OS9Dialog.h"

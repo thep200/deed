@@ -141,7 +141,7 @@
         if (!silent) {
             [self selectReqTab:tab];
             NSString *tn = (tab >= 0 && tab < (NSInteger)names.count) ? names[tab] : @"?";
-            [self toastWarn:[NSString stringWithFormat:@"Invalid JSON in tab %@: %s", tn, e.c_str()]];
+            [self toastWarn:[NSString stringWithFormat:StrFmtToastInvalidJsonTab, tn, e.c_str()]];
         }
         return NO;
     };
@@ -176,7 +176,7 @@
 - (void)autosaveCurrent {
     if (!_hasRequest || !_engine || _currentRel.empty()) return;
     if (![self resyncCurrentRelById]) return;     // request đã bị xoá/đổi path -> không ghi lại path cũ
-    if (![self syncModelFromEditors:YES]) { [self toastWarn:@"Autosave failed: invalid JSON"]; return; }
+    if (![self syncModelFromEditors:YES]) { [self toastWarn:StrToastAutosaveFailed]; return; }
     try { _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // tên file có thể đổi (sync §4)
           _engine->session().saveLastOpened(_currentRel);
           // §T1: autosave chỉ đụng 1 request -> cập nhật cấp chứa nó, KHÔNG re-scan gốc + reloadData toàn cây.
@@ -194,9 +194,9 @@
 - (NSString *)bodyButtonTitle {
     NSString *m = _bodyMode.length ? _bodyMode : @"json";
     for (NSDictionary *d in BodyModeTable()) if ([d[@"mode"] isEqualToString:m]) return d[@"label"];
-    return @"JSON";   // text/xml/none -> JSON (giữ hành vi cũ)
+    return StrBodyJson;   // text/xml/none -> JSON (giữ hành vi cũ)
 }
-- (NSInteger)bodyTabIndex { return [_reqTabTitles indexOfObject:@"Body"]; } // 0 cho HTTP, NSNotFound cho gRPC
+- (NSInteger)bodyTabIndex { return [_reqTabTitles indexOfObject:StrTabBody]; } // 0 cho HTTP, NSNotFound cho gRPC
 - (void)updateBodyButtonLabel {
     NSInteger bi = [self bodyTabIndex];
     if (bi == NSNotFound || bi >= (NSInteger)_reqTabButtons.count) return;
@@ -214,9 +214,9 @@ static NSString *const kFileBodyTemplate = @"{\n  \"filePath\": \"\"\n}";
 static NSArray<NSDictionary *> *BodyModeTable(void) {
     static NSArray *t;
     if (!t) t = @[
-        @{@"mode" : @"json",            @"opt" : @"JSON", @"label" : @"JSON", @"tpl" : @"{}"},
-        @{@"mode" : @"binary",          @"opt" : @"File", @"label" : @"File", @"tpl" : kFileBodyTemplate},
-        @{@"mode" : @"form-urlencoded", @"opt" : @"Form", @"label" : @"Form", @"tpl" : kFormBodyTemplate},
+        @{@"mode" : @"json",            @"opt" : StrBodyJson, @"label" : StrBodyJson, @"tpl" : @"{}"},
+        @{@"mode" : @"binary",          @"opt" : StrBodyFile, @"label" : StrBodyFile, @"tpl" : kFileBodyTemplate},
+        @{@"mode" : @"form-urlencoded", @"opt" : StrBodyForm, @"label" : StrBodyForm, @"tpl" : kFormBodyTemplate},
     ];
     return t;
 }
@@ -353,7 +353,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     NSPasteboard *pb = [NSPasteboard generalPasteboard];
     [pb clearContents];
     [pb setString:N(curl) forType:NSPasteboardTypeString];
-    [self toastOk:@"Copied as cURL"];
+    [self toastOk:StrToastCopiedCurl];
 }
 
 // Zoom toggle thủ công (performZoom đôi khi không thu nhỏ lại được).
@@ -424,7 +424,7 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     core::ImportResult r = isGrpc ? _engine->importFromGrpc(text.UTF8String)
                                   : _engine->importFromCurl(text.UTF8String);
     if (!r.ok) {
-        [self toastWarn:[NSString stringWithFormat:@"Import %@ failed: %s",
+        [self toastWarn:[NSString stringWithFormat:StrFmtToastImportFailed,
                          isGrpc ? @"grpcurl" : @"cURL", r.error.c_str()]];
         [self restoreUrlField];
         return;
@@ -437,17 +437,17 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     core::ImportResult r = isGrpc ? _engine->importFromGrpc(text.UTF8String)
                                   : _engine->importFromCurl(text.UTF8String);
     if (!r.ok) {
-        [self toastWarn:[NSString stringWithFormat:@"Import %@ failed: %s",
+        [self toastWarn:[NSString stringWithFormat:StrFmtToastImportFailed,
                          isGrpc ? @"grpcurl" : @"cURL", r.error.c_str()]];
         return;
     }
-    NSString *primary = _hasRequest ? @"Replace current" : @"Create request";
+    NSString *primary = _hasRequest ? StrBtnReplaceCurrent : StrBtnCreateRequest;
     NSString *body = [NSString stringWithFormat:@"%@\n\n%@",
-                      isGrpc ? @"grpcurl command detected" : @"cURL command detected",
+                      isGrpc ? StrGrpcurlDetected : StrCurlDetected,
                       [self importSummary:r.model unknown:r.unknown grpc:isGrpc]];
-    NSInteger choice = [OS9Dialog confirmWithTitle:@"Import"
+    NSInteger choice = [OS9Dialog confirmWithTitle:StrDlgImportTitle
                                            message:body
-                                           buttons:@[ @"Cancel", primary ]
+                                           buttons:@[ StrCancel, primary ]
                                      defaultButton:1 cancelButton:0
                                               icon:OS9AlertNote
                                             parent:_window];
@@ -480,12 +480,12 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 // Tên gợi ý: HTTP "METHOD lastPathSegment"; gRPC = method.
 - (NSString *)deriveImportName:(const core::RequestModel &)m {
     if (m.type == core::RequestType::Grpc)
-        return m.grpc.method.empty() ? @"Imported gRPC" : N(m.grpc.method);
+        return m.grpc.method.empty() ? StrImportedGrpc : N(m.grpc.method);
     NSString *url = N(m.http.url);
     NSString *path = url;
     NSRange q = [path rangeOfString:@"?"]; if (q.location != NSNotFound) path = [path substringToIndex:q.location];
     NSString *last = path.lastPathComponent;
-    if (!last.length || [last containsString:@":"]) last = @"request"; // chỉ có host
+    if (!last.length || [last containsString:@":"]) last = StrDefaultImportName; // chỉ có host
     return [NSString stringWithFormat:@"%s %@", m.http.method.c_str(), last];
 }
 
@@ -498,7 +498,7 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
             std::string rel = _engine->collection().createRequestFromModel([self selectedFolderRel], m, name.UTF8String);
             [self reloadTree];
             [self loadRequestAtRel:N(rel)];
-            [self toastOk:[NSString stringWithFormat:@"Imported & created: %@", name]];
+            [self toastOk:[NSString stringWithFormat:StrFmtToastImportedCreated, name]];
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
         return;
     }
@@ -518,7 +518,7 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
         _currentRel = _engine->collection().saveRequest(_currentRel, _model);   // lưu + sync tên file (§4)
         _engine->session().saveLastOpened(_currentRel);
         [self reloadTree];
-        [self toastOk:[NSString stringWithFormat:@"Replaced current request (%@)",
+        [self toastOk:[NSString stringWithFormat:StrFmtToastReplaced,
                        _model.type == core::RequestType::Grpc ? @"gRPC" : @"HTTP"]];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
@@ -547,7 +547,7 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 // Nếu ô URL có '?...': tách query (decode) -> nối vào tab Query, ô URL còn raw.
 // Dùng khi user tự gõ query vào URL rồi Enter/Send (giống hành vi import cURL).
 - (void)parseUrlQueryIntoQueryTab {
-    NSInteger qi = [_reqTabTitles indexOfObject:@"Query"];
+    NSInteger qi = [_reqTabTitles indexOfObject:StrTabQuery];
     if (qi == NSNotFound || qi >= (NSInteger)_reqBuffers.count) return;   // gRPC: không có Query
     NSString *u = _urlField.stringValue ?: @"";
     NSRange qr = [u rangeOfString:@"?"];
@@ -596,7 +596,7 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 - (void)updateTitle {
     // Title bar theo NGỮ CẢNH: màn config -> "Settings"/"Environments"; còn lại -> tên request.
     if (_configMode) {
-        _titleBar.title = (_configKind == 0) ? @"Environments" : @"Settings";
+        _titleBar.title = (_configKind == 0) ? StrTitleEnvironments : StrTitleSettings;
     } else {
         _titleBar.title = _hasRequest ? N(_model.name) : @"";
     }
@@ -607,13 +607,13 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 
 - (void)saveRequest:(id)sender {
     if (!_hasRequest || !_engine) return;
-    if (![self resyncCurrentRelById]) { [self toastWarn:@"Request no longer exists"]; return; }
+    if (![self resyncCurrentRelById]) { [self toastWarn:StrToastRequestGone]; return; }
     if (![self syncModelFromEditors:NO]) return;
     try {
         _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // tên file đồng bộ method/name (§4)
         _engine->session().saveLastOpened(_currentRel);
         [self reloadTree];
-        [self toastOk:@"Saved"];
+        [self toastOk:StrToastSaved];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 

@@ -3,12 +3,11 @@
 // Cột nền: KEY nội bộ "Global" (giữ ngữ nghĩa resolve {{var}}) nhưng HIỂN THỊ "Local"
 // (SPEC §T4). Map qua lại ở lớp UI.
 static NSString *const kBaseEnvKey = @"Global";
-static NSString *const kBaseEnvLabel = @"Local";
 static NSString *EnvDisplay(NSString *key) {
-    return [key isEqualToString:kBaseEnvKey] ? kBaseEnvLabel : key;
+    return [key isEqualToString:kBaseEnvKey] ? StrEnvLocal : key;
 }
 static NSString *EnvKeyFromDisplay(NSString *disp) {
-    return [disp isEqualToString:kBaseEnvLabel] ? kBaseEnvKey : disp;
+    return [disp isEqualToString:StrEnvLocal] ? kBaseEnvKey : disp;
 }
 
 @implementation MainWindowController (Config)
@@ -16,11 +15,11 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
 #pragma mark ENV
 
 - (void)envClicked:(id)sender {
-    if (!_engine) { [self toastWarn:@"Open a collection folder first"]; return; }
-    NSMutableArray<NSString *> *items = [@[ kBaseEnvLabel ] mutableCopy];   // base hiển thị "Local"
+    if (!_engine) { [self toastWarn:StrToastOpenFolderFirst]; return; }
+    NSMutableArray<NSString *> *items = [@[ StrEnvLocal ] mutableCopy];   // base hiển thị "Local"
     for (const auto &name : _engine->environments().list())
         if (name != kBaseEnvKey.UTF8String) [items addObject:N(name)];
-    [items addObject:@"Manage…"];
+    [items addObject:StrEnvManage];
     NSString *activeDisp = EnvDisplay(N(_engine->session().getActiveEnv()));
     NSInteger sel = [items indexOfObject:activeDisp]; if (sel == NSNotFound) sel = 0;
     __weak MainWindowController *ws = self;
@@ -34,10 +33,10 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     if (!_engine) return;
     _engine->session().setActiveEnv(EnvKeyFromDisplay(name).UTF8String);   // "Local" -> key "Global"
     [self refreshEnvButton];
-    [self toast:[NSString stringWithFormat:@"ENV: %@", name]];
+    [self toast:[NSString stringWithFormat:StrFmtToastEnv, name]];
 }
 - (void)refreshEnvButton {
-    _envButton.title = _engine ? EnvDisplay(N(_engine->session().getActiveEnv())) : kBaseEnvLabel;
+    _envButton.title = _engine ? EnvDisplay(N(_engine->session().getActiveEnv())) : StrEnvLocal;
 }
 
 #pragma mark Config screen (ENV + Setting)
@@ -46,7 +45,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
 - (void)settingClicked:(id)sender { [self enterConfig:1]; }
 
 - (void)enterConfig:(NSInteger)kind {
-    if (!_engine) { [self toastWarn:@"Open a collection folder first"]; return; }
+    if (!_engine) { [self toastWarn:StrToastOpenFolderFirst]; return; }
     // §2.1: nhả input context của pane chính (URL/editor) trước khi ẩn nó đi.
     OS9SafeEndEditing(_window, nil);
     [self autosaveCurrent];
@@ -97,7 +96,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
                 _engine->reloadCacheConfig();   // áp cap/threshold mới -> evict ngay nếu nhỏ đi (§1.2)
                 [self applyConfiguredFontAndRefresh];
             } else {
-                [self toastWarn:@"Invalid settings JSON — skipped"];
+                [self toastWarn:StrToastInvalidSettings];
             }
         }
     }
@@ -107,7 +106,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     [self refreshEnvButton];
     [self updateTitle];   // title bar -> tên request hiện tại
     [self relayout];
-    [self toastOk:@"Saved"];
+    [self toastOk:StrToastSaved];
 }
 
 #pragma mark Proto source (gRPC)
@@ -145,7 +144,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     _grpcMethods.clear();
     const core::GrpcRequest &g = _model.grpc;
     if (g.service.empty() || g.method.empty()) {
-        _servicePopup.itemTitles = @[ @"No RPC" ];
+        _servicePopup.itemTitles = @[ StrNoRpc ];
         _servicePopup.toolTip = nil;
     } else {
         NSString *full = [NSString stringWithFormat:@"%s/%s", g.service.c_str(), g.method.c_str()];
@@ -169,14 +168,14 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     BOOL needsHost = (_model.grpc.protoSource.mode == "reflection");
     if (needsHost && _model.grpc.target.empty()) {
         _grpcMethods.clear();
-        _servicePopup.itemTitles = @[ @"No RPC" ];
+        _servicePopup.itemTitles = @[ StrNoRpc ];
         _servicePopup.selectedIndex = 0;
         _servicePopup.toolTip = nil;
         [_servicePopup setNeedsDisplay:YES];
-        if (openWhenDone) [self toastWarn:@"Enter gRPC host first (e.g. localhost:50051)"];
+        if (openWhenDone) [self toastWarn:StrToastEnterGrpcHost];
         return;
     }
-    _servicePopup.itemTitles = @[ @"Loading..." ];
+    _servicePopup.itemTitles = @[ StrLoading ];
     _servicePopup.selectedIndex = 0;
     [_servicePopup setNeedsDisplay:YES];
 
@@ -200,11 +199,11 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
                 openMenu:(BOOL)openMenu {
     _grpcMethods = methods;
     if (methods.empty()) {
-        _servicePopup.itemTitles = @[ @"No RPC" ];
+        _servicePopup.itemTitles = @[ StrNoRpc ];
         _servicePopup.selectedIndex = 0;
         _servicePopup.toolTip = nil;
         [_servicePopup setNeedsDisplay:YES];
-        if (err.length) [self toastWarn:[NSString stringWithFormat:@"List RPCs: %@", err]];
+        if (err.length) [self toastWarn:[NSString stringWithFormat:StrFmtToastListRpcs, err]];
         return;
     }
     NSMutableArray<NSString *> *titles = [NSMutableArray array];

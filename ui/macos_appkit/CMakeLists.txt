@@ -18,6 +18,7 @@ configure_file(
 add_executable(deed MACOSX_BUNDLE
   src/main.mm
   src/app/AppController.mm
+  src/app/AppStrings.mm
   src/app/DeedConfig.mm
   src/theme/OS9Theme.mm
   src/icons/OS9Glyphs.mm

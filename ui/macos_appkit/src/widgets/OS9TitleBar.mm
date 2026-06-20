@@ -5,7 +5,7 @@
 #import "theme/OS9Theme.h"
 
 // Kích thước & lề (theo §5 của spec).
-static const CGFloat kBtn      = 14;  // canvas nút: to hơn gốc 13 nhưng nhỏ lại để lề trên/dưới mượt trong title 21px
+static const CGFloat kBtn      = 16;  // canvas nút (art 13×13 SVG scale lên ~1.23) — to hơn, vẫn vừa trong title 21px
 static const CGFloat kEdge     = 5;   // lề tham chiếu (iconSideInset = kEdge+1) cho pane/nút
 // Lề TRÁI close = mép trái nút Open Folder (= iconSideInset). Lề PHẢI hide = mép phải nút Pretty.
 static const CGFloat kInsetL   = kEdge + 1;       // close.left = 6 (thẳng hàng Open Folder)

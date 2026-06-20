@@ -143,7 +143,7 @@
 }
 
 - (void)buildTree {
-    _openButton = [[OS9BevelButton alloc] initWithTitle:@"Open Folder…" target:self action:@selector(openFolder:)];
+    _openButton = [[OS9BevelButton alloc] initWithTitle:StrOpenFolder target:self action:@selector(openFolder:)];
     [_mainPane addSubview:_openButton];   // nhãn path căn giữa (mặc định)
 
     _treeInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
@@ -201,13 +201,13 @@
     _prettyMode = 0;
 
     // Pane trái: nút cURL (Format JSON chuyển sang menu chuột phải trong editor).
-    _curlButton = [[OS9BevelButton alloc] initWithTitle:@"cURL" target:self action:@selector(copyAsCurl:)];
-    _curlButton.toolTip = @"Copy current request as cURL";
+    _curlButton = [[OS9BevelButton alloc] initWithTitle:StrBtnCurl target:self action:@selector(copyAsCurl:)];
+    _curlButton.toolTip = StrTipCurl;
     [_mainPane addSubview:_curlButton];
 }
 
 // Nhãn + biến đổi body theo chế độ hiện tại của nút pretty.
-- (NSString *)prettyTitle { return @[ @"Pretty", @"Raw", @"Encode", @"Decode" ][_prettyMode]; }
+- (NSString *)prettyTitle { return @[ StrViewPretty, StrViewRaw, StrViewEncode, StrViewDecode ][_prettyMode]; }
 - (NSString *)applyView:(const std::string &)body { return [self applyView:body mode:_prettyMode]; }
 // Biến đổi body theo `mode` rõ ràng (KHÔNG đọc ivar) -> an toàn gọi từ thread nền (U2).
 - (NSString *)applyView:(const std::string &)body mode:(int)mode {
@@ -230,22 +230,22 @@
 - (void)buildToolbar {
     _settingButton = [[OS9BevelButton alloc] initWithTitle:@"" target:self action:@selector(settingClicked:)];
     _settingButton.icon = OS9GearImage(16);   // bánh răng cổ điển thay cho chữ "Setting" (căn giữa)
-    _settingButton.toolTip = @"Settings";
-    _envButton = [[OS9BevelButton alloc] initWithTitle:@"Local" target:self action:@selector(envClicked:)];
+    _settingButton.toolTip = StrTipSettings;
+    _envButton = [[OS9BevelButton alloc] initWithTitle:StrEnvLocal target:self action:@selector(envClicked:)];
     _envButton.dropdown = YES;   // hiển thị mũi tên dropdown như method
     _sendButton = [[OS9BevelButton alloc] initWithTitle:@"" target:self action:@selector(sendRequest:)];
     _sendButton.isDefault = YES;
     _sendButton.icon = OS9SendImage(16);   // icon máy bay giấy thay cho label "Send"
-    _sendButton.toolTip = @"Send  ⌘↩";
-    _cancelButton = [[OS9BevelButton alloc] initWithTitle:@"Cancel" target:self action:@selector(cancelClicked:)];
+    _sendButton.toolTip = StrTipSend;
+    _cancelButton = [[OS9BevelButton alloc] initWithTitle:StrCancel target:self action:@selector(cancelClicked:)];
 
     // gRPC: nguồn proto = dropdown (Reflection | .proto). Chỉ 2 lựa chọn.
-    _protoPopup = [[OS9PopupButton alloc] initWithItems:@[ @"Reflection", @".proto" ]
+    _protoPopup = [[OS9PopupButton alloc] initWithItems:@[ StrProtoReflection, StrProtoFile ]
                                                  target:self action:@selector(protoModeChanged:)];
-    _protoPopup.toolTip = @"Proto source: Reflection (ask server) or load a .proto file";
+    _protoPopup.toolTip = StrTipProtoSource;
 
     // gRPC: chọn service/RPC mà server cung cấp (đặt trước nút Send).
-    _servicePopup = [[OS9PopupButton alloc] initWithItems:@[ @"No RPC" ]
+    _servicePopup = [[OS9PopupButton alloc] initWithItems:@[ StrNoRpc ]
                                                    target:self action:@selector(serviceMethodChanged:)];
     // Bấm vào -> chủ động check host lấy RPC rồi mới bung menu (reflection cần IO mạng).
     __weak MainWindowController *wsForRpc = self;
@@ -254,14 +254,14 @@
         [s fetchGrpcMethodsThenOpen:YES];
     };
 
-    _methodPopup = [[OS9PopupButton alloc] initWithItems:@[ @"GET", @"POST", @"PUT", @"PATCH", @"DELETE", @"HEAD", @"OPTIONS" ]
+    _methodPopup = [[OS9PopupButton alloc] initWithItems:@[ StrMethodGet, StrMethodPost, StrMethodPut, StrMethodPatch, StrMethodDelete, StrMethodHead, StrMethodOptions ]
                                                   target:self action:@selector(methodChanged:)];
 
     // Ô URL: KHÔNG bezel native -> bọc trong OS9SerratedInset (góc răng cưa retro).
     _urlInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     _urlField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     _urlField.font = [OS9Theme monoFont];
-    _urlField.placeholderString = @"localhost:8000/api/deed";
+    _urlField.placeholderString = StrPhUrl;
     _urlField.target = self;
     _urlField.action = @selector(urlCommitted:);
     _urlField.bezeled = NO;
@@ -298,7 +298,7 @@
 }
 
 - (void)buildConfigPane {
-    _backButton = [[OS9BevelButton alloc] initWithTitle:@"←  Back" target:self action:@selector(exitConfig:)];
+    _backButton = [[OS9BevelButton alloc] initWithTitle:StrBtnBack target:self action:@selector(exitConfig:)];
     [_configPane addSubview:_backButton];   // tiêu đề màn nằm trên title bar (xem updateTitle)
 
     _envVC = [[EnvWindowController alloc] initWithEngine:nil]; // engine set khi mở
@@ -449,11 +449,11 @@
 - (void)setRequestType:(core::RequestType)t {
     _model.type = t;
     if (t == core::RequestType::Http) {
-        _reqTabTitles = @[ @"Body", @"Query", @"Headers", @"Auth" ];  // "Query" (tránh nhầm với path params); Body ngoài cùng trái
-        _respTabTitles = @[ @"Response", @"Headers", @"Request", @"Cookie" ];
+        _reqTabTitles = @[ StrTabBody, StrTabQuery, StrTabHeaders, StrTabAuth ];  // "Query" (tránh nhầm với path params); Body ngoài cùng trái
+        _respTabTitles = @[ StrTabResponse, StrTabHeaders, StrTabRequest, StrTabCookie ];
     } else {
-        _reqTabTitles = @[ @"Message", @"Metadata", @"Auth" ];
-        _respTabTitles = @[ @"Message", @"Request" ];
+        _reqTabTitles = @[ StrTabMessage, StrTabMetadata, StrTabAuth ];
+        _respTabTitles = @[ StrTabMessage, StrTabRequest ];
     }
     [self rebuildTabButtons];
 }
@@ -468,7 +468,7 @@
     NSInteger i = 0;
     for (NSString *t in _reqTabTitles) {
         OS9BevelButton *b;
-        if ([t isEqualToString:@"Body"]) {
+        if ([t isEqualToString:StrTabBody]) {
             // Body = dropdown chọn định dạng (json/file/form), label "Body (MODE)".
             b = [[OS9BevelButton alloc] initWithTitle:[self bodyButtonTitle]
                                                target:self action:@selector(bodyButtonClicked:)];
@@ -485,7 +485,7 @@
     }
     _prettyButton = [[OS9BevelButton alloc] initWithTitle:[self prettyTitle]
                                                    target:self action:@selector(prettyToggle:)];
-    _prettyButton.toolTip = @"Pretty/Raw/Encode/Decode — applies to the focused pane";
+    _prettyButton.toolTip = StrTipPretty;
     [_mainPane addSubview:_prettyButton];
     _activeReqTab = 0;
     _activeRespTab = 0;

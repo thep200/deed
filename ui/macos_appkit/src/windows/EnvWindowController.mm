@@ -1,4 +1,5 @@
 #import "windows/EnvWindowController.h"
+#import "app/AppStrings.h"
 #import "app/OS9Lifecycle.h"
 #import "dialogs/OS9Dialog.h"
 #import "widgets/OS9EnvGrid.h"
@@ -133,7 +134,7 @@ static NSString *Key(NSString *env, NSString *alias) {
     newAlias = [newAlias uppercaseString];               // biến luôn lưu dạng UPPER
     if ([newAlias isEqualToString:oldAlias]) return;     // upper xong trùng tên cũ -> không đổi
     if ([_aliases containsObject:newAlias]) {
-        [self errorDialog:[NSString stringWithFormat:@"Alias \"%@\" already exists.", newAlias]];
+        [self errorDialog:[NSString stringWithFormat:StrFmtAliasExists, newAlias]];
         return;
     }
     for (NSString *env in _envNames) {
@@ -153,7 +154,7 @@ static NSString *Key(NSString *env, NSString *alias) {
 - (void)envGrid:(OS9EnvGrid *)g renameEnv:(NSString *)oldEnv to:(NSString *)newEnv {
     if ([oldEnv isEqualToString:kBaseEnv]) return;   // base không đổi tên
     if ([_envNames containsObject:newEnv]) {
-        [self errorDialog:[NSString stringWithFormat:@"Environment \"%@\" already exists.", newEnv]];
+        [self errorDialog:[NSString stringWithFormat:StrFmtEnvExists, newEnv]];
         return;
     }
     for (NSString *alias in _aliases) {
@@ -184,10 +185,10 @@ static NSString *Key(NSString *env, NSString *alias) {
 
 - (void)envGrid:(OS9EnvGrid *)g deleteEnv:(NSString *)env {
     if ([env isEqualToString:kBaseEnv]) return;
-    NSInteger r = [OS9Dialog confirmWithTitle:@"Delete environment"
-                                      message:[NSString stringWithFormat:@"Delete environment \"%@\"? All values in this column will be lost.", env]
-                                      buttons:@[ @"Cancel", @"Delete" ]
-                                defaultButton:1 cancelButton:0 icon:OS9AlertCaution
+    NSInteger r = [OS9Dialog confirmWithTitle:StrDlgDeleteEnv
+                                      message:[NSString stringWithFormat:StrFmtConfirmDeleteEnv, env]
+                                      buttons:@[ StrCancel, StrDelete ]
+                                defaultButton:1 cancelButton:0 icon:OS9AlertNone
                                        parent:_grid.window];
     if (r != 1) return;
     for (NSString *alias in _aliases) [_values removeObjectForKey:Key(env, alias)];
@@ -208,10 +209,10 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)envGrid:(OS9EnvGrid *)g deleteAlias:(NSString *)alias {
-    NSInteger r = [OS9Dialog confirmWithTitle:@"Delete alias"
-                                      message:[NSString stringWithFormat:@"Delete alias \"%@\"? Its value in every environment will be lost.", alias]
-                                      buttons:@[ @"Cancel", @"Delete" ]
-                                defaultButton:1 cancelButton:0 icon:OS9AlertCaution
+    NSInteger r = [OS9Dialog confirmWithTitle:StrDlgDeleteAlias
+                                      message:[NSString stringWithFormat:StrFmtConfirmDeleteAlias, alias]
+                                      buttons:@[ StrCancel, StrDelete ]
+                                defaultButton:1 cancelButton:0 icon:OS9AlertNone
                                        parent:_grid.window];
     if (r != 1) return;
     for (NSString *env in _envNames) { [_values removeObjectForKey:Key(env, alias)]; [_dirtyEnvs addObject:env]; }
@@ -222,8 +223,8 @@ static NSString *Key(NSString *env, NSString *alias) {
 #pragma mark helpers
 
 - (void)errorDialog:(NSString *)msg {
-    [OS9Dialog confirmWithTitle:@"Invalid" message:msg
-                        buttons:@[ @"OK" ] defaultButton:0 cancelButton:-1
+    [OS9Dialog confirmWithTitle:StrDlgInvalidTitle message:msg
+                        buttons:@[ StrOK ] defaultButton:0 cancelButton:-1
                            icon:OS9AlertStop parent:_grid.window];
 }
 
@@ -231,7 +232,7 @@ static NSString *Key(NSString *env, NSString *alias) {
     // SPEC §T3: đổi tên alias KHÔNG tự sửa {{old}} trong request đã lưu -> cảnh báo.
     NSWindow *win = _grid.window;
     if (!win) return;
-    NSString *msg = [NSString stringWithFormat:@"Variable renamed; requests using {{%@}} must be updated manually.", oldAlias];
+    NSString *msg = [NSString stringWithFormat:StrFmtVarRenamed, oldAlias];
     OS9Toast *t = [[OS9Toast alloc] initWithMessage:msg kind:0];
     NSSize sz = [OS9Toast sizeForMessage:msg];
     NSView *cv = win.contentView;

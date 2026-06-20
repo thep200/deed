@@ -1,4 +1,5 @@
 #import "widgets/OS9EnvGrid.h"
+#import "app/AppStrings.h"
 #import "theme/OS9Theme.h"
 #import "widgets/OS9Scroller.h"
 #import "dialogs/OS9Dialog.h"
@@ -160,7 +161,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
-        _baseDisplayName = @"Local";
+        _baseDisplayName = StrEnvLocal;
         _selectedRow = -1;
         _hoverRow = -1;
         _hoverEnvCol = -1;
@@ -282,7 +283,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 - (void)setSelectedRow:(NSInteger)r { _selectedRow = r; [_body setNeedsDisplay:YES]; }
 
 - (NSString *)displayForEnv:(NSInteger)e {   // e = index 0-based trong _envNames
-    if (e == 0) return _baseDisplayName ?: @"Local";
+    if (e == 0) return _baseDisplayName ?: StrEnvLocal;
     return _envNames[e];
 }
 
@@ -319,7 +320,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     CGFloat dx = -[self scrollX];   // header cuộn ngang đồng bộ body; sticky theo chiều DỌC.
     NSColor *fg = [OS9Theme frame];
 
-    DrawCellText(@"Alias", NSMakeRect(dx, 0, _aliasW, kHeaderH), fg);
+    DrawCellText(StrGridAlias, NSMakeRect(dx, 0, _aliasW, kHeaderH), fg);
     [self drawVDivAt:_aliasW + dx height:kHeaderH];
 
     for (NSInteger e = 0; e < (NSInteger)_envNames.count; e++) {
@@ -386,7 +387,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     }
 
     DrawPlus(NSMakeRect(8, nRows * kRowH + (kAddRowH - kGlyph) / 2, kGlyph, kGlyph), [OS9Theme shadow]);
-    DrawCellText(@"Add alias", NSMakeRect(kGlyph + 14, nRows * kRowH, _aliasW, kAddRowH), [OS9Theme shadow]);
+    DrawCellText(StrGridAddAlias, NSMakeRect(kGlyph + 14, nRows * kRowH, _aliasW, kAddRowH), [OS9Theme shadow]);
 }
 
 #pragma mark hit-testing
@@ -537,7 +538,7 @@ static NSString *Trim(NSString *s) {
 - (NSString *)promptTitle:(NSString *)title default:(NSString *)def
                  validate:(NSString *(^)(NSString *))v {
     return [OS9Dialog promptWithTitle:title message:nil defaultText:(def ?: @"")
-                          placeholder:nil okButton:@"OK" cancelButton:@"Cancel"
+                          placeholder:nil okButton:StrOK cancelButton:StrCancel
                              validate:v parent:self.window];
 }
 
@@ -545,7 +546,7 @@ static NSString *Trim(NSString *s) {
 - (void)promptEditValueAtRow:(NSInteger)row col:(NSInteger)col {
     NSString *alias = _aliases[row], *env = _envNames[col];
     NSString *cur = [self.delegate envGrid:self valueForAlias:alias env:env] ?: @"";
-    NSString *nv = [self promptTitle:[NSString stringWithFormat:@"%@ · %@", [self displayForEnv:col], alias]
+    NSString *nv = [self promptTitle:[NSString stringWithFormat:StrFmtEnvAliasTitle, [self displayForEnv:col], alias]
                              default:cur validate:nil];
     if (nv != nil) [self.delegate envGrid:self setValue:nv forAlias:alias env:env];
 }
@@ -554,10 +555,10 @@ static NSString *Trim(NSString *s) {
 - (void)promptRenameAliasAtRow:(NSInteger)row {
     NSString *old = _aliases[row];
     __weak OS9EnvGrid *ws = self;
-    NSString *nn = [self promptTitle:@"Rename alias" default:old validate:^NSString *(NSString *s) {
+    NSString *nn = [self promptTitle:StrDlgRenameAlias default:old validate:^NSString *(NSString *s) {
         NSString *t = Trim(s);
-        if (!t.length) return @"Name cannot be empty";
-        if (![t isEqualToString:old] && [ws.aliases containsObject:t]) return @"Alias already exists";
+        if (!t.length) return StrValNameEmpty;
+        if (![t isEqualToString:old] && [ws.aliases containsObject:t]) return StrValAliasExists;
         return nil;
     }];
     NSString *t = Trim(nn);
@@ -568,7 +569,7 @@ static NSString *Trim(NSString *s) {
 - (void)promptRenameEnvAtCol:(NSInteger)col {
     if (col == 0) return;   // cột base không đổi tên
     NSString *old = _envNames[col];
-    NSString *nn = [self promptTitle:@"Rename environment" default:old
+    NSString *nn = [self promptTitle:StrDlgRenameEnv default:old
                             validate:[self envNameValidatorExcluding:old]];
     NSString *t = Trim(nn);
     if (nn && t.length && ![t isEqualToString:old]) [self.delegate envGrid:self renameEnv:old to:t];
@@ -576,7 +577,7 @@ static NSString *Trim(NSString *s) {
 
 // --- Thêm env (prompt tên + chặn rỗng/trùng -> không tạo nếu sai) ---
 - (void)promptAddEnv {
-    NSString *nn = [self promptTitle:@"New environment" default:@""
+    NSString *nn = [self promptTitle:StrDlgNewEnv default:@""
                             validate:[self envNameValidatorExcluding:nil]];
     NSString *t = Trim(nn);
     if (nn && t.length) [self.delegate envGrid:self addEnvNamed:t];
@@ -585,10 +586,10 @@ static NSString *Trim(NSString *s) {
 // --- Thêm alias (prompt tên + chặn rỗng/trùng) ---
 - (void)promptAddAlias {
     __weak OS9EnvGrid *ws = self;
-    NSString *nn = [self promptTitle:@"New alias" default:@"" validate:^NSString *(NSString *s) {
+    NSString *nn = [self promptTitle:StrDlgNewAlias default:@"" validate:^NSString *(NSString *s) {
         NSString *t = Trim(s);
-        if (!t.length) return @"Name cannot be empty";
-        if ([ws.aliases containsObject:t]) return @"Alias already exists";
+        if (!t.length) return StrValNameEmpty;
+        if ([ws.aliases containsObject:t]) return StrValAliasExists;
         return nil;
     }];
     NSString *t = Trim(nn);
@@ -601,12 +602,12 @@ static NSString *Trim(NSString *s) {
     __weak OS9EnvGrid *ws = self;
     return ^NSString *(NSString *s) {
         NSString *t = Trim(s);
-        if (!t.length) return @"Name cannot be empty";
-        if ([t caseInsensitiveCompare:(ws.baseDisplayName ?: @"Local")] == NSOrderedSame ||
+        if (!t.length) return StrValNameEmpty;
+        if ([t caseInsensitiveCompare:(ws.baseDisplayName ?: StrEnvLocal)] == NSOrderedSame ||
             [t caseInsensitiveCompare:@"Global"] == NSOrderedSame)
-            return @"This name is reserved for the base column";
+            return StrValReservedBase;
         for (NSString *n in ws.envNames)
-            if (![n isEqualToString:exclude] && [n isEqualToString:t]) return @"Environment already exists";
+            if (![n isEqualToString:exclude] && [n isEqualToString:t]) return StrValEnvExists;
         return nil;
     };
 }
