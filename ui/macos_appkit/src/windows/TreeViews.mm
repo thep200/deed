@@ -68,6 +68,79 @@ static NSString *TreeEllipsize(NSString *s, CGFloat maxW, NSDictionary *attrs) {
     return [[s substringToIndex:lo] stringByAppendingString:e];
 }
 
+// --- Pixel-art mũi tên disclosure (nguồn: assets/Position={Down,Right}…Purple.svg) ---
+// Mỗi pixel = nửa point (SVG 8x8pt, lưới 0.5) -> sắc nét 1:1 trên Retina. Đã đổi mặt
+// gradient tím -> xám (R==G của mọi màu tím nên lấy kênh R làm mức xám), viền #262626 giữ nguyên.
+typedef struct { unsigned char x, y, gray; float a; } TreePx;
+
+// ▽ trỏ xuống (folder đang mở) — 16x10 nửa-pt = 8x5 pt.
+static const TreePx kTreeArrowDown[] = {
+    {0,0,38,0.05f}, {1,0,38,0.20f}, {2,0,38,0.40f}, {3,0,38,0.40f}, {4,0,38,0.40f},
+    {5,0,38,0.40f}, {6,0,38,0.40f}, {7,0,38,0.40f}, {8,0,38,0.40f}, {9,0,38,0.40f},
+    {10,0,38,0.40f}, {11,0,38,0.40f}, {12,0,38,0.40f}, {13,0,38,0.40f}, {14,0,38,0.20f},
+    {15,0,38,0.05f}, {0,1,38,0.20f}, {1,1,38,0.70f}, {2,1,38,1.00f}, {3,1,38,1.00f},
+    {4,1,38,1.00f}, {5,1,38,1.00f}, {6,1,38,1.00f}, {7,1,38,1.00f}, {8,1,38,1.00f},
+    {9,1,38,1.00f}, {10,1,38,1.00f}, {11,1,38,1.00f}, {12,1,38,1.00f}, {13,1,38,1.00f},
+    {14,1,38,0.70f}, {15,1,38,0.20f}, {0,2,38,0.20f}, {1,2,38,0.70f}, {2,2,38,1.00f},
+    {3,2,191,1.00f}, {4,2,191,1.00f}, {5,2,191,1.00f}, {6,2,191,1.00f}, {7,2,191,1.00f},
+    {8,2,191,1.00f}, {9,2,191,1.00f}, {10,2,191,1.00f}, {11,2,191,1.00f}, {12,2,191,1.00f},
+    {13,2,38,1.00f}, {14,2,38,0.70f}, {15,2,38,0.20f}, {0,3,38,0.05f}, {1,3,38,0.20f},
+    {2,3,38,0.70f}, {3,3,38,1.00f}, {4,3,166,1.00f}, {5,3,166,1.00f}, {6,3,166,1.00f},
+    {7,3,166,1.00f}, {8,3,166,1.00f}, {9,3,166,1.00f}, {10,3,166,1.00f}, {11,3,166,1.00f},
+    {12,3,38,1.00f}, {13,3,38,0.70f}, {14,3,38,0.20f}, {15,3,38,0.05f}, {2,4,38,0.20f},
+    {3,4,38,0.70f}, {4,4,38,1.00f}, {5,4,153,1.00f}, {6,4,153,1.00f}, {7,4,153,1.00f},
+    {8,4,153,1.00f}, {9,4,153,1.00f}, {10,4,153,1.00f}, {11,4,38,1.00f}, {12,4,38,0.70f},
+    {13,4,38,0.20f}, {2,5,38,0.05f}, {3,5,38,0.20f}, {4,5,38,0.70f}, {5,5,38,1.00f},
+    {6,5,134,1.00f}, {7,5,134,1.00f}, {8,5,134,1.00f}, {9,5,134,1.00f}, {10,5,38,1.00f},
+    {11,5,38,0.70f}, {12,5,38,0.20f}, {13,5,38,0.05f}, {4,6,38,0.20f}, {5,6,38,0.70f},
+    {6,6,38,1.00f}, {7,6,96,1.00f}, {8,6,96,1.00f}, {9,6,38,1.00f}, {10,6,38,0.70f},
+    {11,6,38,0.20f}, {4,7,38,0.05f}, {5,7,38,0.20f}, {6,7,38,0.70f}, {7,7,38,1.00f},
+    {8,7,38,1.00f}, {9,7,38,0.70f}, {10,7,38,0.20f}, {11,7,38,0.05f}, {6,8,38,0.20f},
+    {7,8,38,0.70f}, {8,8,38,0.70f}, {9,8,38,0.20f}, {6,9,38,0.05f}, {7,9,38,0.20f},
+    {8,9,38,0.20f}, {9,9,38,0.05f},
+};
+
+// ▷ trỏ phải (folder đang đóng) — 10x16 nửa-pt = 5x8 pt.
+static const TreePx kTreeArrowRight[] = {
+    {0,0,38,0.05f}, {1,0,38,0.20f}, {2,0,38,0.20f}, {3,0,38,0.05f}, {0,1,38,0.20f},
+    {1,1,38,0.70f}, {2,1,38,0.70f}, {3,1,38,0.20f}, {0,2,38,0.40f}, {1,2,38,1.00f},
+    {2,2,38,1.00f}, {3,2,38,0.70f}, {4,2,38,0.20f}, {5,2,38,0.05f}, {0,3,38,0.40f},
+    {1,3,38,1.00f}, {2,3,191,1.00f}, {3,3,38,1.00f}, {4,3,38,0.70f}, {5,3,38,0.20f},
+    {0,4,38,0.40f}, {1,4,38,1.00f}, {2,4,191,1.00f}, {3,4,166,1.00f}, {4,4,38,1.00f},
+    {5,4,38,0.70f}, {6,4,38,0.20f}, {7,4,38,0.05f}, {0,5,38,0.40f}, {1,5,38,1.00f},
+    {2,5,191,1.00f}, {3,5,166,1.00f}, {4,5,153,1.00f}, {5,5,38,1.00f}, {6,5,38,0.70f},
+    {7,5,38,0.20f}, {0,6,38,0.40f}, {1,6,38,1.00f}, {2,6,191,1.00f}, {3,6,166,1.00f},
+    {4,6,153,1.00f}, {5,6,134,1.00f}, {6,6,38,1.00f}, {7,6,38,0.70f}, {8,6,38,0.20f},
+    {9,6,38,0.05f}, {0,7,38,0.40f}, {1,7,38,1.00f}, {2,7,191,1.00f}, {3,7,166,1.00f},
+    {4,7,153,1.00f}, {5,7,134,1.00f}, {6,7,96,1.00f}, {7,7,38,1.00f}, {8,7,38,0.70f},
+    {9,7,38,0.20f}, {0,8,38,0.40f}, {1,8,38,1.00f}, {2,8,191,1.00f}, {3,8,166,1.00f},
+    {4,8,153,1.00f}, {5,8,134,1.00f}, {6,8,96,1.00f}, {7,8,38,1.00f}, {8,8,38,0.70f},
+    {9,8,38,0.20f}, {0,9,38,0.40f}, {1,9,38,1.00f}, {2,9,191,1.00f}, {3,9,166,1.00f},
+    {4,9,153,1.00f}, {5,9,134,1.00f}, {6,9,38,1.00f}, {7,9,38,0.70f}, {8,9,38,0.20f},
+    {9,9,38,0.05f}, {0,10,38,0.40f}, {1,10,38,1.00f}, {2,10,191,1.00f}, {3,10,166,1.00f},
+    {4,10,153,1.00f}, {5,10,38,1.00f}, {6,10,38,0.70f}, {7,10,38,0.20f}, {0,11,38,0.40f},
+    {1,11,38,1.00f}, {2,11,191,1.00f}, {3,11,166,1.00f}, {4,11,38,1.00f}, {5,11,38,0.70f},
+    {6,11,38,0.20f}, {7,11,38,0.05f}, {0,12,38,0.40f}, {1,12,38,1.00f}, {2,12,191,1.00f},
+    {3,12,38,1.00f}, {4,12,38,0.70f}, {5,12,38,0.20f}, {0,13,38,0.40f}, {1,13,38,1.00f},
+    {2,13,38,1.00f}, {3,13,38,0.70f}, {4,13,38,0.20f}, {5,13,38,0.05f}, {0,14,38,0.20f},
+    {1,14,38,0.70f}, {2,14,38,0.70f}, {3,14,38,0.20f}, {0,15,38,0.05f}, {1,15,38,0.20f},
+    {2,15,38,0.20f}, {3,15,38,0.05f},
+};
+
+// Kích thước 1 pixel art (point). 0.5 = đúng tỉ lệ SVG (8x8pt); tăng lên cho mũi tên to hơn.
+static const CGFloat kArrowPx = 0.625;   // ~+25% so với bản gốc
+
+// Vẽ pixel-art tại góc trên-trái (ox,oy) trong toạ độ FLIPPED của cell (y hướng xuống,
+// trùng hệ toạ độ SVG). Blend SourceOver để giữ viền mờ (alpha < 1).
+static void DrawTreeArrow(const TreePx *px, size_t n, CGFloat ox, CGFloat oy) {
+    const CGFloat s = kArrowPx;
+    for (size_t i = 0; i < n; i++) {
+        [[NSColor colorWithCalibratedWhite:px[i].gray / 255.0 alpha:px[i].a] set];
+        NSRectFillUsingOperation(NSMakeRect(ox + px[i].x * s, oy + px[i].y * s, s, s),
+                                 NSCompositingOperationSourceOver);
+    }
+}
+
 @implementation TreeCellView
 - (BOOL)isFlipped { return YES; }   // toạ độ từ trên xuống (y nhỏ = trên)
 
@@ -120,31 +193,18 @@ static NSBezierPath *TreeFolderPath(CGFloat x, CGFloat y) {
     if (_isFolder) {
         [NSGraphicsContext saveGraphicsState];
         [[NSGraphicsContext currentContext] setShouldAntialias:NO];   // nét bitmap sắc kiểu OS9
-        // Tam giác disclosure pixel: hẹp & CAO (cao > rộng), viền trái ĐẬM, 2 cạnh chéo răng cưa.
-        [[OS9Theme frame] set];
-        const CGFloat gx = kTreeLeftMargin;   // lề trái cho tam giác (đã bỏ thụt disclosure mặc định)
+        // Mũi tên disclosure pixel-art (xám) dựng lại từ assets/Position=*.svg.
+        const CGFloat arrowCenterX = kTreeLeftMargin + 4.0;   // tâm ngang vùng mũi tên
         if (_isExpanded) {
-            // ▽ trỏ xuống: rộng > cao; cạnh TRÊN đậm, 2 cạnh chéo răng cưa.
-            const CGFloat w = 9, hgt = 6;
-            CGFloat ex = gx, ey = cy - floor(hgt / 2);
-            NSRectFill(NSMakeRect(ex, ey, w, 1.5));               // cạnh trên đậm
-            NSBezierPath *e = [NSBezierPath bezierPath];
-            [e moveToPoint:NSMakePoint(ex,         ey)];
-            [e lineToPoint:NSMakePoint(ex + w / 2, ey + hgt)];    // chéo trái->đáy
-            [e moveToPoint:NSMakePoint(ex + w,     ey)];
-            [e lineToPoint:NSMakePoint(ex + w / 2, ey + hgt)];    // chéo phải->đáy
-            e.lineWidth = 1.0; [e stroke];                         // AA off -> răng cưa pixel
+            // ▽ trỏ xuống: lưới 16x10 pixel — căn giữa theo chiều dọc của hàng.
+            const CGFloat aw = 16 * kArrowPx, ah = 10 * kArrowPx;
+            DrawTreeArrow(kTreeArrowDown, sizeof(kTreeArrowDown) / sizeof(TreePx),
+                          arrowCenterX - aw / 2, cy - ah / 2);
         } else {
-            // ▷ trỏ phải: cao > rộng (dẹp); viền TRÁI đậm, 2 cạnh chéo răng cưa.
-            const CGFloat w = 5, hgt = 11;
-            CGFloat ax = gx, ay = cy - floor(hgt / 2);
-            NSRectFill(NSMakeRect(ax, ay, 2, hgt));               // viền trái đậm (bar 2px)
-            NSBezierPath *e = [NSBezierPath bezierPath];
-            [e moveToPoint:NSMakePoint(ax,     ay)];
-            [e lineToPoint:NSMakePoint(ax + w, cy)];              // chéo trên->đỉnh phải
-            [e moveToPoint:NSMakePoint(ax,     ay + hgt)];
-            [e lineToPoint:NSMakePoint(ax + w, cy)];              // chéo dưới->đỉnh phải
-            e.lineWidth = 1.0; [e stroke];                         // AA off -> răng cưa pixel
+            // ▷ trỏ phải: lưới 10x16 pixel — căn giữa theo chiều dọc của hàng.
+            const CGFloat aw = 10 * kArrowPx, ah = 16 * kArrowPx;
+            DrawTreeArrow(kTreeArrowRight, sizeof(kTreeArrowRight) / sizeof(TreePx),
+                          arrowCenterX - aw / 2, cy - ah / 2);
         }
         // Icon folder OS9 tại gutter
         [self drawFolderIconInRect:NSMakeRect(kTreeGutterW, cy - 8, kTreeIconW, 16)];
