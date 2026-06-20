@@ -34,8 +34,10 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n);
 #pragma mark - TreeCellView (icon thư mục/doc retro tự vẽ)
 
 @interface TreeCellView : NSView
-@property(nonatomic, copy) NSString *text;
+@property(nonatomic, copy) NSString *text;   // folder: tên; request: tên (không kèm method)
+@property(nonatomic, copy) NSString *mark;   // request: method type (GET/POST/gRPC) — vẽ ở cột cố định trái
 @property(nonatomic) BOOL isFolder;
+@property(nonatomic) BOOL isExpanded;   // folder mở -> tam giác ▽; đóng -> ▷ (chỉ vẽ cho folder)
 @end
 
 #pragma mark - OS9RowView (highlight XÁM tự vẽ, bỏ xanh mặc định)

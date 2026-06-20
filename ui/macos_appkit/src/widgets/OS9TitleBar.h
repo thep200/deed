@@ -9,4 +9,8 @@
 @property(nonatomic) SEL zoomAction;
 @property(nonatomic, weak) id collapseTarget; // nil -> miniaturize mặc định
 @property(nonatomic) SEL collapseAction;
+
+// Lề ngoài của icon title (mép ngoài close/hide tới mép cửa sổ). Dùng để màn hình chính
+// canh mép ngoài pane/nút thẳng hàng với icon title ở cả 2 bên.
++ (CGFloat)iconSideInset;
 @end

@@ -371,19 +371,30 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
 // Minimize: thu cửa sổ vào Dock (genie). Window borderless + Miniaturizable -> miniaturize: chạy.
 - (void)collapseToggle:(id)sender { [_window miniaturize:nil]; }
 
+// Đệ quy đánh dấu vẽ lại cả cây view (widget tự vẽ đọc [OS9Theme uiFont] mỗi lần drawRect
+// nên chỉ cần setNeedsDisplay; KHÔNG cache font).
+static void OS9MarkTreeNeedsDisplay(NSView *v) {
+    [v setNeedsDisplay:YES];
+    for (NSView *s in v.subviews) OS9MarkTreeNeedsDisplay(s);
+}
+
 // Áp font cấu hình (từ Settings) cho mọi ô chữ + vẽ lại.
 - (void)applyConfiguredFontAndRefresh {
     core::AppConfigStore a; a.setDefaults([self appDefaultsFromEnv]); core::AppConfig c = a.load();
     [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize];
     NSFont *mono = [OS9Theme monoFont];
+    // Truyền thẳng tên font người dùng cấu hình cho Scintilla (vd "Monaco 9").
     [_reqText setFontName:N(c.fontName) size:c.fontSize];
     [_respText setFontName:N(c.fontName) size:c.fontSize];
     [_settingEditor setFontName:N(c.fontName) size:c.fontSize];
     _urlField.font = mono;
     _tree.font = [OS9Theme uiFont];
+    // NSTextField giữ font đã set -> phải gán lại (widget tự vẽ thì không cần).
+    _statusLabel.font = [OS9Theme uiFont];
     [_tree reloadData];
     [self restoreExpansion:_roots];
-    [_window.contentView setNeedsDisplay:YES];
+    OS9MarkTreeNeedsDisplay(_window.contentView);   // title bar, nút, tab, dropdown... vẽ lại
+    if (_envVC.view) [_envVC layout];               // lưới Environments dựng lại theo font mới
 }
 
 #pragma mark Editing
@@ -583,8 +594,12 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
 }
 
 - (void)updateTitle {
-    // Title CHỈ là tên request (rỗng nếu chưa chọn). Không còn dấu dirty.
-    _titleBar.title = _hasRequest ? N(_model.name) : @"";
+    // Title bar theo NGỮ CẢNH: màn config -> "Settings"/"Environments"; còn lại -> tên request.
+    if (_configMode) {
+        _titleBar.title = (_configKind == 0) ? @"Environments" : @"Settings";
+    } else {
+        _titleBar.title = _hasRequest ? N(_model.name) : @"";
+    }
     [_titleBar setNeedsDisplay:YES];
 }
 

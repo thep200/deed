@@ -52,14 +52,12 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     [self autosaveCurrent];
     _configKind = kind;
     if (kind == 0) {
-        _configTitle.stringValue = @"Environments";
         NSView *ev = _envVC.view;
         if (ev.superview != _configPane) [_configPane addSubview:ev];
         ev.hidden = NO;
         _settingInset.hidden = YES;
         [_envVC reload];
     } else {
-        _configTitle.stringValue = @"Settings";
         if (_envVC.view) _envVC.view.hidden = YES;
         _settingInset.hidden = NO;
         core::AppConfig c = _engine->appConfig().load();
@@ -72,6 +70,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     _configMode = YES;
     _mainPane.hidden = YES;
     _configPane.hidden = NO;
+    [self updateTitle];   // title bar -> "Settings"/"Environments"
     [self relayout];
 }
 
@@ -106,6 +105,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     _configPane.hidden = YES;
     _mainPane.hidden = NO;
     [self refreshEnvButton];
+    [self updateTitle];   // title bar -> tên request hiện tại
     [self relayout];
     [self toastOk:@"Saved"];
 }

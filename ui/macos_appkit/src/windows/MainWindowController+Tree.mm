@@ -264,10 +264,12 @@
 - (void)outlineViewItemDidExpand:(NSNotification *)n {
     TreeItem *t = n.userInfo[@"NSObject"];
     if (t.relPath) [_expandedFolders addObject:t.relPath];
+    [self refreshDisclosureForItem:t expanded:YES];   // lật tam giác ▷ -> ▽
 }
 - (void)outlineViewItemDidCollapse:(NSNotification *)n {
     TreeItem *t = n.userInfo[@"NSObject"];
     if (t.relPath) [_expandedFolders removeObject:t.relPath];
+    [self refreshDisclosureForItem:t expanded:NO];     // lật tam giác ▽ -> ▷
 }
 
 - (NSInteger)outlineView:(NSOutlineView *)ov numberOfChildrenOfItem:(id)item {
@@ -300,9 +302,20 @@
         cell.translatesAutoresizingMaskIntoConstraints = YES;
     }
     cell.isFolder = t.isFolder;
-    cell.text = t.isFolder ? t.name : [NSString stringWithFormat:@"%@  %@", t.mark ?: @"", t.name];
+    cell.isExpanded = t.isFolder && [ov isItemExpanded:item];   // tam giác ▽/▷
+    // Request: method ở cột riêng (mark) + tên -> tên thẳng hàng dù method dài/ngắn khác nhau. KHÔNG icon.
+    cell.mark = t.isFolder ? nil : (t.mark ?: @"");
+    cell.text = t.name;
     [cell setNeedsDisplay:YES];
     return cell;
+}
+// Lật tam giác disclosure khi folder mở/đóng (mọi đường: click, double-click, phím, restore).
+- (void)refreshDisclosureForItem:(id)item expanded:(BOOL)expanded {
+    if (![item isKindOfClass:[TreeItem class]]) return;
+    NSInteger row = [_tree rowForItem:item];
+    if (row < 0) return;
+    NSView *cell = [_tree viewAtColumn:0 row:row makeIfNecessary:NO];
+    if ([cell isKindOfClass:[TreeCellView class]]) ((TreeCellView *)cell).isExpanded = expanded;
 }
 - (void)outlineViewSelectionDidChange:(NSNotification *)note {
     if (_revealingSelection) return;                 // chọn do reveal -> KHÔNG nạp lại (tránh đệ quy)

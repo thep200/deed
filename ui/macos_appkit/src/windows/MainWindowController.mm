@@ -91,7 +91,7 @@
 }
 
 - (void)buildChrome {
-    _titleBar = [[OS9TitleBar alloc] initWithFrame:NSMakeRect(0, 0, 1040, 22)];
+    _titleBar = [[OS9TitleBar alloc] initWithFrame:NSMakeRect(0, 0, 1040, 21)];
     _titleBar.title = @"";
     _titleBar.closeTarget = self;
     _titleBar.closeAction = @selector(closeWindow:);
@@ -144,7 +144,7 @@
 
 - (void)buildTree {
     _openButton = [[OS9BevelButton alloc] initWithTitle:@"Open Folder…" target:self action:@selector(openFolder:)];
-    [_mainPane addSubview:_openButton];
+    [_mainPane addSubview:_openButton];   // nhãn path căn giữa (mặc định)
 
     _treeInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     [_mainPane addSubview:_treeInset];
@@ -160,8 +160,8 @@
     [_tree addTableColumn:col];
     _tree.outlineTableColumn = col;
     _tree.headerView = nil;
-    _tree.rowHeight = 18;
-    _tree.indentationPerLevel = 9;         // thụt ít -> sát lề trái hơn
+    _tree.rowHeight = 20;                  // đủ chỗ icon 16 + đường kẻ ngăn hàng (SPEC §2)
+    _tree.indentationPerLevel = 14;        // mỗi cấp thụt 1 gutter -> tam giác con dưới nhãn cha
     _tree.allowsMultipleSelection = YES;   // chọn nhiều để xoá cùng lúc
     // VIỆC 3: TẮT highlight xanh mặc định -> tự vẽ nền XÁM nhẹ (row view bên dưới).
     _tree.selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone;
@@ -229,7 +229,7 @@
 
 - (void)buildToolbar {
     _settingButton = [[OS9BevelButton alloc] initWithTitle:@"" target:self action:@selector(settingClicked:)];
-    _settingButton.icon = OS9GearImage(16);   // bánh răng cổ điển thay cho chữ "Setting"
+    _settingButton.icon = OS9GearImage(16);   // bánh răng cổ điển thay cho chữ "Setting" (căn giữa)
     _settingButton.toolTip = @"Settings";
     _envButton = [[OS9BevelButton alloc] initWithTitle:@"Local" target:self action:@selector(envClicked:)];
     _envButton.dropdown = YES;   // hiển thị mũi tên dropdown như method
@@ -299,11 +299,7 @@
 
 - (void)buildConfigPane {
     _backButton = [[OS9BevelButton alloc] initWithTitle:@"←  Back" target:self action:@selector(exitConfig:)];
-    [_configPane addSubview:_backButton];
-
-    _configTitle = OS9Label(@"");
-    _configTitle.font = [NSFont boldSystemFontOfSize:14];
-    [_configPane addSubview:_configTitle];
+    [_configPane addSubview:_backButton];   // tiêu đề màn nằm trên title bar (xem updateTitle)
 
     _envVC = [[EnvWindowController alloc] initWithEngine:nil]; // engine set khi mở
 
@@ -321,7 +317,7 @@
 - (void)relayout {
     NSRect cb = [_window.contentView bounds];
     CGFloat W = cb.size.width, H = cb.size.height;
-    CGFloat titleH = 22;
+    CGFloat titleH = 21;   // §2 spec: thanh title cao cố định 21px (gồm viền)
     _titleBar.frame = NSMakeRect(0, 0, W, titleH);
     _mainPane.frame = NSMakeRect(0, titleH, W, H - titleH);
     _configPane.frame = NSMakeRect(0, titleH, W, H - titleH);
@@ -330,6 +326,8 @@
     DeedConfig *cfg = [DeedConfig shared];
     CGFloat MW = _mainPane.bounds.size.width, MH = _mainPane.bounds.size.height;
     CGFloat pad = [cfg floatFor:@"PADDING" def:8];
+    // Lề ngoài 2 bên = mép ngoài icon title -> pane/nút thẳng hàng với close/zoom/hide.
+    CGFloat side = [OS9TitleBar iconSideInset];
     CGFloat tabH = [cfg floatFor:@"TAB_HEIGHT" def:22];
     CGFloat toolH = [cfg floatFor:@"TOOLBAR_HEIGHT" def:40];
     CGFloat btnH = [cfg floatFor:@"BUTTON_HEIGHT" def:22];
@@ -343,7 +341,7 @@
 
     // clamp bề rộng panes
     CGFloat minTree = 140, minReq = 200, minResp = 220;
-    CGFloat avail = MW - 2 * pad - 2 * dw;
+    CGFloat avail = MW - 2 * side - 2 * dw;
     if (_treeW < minTree) _treeW = minTree;
     if (_treeW > avail - minReq - minResp) _treeW = avail - minReq - minResp;
     CGFloat remain = avail - _treeW; // cho req + resp
@@ -352,7 +350,7 @@
     if (_reqW > remain - minResp) _reqW = remain - minResp;
     CGFloat respW = remain - _reqW;
 
-    CGFloat treeX = pad;
+    CGFloat treeX = side;
     CGFloat divTreeX = treeX + _treeW;
     CGFloat reqX = divTreeX + dw;
     CGFloat divRespX = reqX + _reqW;
@@ -388,8 +386,8 @@
 
     // toolbar (1 dòng): Setting | ENV | Method/Proto | URL (giãn) | Cancel(khi gửi) | Send
     CGFloat ty = MH - toolH + (toolH - btnH) / 2;
-    CGFloat x = pad;
-    CGFloat wSetting = [cfg floatFor:@"BTN_SETTING_W" def:64];
+    CGFloat x = side;
+    CGFloat wSetting = [cfg floatFor:@"BTN_SETTING_W" def:26];   // icon-only, gọn -> gear sát mép trái
     CGFloat wEnv = [cfg floatFor:@"BTN_ENV_W" def:120];
     CGFloat wMethod = [cfg floatFor:@"BTN_METHOD_W" def:92];
     CGFloat wProto = [cfg floatFor:@"BTN_PROTO_W" def:120];
@@ -410,13 +408,13 @@
     _servicePopup.hidden = !grpc;
     // Nhóm phải: [servicePopup (gRPC)] [Cancel (khi gửi)] [Send].
     CGFloat rightGroup = wSend + 6 + (_sending ? wCancel + 6 : 0) + (grpc ? wService + 6 : 0);
-    CGFloat urlW = (MW - pad) - x - rightGroup;
+    CGFloat urlW = (MW - side) - x - rightGroup;
     if (urlW < 140) urlW = 140;
     _urlInset.frame = NSMakeRect(x, ty, urlW, btnH);
     // field nằm trong inset, chừa viền + canh giữa theo chiều dọc cho 1 dòng.
     CGFloat fh = ceil([[OS9Theme monoFont] ascender] - [[OS9Theme monoFont] descender]) + 2;
     _urlField.frame = NSMakeRect(4, floor((btnH - fh) / 2), urlW - 8, fh);
-    CGFloat rx = MW - pad - wSend;            // mép phải nút Send
+    CGFloat rx = MW - side - wSend;           // mép phải nút Send
     _sendButton.frame = NSMakeRect(rx, ty, wSend, btnH);
     if (_sending) { rx -= 6 + wCancel; _cancelButton.frame = NSMakeRect(rx, ty, wCancel, btnH); }
     if (grpc) { rx -= 6 + wService; _servicePopup.frame = NSMakeRect(rx, ty, wService, btnH); }
@@ -434,8 +432,7 @@
 - (void)layoutConfig {
     CGFloat W = _configPane.bounds.size.width, H = _configPane.bounds.size.height;
     CGFloat pad = 12;
-    _backButton.frame = NSMakeRect(pad, pad, 90, 24);                 // ← Back (trên-trái)
-    _configTitle.frame = NSMakeRect(pad + 100, pad + 2, W - pad - 110, 22);
+    _backButton.frame = NSMakeRect(pad, pad, 90, 24);                 // ← Back (trên-trái); tiêu đề ở title bar
 
     CGFloat top = pad + 34;
     NSRect body = NSMakeRect(pad, top, W - 2 * pad, H - top - pad);

@@ -99,7 +99,7 @@ static const CGFloat kFieldH = 22;
     } else {  // note
         NSBezierPath *c = [NSBezierPath bezierPathWithOvalInRect:r];
         [[NSColor colorWithCalibratedRed:0.25 green:0.45 blue:0.85 alpha:1] set]; [c fill];
-        NSDictionary *a = @{NSFontAttributeName : [NSFont boldSystemFontOfSize:18],
+        NSDictionary *a = @{NSFontAttributeName : [OS9Theme uiFontOfSize:18 bold:YES],
                             NSForegroundColorAttributeName : [NSColor whiteColor]};
         [@"i" drawAtPoint:NSMakePoint(NSMidX(r) - 2, r.origin.y + 4) withAttributes:a];
     }
@@ -273,7 +273,7 @@ static const CGFloat kFieldH = 22;
 
     _errorLabel = [self labelWithText:@"" frame:NSMakeRect(kPad, y, contentW - 2 * kPad, 16)];
     _errorLabel.textColor = [self errorColor];
-    _errorLabel.font = [NSFont systemFontOfSize:10];
+    _errorLabel.font = [OS9Theme uiFontOfSize:10 bold:NO];
     _errorLabel.hidden = YES;
     [_view addSubview:_errorLabel];
 

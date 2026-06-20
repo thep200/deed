@@ -52,7 +52,7 @@ static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClo
     [bp stroke];
 
     // icon trạng thái bên trái (đậm)
-    NSDictionary *ga = @{NSFontAttributeName : [NSFont boldSystemFontOfSize:13],
+    NSDictionary *ga = @{NSFontAttributeName : [OS9Theme uiFontOfSize:13 bold:YES],
                          NSForegroundColorAttributeName : [NSColor blackColor]};
     NSSize gs = [[self glyph] sizeWithAttributes:ga];
     [[self glyph] drawAtPoint:NSMakePoint(kToastPadL + (kToastIcon - gs.width) / 2,
@@ -69,7 +69,7 @@ static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClo
     [_message drawInRect:NSMakeRect(tr.origin.x, (body.size.height - ts.height) / 2, tr.size.width, ts.height)
           withAttributes:ta];
     // nút ✕ bên phải
-    NSDictionary *xa = @{NSFontAttributeName : [NSFont boldSystemFontOfSize:12], NSForegroundColorAttributeName : [NSColor blackColor]};
+    NSDictionary *xa = @{NSFontAttributeName : [OS9Theme uiFontOfSize:12 bold:YES], NSForegroundColorAttributeName : [NSColor blackColor]};
     NSRect cr = [self closeRect];
     NSSize xs = [@"✕" sizeWithAttributes:xa];
     [@"✕" drawAtPoint:NSMakePoint(NSMidX(cr) - xs.width / 2, (body.size.height - xs.height) / 2) withAttributes:xa];

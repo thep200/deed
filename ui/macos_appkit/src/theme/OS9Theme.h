@@ -16,6 +16,13 @@
 + (NSColor *)rowSelectionGray; // nền xám nhẹ cho row được chọn trong cây (thay xanh mặc định)
 + (NSFont  *)uiFont;
 + (NSFont  *)monoFont;
+// Font cấu hình ở size/đậm tuỳ vai trò (heading, title...) NHƯNG cùng họ chữ với uiFont.
++ (NSFont  *)uiFontOfSize:(CGFloat)size bold:(BOOL)bold;
+// Font cấu hình (đúng size người dùng đặt) + đậm — cho title bar & tiêu đề màn (KHÔNG hardcode size).
++ (NSFont  *)boldUiFont;
+// Tên họ chữ đã cấu hình (nil nếu dùng mặc định) + size — cho engine ngoài AppKit (Scintilla).
++ (NSString *)configuredFontName;
++ (CGFloat)configuredFontSize;
 // Cấu hình font từ Settings (rỗng -> mặc định). size<=0 -> 11.
 + (void)setConfiguredFontName:(NSString *)name size:(CGFloat)size;
 
@@ -45,6 +52,16 @@
 
 // Ô điều khiển cửa sổ kiểu Mac (theo *_box.svg). glyph: 0=close, 1=collapse, 2=zoom.
 + (void)drawMacControlBox:(NSRect)r glyph:(int)glyph;
+
+// === Title bar OS9 Platinum vẽ lại theo SPEC_title_bar_redraw.md (khớp pixel SVG) ===
+// Khung thanh: viền #262626 + nền #CCCCCC + inner-shadow lõm nhẹ (TL đậm, BR mờ).
++ (void)drawTitleBarFrameInRect:(NSRect)r;
+// Dải vân grip liền mạch (line-title-bar.svg): nền #DDDDDD, cạnh #EEEEEE/#C5C5C5,
+// đường #999999 mỗi 2px; cao cố định 13px căn giữa dọc trong r, co giãn theo r.width.
++ (void)drawTitleGripInRect:(NSRect)r;
+// Nút title 13×13 (close/zoom/hide). glyph: 0=close(trống), 1=zoom(ô 6×6), 2=hide(thanh 10×2).
+// active=YES -> phủ overlay #353535→#9C9C9C @0.8 (trạng thái mouse-down).
++ (void)drawTitleButtonInRect:(NSRect)r glyph:(int)glyph active:(BOOL)active;
 
 // Mũi tên ▾ + vạch ngăn cho dropdown (method/env) — theo dropdown.svg.
 + (void)drawDropdownArrowInRect:(NSRect)r;

@@ -138,9 +138,8 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     // toast (stack góc phải-dưới, đẩy lên)
     NSMutableArray<OS9Toast *> *_toasts;
 
-    // config screen (2 màn riêng: Environments / Settings)
+    // config screen (2 màn riêng: Environments / Settings) — tiêu đề hiển thị ở title bar
     OS9BevelButton *_backButton;
-    NSTextField *_configTitle;
     NSInteger _configKind; // 0 = Environments, 1 = Settings
     EnvWindowController *_envVC;
     OS9SerratedInset *_settingInset;   // viền răng cưa bao editor Settings (giống các pane khác)

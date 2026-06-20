@@ -16,6 +16,8 @@
     ScintillaView *_sci;
     BOOL _programmatic; // đang set text bằng code -> KHÔNG bắn onTextChanged
     JsonEditorBehavior *_behavior; // hành vi soạn JSON; nil cho ô read-only
+    NSString *_fontFace;  // họ chữ Scintilla (mặc định = font cấu hình OS9Theme, fallback Monaco)
+    CGFloat _fontPt;      // cỡ chữ Scintilla
 }
 
 - (instancetype)initEditable:(BOOL)editable {
@@ -88,9 +90,15 @@
 }
 
 - (void)applyPlatinumTheme {
-    NSString *font = @"Monaco";
-    [self msg:SCI_STYLESETFONT w:STYLE_DEFAULT l:(sptr_t)font.UTF8String];
-    [self msg:SCI_STYLESETSIZE w:STYLE_DEFAULT l:11];
+    // Font lấy từ ivar (mặc định = font cấu hình của OS9Theme, fallback Monaco/11) -> Scintilla
+    // dùng CÙNG font với phần còn lại của app. KHÔNG hardcode "Monaco" (sẽ ghi đè cấu hình).
+    if (!_fontFace) {
+        _fontFace = [[OS9Theme configuredFontName] copy] ?: @"Monaco";
+        CGFloat sz = [OS9Theme configuredFontSize];
+        _fontPt = (sz > 0 ? sz : 11);
+    }
+    [self msg:SCI_STYLESETFONT w:STYLE_DEFAULT l:(sptr_t)_fontFace.UTF8String];
+    [self msg:SCI_STYLESETSIZE w:STYLE_DEFAULT l:(sptr_t)(long)_fontPt];
     [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_DEFAULT value:[NSColor blackColor]];
     [_sci setColorProperty:SCI_STYLESETBACK parameter:STYLE_DEFAULT value:[NSColor whiteColor]];
     [self msg:SCI_STYLECLEARALL w:0 l:0]; // áp default cho mọi style
@@ -116,11 +124,10 @@
 }
 
 - (void)setFontName:(NSString *)name size:(CGFloat)size {
-    if (name.length) [self msg:SCI_STYLESETFONT w:STYLE_DEFAULT l:(sptr_t)name.UTF8String];
-    if (size > 0) [self msg:SCI_STYLESETSIZE w:STYLE_DEFAULT l:(sptr_t)size];
-    [self msg:SCI_STYLECLEARALL w:0 l:0];
-    [self applyPlatinumTheme];
-    [_behavior applyHighlightStyles];   // STYLECLEARALL xoá -> set lại màu brace
+    if (name.length) _fontFace = [name copy];   // rỗng -> giữ font hiện tại (applyPlatinumTheme dùng ivar)
+    if (size > 0) _fontPt = size;
+    [self applyPlatinumTheme];                   // áp font ivar + STYLECLEARALL bên trong
+    [_behavior applyHighlightStyles];            // STYLECLEARALL xoá -> set lại màu brace
 }
 
 #pragma mark text get/set
