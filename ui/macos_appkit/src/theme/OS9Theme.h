@@ -53,15 +53,22 @@
 // Ô điều khiển cửa sổ kiểu Mac (theo *_box.svg). glyph: 0=close, 1=collapse, 2=zoom.
 + (void)drawMacControlBox:(NSRect)r glyph:(int)glyph;
 
-// === Title bar OS9 Platinum vẽ lại theo SPEC_title_bar_redraw.md (khớp pixel SVG) ===
-// Khung thanh: viền #262626 + nền #CCCCCC + inner-shadow lõm nhẹ (TL đậm, BR mờ).
+// === Title bar OS9 Platinum (PROMPT_os9_titlebar_objcpp.md — vẽ pixel-accurate) ===
+// Nền thanh active: viền dưới #262626 + nền #CCCCCC.
 + (void)drawTitleBarFrameInRect:(NSRect)r;
-// Dải vân grip liền mạch (line-title-bar.svg): nền #DDDDDD, cạnh #EEEEEE/#C5C5C5,
-// đường #999999 mỗi 2px; cao cố định 13px căn giữa dọc trong r, co giãn theo r.width.
+// Nền thanh INACTIVE: phẳng #D6D6D6, không pinstripe (nút + icon do title bar vẽ).
++ (void)drawTitleBarInactiveInRect:(NSRect)r;
+// Dải vân pinstripe: nền #DDDDDD, cạnh #EEEEEE/#C5C5C5, đường #999999 mỗi 2px;
+// cao cố định 13px căn giữa dọc trong r, co giãn theo r.width.
 + (void)drawTitleGripInRect:(NSRect)r;
-// Nút title 13×13 (close/zoom/hide). glyph: 0=close(trống), 1=zoom(ô 6×6), 2=hide(thanh 10×2).
-// active=YES -> phủ overlay #353535→#9C9C9C @0.8 (trạng thái mouse-down).
-+ (void)drawTitleButtonInRect:(NSRect)r glyph:(int)glyph active:(BOOL)active;
+// Nút title (close/zoom/collapse) — hộp bevel hình vuông cạnh r.size.width.
+// Cấu trúc (ngoài→trong, mỗi lớp 1px): outer bevel (TL #808080 / BR #FFFFFF, lõm) ->
+// khung đen #262626 -> mặt gradient dọc #C9C9C9(đỉnh)→#F1F1F1(đáy) -> inner bevel
+// (TL #FFFFFF / BR #9A9A9A, nổi) -> glyph #262626.
+// glyph: 0=close (trống), 1=zoom (ô vuông nhỏ góc trên-trái dùng chung cạnh),
+//        2=collapse (2 vạch ngang chạm 2 cạnh -> 3 dải, windowshade).
+// pressed=YES -> phủ overlay #353535→#9C9C9C @0.8 chéo TL→BR lên mặt (mouse-down).
++ (void)drawTitleButtonInRect:(NSRect)r glyph:(int)glyph pressed:(BOOL)pressed;
 
 // Mũi tên ▾ + vạch ngăn cho dropdown (method/env) — theo dropdown.svg.
 + (void)drawDropdownArrowInRect:(NSRect)r;

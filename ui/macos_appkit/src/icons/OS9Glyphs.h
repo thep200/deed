@@ -6,6 +6,8 @@ NSImage *OS9GearImage(CGFloat size);
 
 // Icon "send" (máy bay giấy hướng phải) — thay label nút Send.
 NSImage *OS9SendImage(CGFloat size);
+// Icon folder OS9 (màu xanh Platinum, có tab) — dùng cho title bar trạng thái Inactive.
+NSImage *OS9FolderImage(CGFloat size);
 // Icon loading (spinner nan hoa) tại pha quay phase∈[0,1) — animate bằng timer.
 NSImage *OS9SpinnerImage(CGFloat size, CGFloat phase);
 // Mảng `frameCount` ảnh spinner dựng sẵn (pha chia đều) + CACHE theo (size,frameCount).

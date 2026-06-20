@@ -15,7 +15,12 @@ configure_file(
   ${CMAKE_CURRENT_BINARY_DIR}/generated/app/DeedConfigData.h
   @ONLY)
 
+# Icon app: nhúng icons/deed_1_rmbg.icns (nền trong suốt) vào Contents/Resources.
+set(DEED_APP_ICON ${CMAKE_SOURCE_DIR}/icons/deed_1_rmbg.icns)
+set_source_files_properties(${DEED_APP_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+
 add_executable(deed MACOSX_BUNDLE
+  ${DEED_APP_ICON}
   src/main.mm
   src/app/AppController.mm
   src/app/AppStrings.mm

@@ -224,16 +224,23 @@ static int gButtonStyle = 0;
     }
 }
 
-// === Title bar OS9 Platinum (SPEC_title_bar_redraw.md) ===========================
-// Token màu rút trực tiếp từ SVG (xem §1 của spec).
-static NSColor *kFrameBorder(void) { return G(0.149); }  // #262626
-static NSColor *kBarFill(void)     { return G(0.800); }  // #CCCCCC
-static NSColor *kGripBg(void)      { return G(0.867); }  // #DDDDDD
-static NSColor *kGripLight(void)   { return G(0.933); }  // #EEEEEE
-static NSColor *kGripDark(void)    { return G(0.773); }  // #C5C5C5
-static NSColor *kGripLine(void)    { return G(0.600); }  // #999999
-static NSColor *kBevelHi(void)     { return [NSColor whiteColor]; }
-static NSColor *kBevelLo(void)     { return G(0.502); }  // #808080
+// === Title bar OS9 Platinum (PROMPT_os9_titlebar_objcpp.md) ======================
+// Bảng màu hex chính xác theo §"BẢNG MÀU" của prompt.
+static NSColor *kFrameBorder(void) { return G(0.149); }  // #262626 — viền đen/glyph/chữ
+static NSColor *kBarFill(void)     { return G(0.800); }  // #CCCCCC — nền thanh active
+static NSColor *kInactiveBar(void) { return G(0.839); }  // #D6D6D6 — nền thanh inactive
+static NSColor *kGripBg(void)      { return G(0.867); }  // #DDDDDD — nền pinstripe
+static NSColor *kGripLight(void)   { return G(0.933); }  // #EEEEEE — cạnh trái sáng
+static NSColor *kGripDark(void)    { return G(0.773); }  // #C5C5C5 — cạnh phải tối
+static NSColor *kGripLine(void)    { return G(0.600); }  // #999999 — vạch ngang 1px/2px
+static NSColor *kBevelHi(void)     { return [NSColor whiteColor]; }  // #FFFFFF
+static NSColor *kBevelLo(void)     { return G(0.502); }  // #808080 — outer bevel tối
+static NSColor *kFaceTop(void)     { return G(0.788); }  // #C9C9C9 — mặt nút (đỉnh, tối)
+static NSColor *kFaceBot(void)     { return G(0.945); }  // #F1F1F1 — mặt nút (đáy, sáng)
+static NSColor *kInnerHi(void)     { return [NSColor whiteColor]; }  // #FFFFFF — inner bevel sáng
+static NSColor *kInnerLo(void)     { return G(0.604); }  // #9A9A9A — inner bevel tối
+static NSColor *kPressTop(void)    { return G(0.208); }  // #353535 — overlay pressed (TL)
+static NSColor *kPressBot(void)    { return G(0.612); }  // #9C9C9C — overlay pressed (BR)
 
 // §2 — Khung thanh: viền 1px #262626 + nền #CCCCCC + 2 dải inner-shadow hard-edge.
 // Vẽ idempotent (fill nền opaque trước -> alpha không cộng dồn giữa các drawRect).
@@ -258,6 +265,18 @@ static NSColor *kBevelLo(void)     { return G(0.502); }  // #808080
     [NSGraphicsContext restoreGraphicsState];
 }
 
+// Inactive — nền PHẲNG #D6D6D6, không pinstripe, không nút (theo §TRẠNG THÁI 5).
+// Giữ 1 line đáy mờ để tách khỏi nội dung nhưng KHÔNG nhấn mạnh bevel.
++ (void)drawTitleBarInactiveInRect:(NSRect)r {
+    [NSGraphicsContext saveGraphicsState];
+    [[NSGraphicsContext currentContext] setShouldAntialias:NO];
+    [kInactiveBar() set];
+    NSRectFill(r);
+    [[kFrameBorder() colorWithAlphaComponent:0.35] set];   // line đáy mờ
+    NSRectFill(NSMakeRect(r.origin.x, r.origin.y, r.size.width, 1));
+    [NSGraphicsContext restoreGraphicsState];
+}
+
 // §3 — Dải vân grip liền mạch. r cấp x/width + chiều cao thanh (để căn giữa dọc khối 13px).
 + (void)drawTitleGripInRect:(NSRect)r {
     if (r.size.width <= 0) return;
@@ -279,71 +298,75 @@ static NSColor *kBevelLo(void)     { return G(0.502); }  // #808080
     [NSGraphicsContext restoreGraphicsState];
 }
 
-// §4 — Nút title 13×13. Vẽ trong hệ toạ độ lật (y xuống) để map thẳng toạ độ SVG.
-+ (void)drawTitleButtonInRect:(NSRect)r glyph:(int)glyph active:(BOOL)active {
+// Nút title — vẽ trực tiếp theo PIXEL trong r (góc vuông), non-flipped (y lớn = trên).
+// Khung đen lớn, vạch collapse, ô vuông nhỏ zoom DÙNG CHUNG bề dày `t` -> nét đồng nhất.
+// Lớp (ngoài→trong): outer bevel 1px | khung đen t px | inner bevel 1px | mặt gradient.
++ (void)drawTitleButtonInRect:(NSRect)r glyph:(int)glyph pressed:(BOOL)pressed {
     [NSGraphicsContext saveGraphicsState];
-    // Art vẽ trong hệ 13×13 cố định -> scale theo r để icon to/nhỏ mà giữ nguyên hình.
-    NSAffineTransform *t = [NSAffineTransform transform];
-    [t translateXBy:floor(r.origin.x) yBy:floor(r.origin.y) + r.size.height];
-    [t scaleXBy:r.size.width / 13.0 yBy:-(r.size.height / 13.0)];   // (0,0)=góc trên-trái, y xuống (như SVG)
-    [t concat];
     [[NSGraphicsContext currentContext] setShouldAntialias:NO];
 
+    // Pixel-snap: gốc + cạnh về số nguyên pt -> sắc 1px ở cả 1x & 2x.
+    CGFloat x = floor(r.origin.x), y = floor(r.origin.y);
+    CGFloat s = floor(MIN(r.size.width, r.size.height));     // hộp vuông
+    CGFloat R = x + s, T = y + s;                            // mép phải / mép trên
     NSColor *dark = kFrameBorder();
+    CGFloat t = (s >= 15) ? 2 : 1;                           // bề dày ĐỒNG NHẤT khung/vạch/ô
 
-    // Bố cục 13×13 với VIỀN ĐEN DÀY 2px (đậm hơn asset 1px):
-    //   0 outer bevel | 1-2 viền đen | 3 inner bevel | 4..8 mặt | 9 inner bevel | 10-11 viền đen | 12 outer bevel
+    // (1) Outer bevel 1px (lõm): trên+trái = #808080, dưới+phải = #FFFFFF.
+    [kBevelHi() set];                                        // L sáng (dưới+phải) trước
+    NSRectFill(NSMakeRect(x, y, s, 1));                      // dưới
+    NSRectFill(NSMakeRect(R - 1, y, 1, s));                  // phải
+    [kBevelLo() set];                                        // L tối (trên+trái) đè lên
+    NSRectFill(NSMakeRect(x, T - 1, s, 1));                  // trên
+    NSRectFill(NSMakeRect(x, y, 1, s));                      // trái
 
-    // 1. Mặt nút: gradient chéo TL(4,4)→BR(9,9) #9A9A9A→#F1F1F1.
-    [NSGraphicsContext saveGraphicsState];
-    [[NSBezierPath bezierPathWithRect:NSMakeRect(4, 4, 5, 5)] addClip];
-    NSGradient *face = [[NSGradient alloc] initWithStartingColor:G(0.604) endingColor:G(0.945)];
-    [face drawFromPoint:NSMakePoint(4, 4) toPoint:NSMakePoint(9, 9) options:0];
-    [NSGraphicsContext restoreGraphicsState];
-
-    // 2. Viền mặt #262626 DÀY 2px (ring index 1-2 và 10-11).
+    // (2) Khung đen lớn — dày t px (đậm bằng glyph).
     [dark set];
-    NSRectFill(NSMakeRect(1, 1, 11, 2));   // trên (y 1..3)
-    NSRectFill(NSMakeRect(1, 10, 11, 2));  // dưới (y 10..12)
-    NSRectFill(NSMakeRect(1, 1, 2, 11));   // trái (x 1..3)
-    NSRectFill(NSMakeRect(10, 1, 2, 11));  // phải (x 10..12)
+    for (int i = 0; i < (int)t; i++)
+        NSFrameRect(NSMakeRect(x + 1 + i, y + 1 + i, s - 2 - 2 * i, s - 2 - 2 * i));
 
-    // 3. Inner bevel 1px (sát trong viền): trắng trên-trái, #808080 dưới-phải.
-    [kBevelHi() set];
-    NSRectFill(NSMakeRect(3, 3, 7, 1));    // hàng trên
-    NSRectFill(NSMakeRect(3, 3, 1, 7));    // cột trái
-    [kBevelLo() set];
-    NSRectFill(NSMakeRect(3, 9, 7, 1));    // hàng dưới
-    NSRectFill(NSMakeRect(9, 3, 1, 7));    // cột phải
+    // Vùng trong khung (inner bevel + mặt). Glyph vẽ ở đây -> chạm sát khung lớn.
+    NSRect area = NSMakeRect(x + 1 + t, y + 1 + t, s - 2 - 2 * t, s - 2 - 2 * t);
+    NSRect face = NSInsetRect(area, 1, 1);                   // chừa 1px inner bevel
 
-    // 4. Overlay Active (#353535→#9C9C9C @0.8) — phủ vùng 2..11, dưới outer bevel.
-    if (active) {
-        [NSGraphicsContext saveGraphicsState];
-        [[NSBezierPath bezierPathWithRect:NSMakeRect(4, 4, 5, 5)] addClip];
-        NSGradient *ov = [[NSGradient alloc]
-            initWithStartingColor:[G(0.208) colorWithAlphaComponent:0.8]
-                      endingColor:[G(0.612) colorWithAlphaComponent:0.8]];
-        [ov drawFromPoint:NSMakePoint(4, 4) toPoint:NSMakePoint(9, 9) options:0];
-        [NSGraphicsContext restoreGraphicsState];
+    // (3) Mặt: gradient DỌC, tối ở đỉnh (#C9C9C9) -> sáng ở đáy (#F1F1F1).
+    NSGradient *fg = [[NSGradient alloc] initWithStartingColor:kFaceTop() endingColor:kFaceBot()];
+    [fg drawInRect:face angle:270];
+
+    // (4) Inner bevel 1px (nổi): trên+trái = #FFFFFF, dưới+phải = #9A9A9A.
+    [kInnerLo() set];                                        // L tối (dưới+phải) trước
+    NSRectFill(NSMakeRect(area.origin.x, area.origin.y, area.size.width, 1));      // dưới
+    NSRectFill(NSMakeRect(NSMaxX(area) - 1, area.origin.y, 1, area.size.height));  // phải
+    [kInnerHi() set];                                        // L sáng (trên+trái) đè lên
+    NSRectFill(NSMakeRect(area.origin.x, NSMaxY(area) - 1, area.size.width, 1));   // trên
+    NSRectFill(NSMakeRect(area.origin.x, area.origin.y, 1, area.size.height));     // trái
+
+    // (5) Glyph (#262626) — chạm sát khung lớn; nét dày t (đồng nhất khung).
+    if (glyph != 0) {
+        [dark set];
+        CGFloat ax = area.origin.x, ay = area.origin.y, aw = area.size.width, ah = area.size.height;
+        if (glyph == 1) {                        // zoom: ô nhỏ = 1/4 khung lớn (cạnh tại trung điểm)
+            CGFloat hx = floor(aw / 2), hy = floor(ah / 2);
+            // cạnh PHẢI ô nhỏ (dọc): mép TRÁI nét tại trung điểm ngang, lên chạm đỉnh khung.
+            NSRectFill(NSMakeRect(ax + hx, ay + hy, t, ah - hy));
+            // cạnh DƯỚI ô nhỏ (ngang): mép TRÊN nét tại trung điểm dọc (kéo xuống) -> ô nhỏ vuông 1/4.
+            NSRectFill(NSMakeRect(ax, ay + hy - t, hx + t, t));
+        } else if (glyph == 2) {                 // collapse: 2 vạch ngang GẦN nhau, căn giữa (nhích lên)
+            CGFloat gap = MAX(1, t - 1);         // khe nhỏ giữa 2 vạch -> cụm sát nhau ở giữa
+            CGFloat bottomMargin = ceil((ah - (2 * t + gap)) / 2.0);  // dư dồn xuống đáy -> cụm nhích lên
+            CGFloat b1 = ay + bottomMargin;      // vạch dưới
+            CGFloat b2 = b1 + t + gap;           // vạch trên
+            NSRectFill(NSMakeRect(ax, b1, aw, t));   // chạm cả 2 cạnh trái–phải khung lớn
+            NSRectFill(NSMakeRect(ax, b2, aw, t));
+        }
     }
 
-    // 5. Outer bevel (ngoài cùng, đảo chiều): #808080 trên-trái, trắng dưới-phải.
-    [kBevelHi() set];
-    NSRectFill(NSMakeRect(0, 12, 13, 1));  // hàng dưới
-    NSRectFill(NSMakeRect(12, 0, 1, 13));  // cột phải
-    [kBevelLo() set];
-    NSRectFill(NSMakeRect(0, 0, 13, 1));   // hàng trên
-    NSRectFill(NSMakeRect(0, 0, 1, 13));   // cột trái
-
-    // 6. Glyph (close: trống) — vẽ trong mặt 4..8.
-    [dark set];
-    if (glyph == 1) {           // zoom: ô vuông nhỏ góc trên-trái mặt
-        NSRectFill(NSMakeRect(4, 4, 4, 1));    // trên
-        NSRectFill(NSMakeRect(4, 7, 4, 1));    // dưới
-        NSRectFill(NSMakeRect(4, 4, 1, 4));    // trái
-        NSRectFill(NSMakeRect(7, 4, 1, 4));    // phải
-    } else if (glyph == 2) {    // hide: thanh ngang giữa mặt (2px)
-        NSRectFill(NSMakeRect(4, 6, 5, 2));
+    // (6) Overlay pressed: #353535→#9C9C9C @0.8, chéo TL→BR, chỉ phủ MẶT.
+    if (pressed) {
+        NSGradient *ov = [[NSGradient alloc]
+            initWithStartingColor:[kPressTop() colorWithAlphaComponent:0.8]
+                      endingColor:[kPressBot() colorWithAlphaComponent:0.8]];
+        [ov drawInRect:face angle:315];        // start TL -> end BR
     }
 
     [NSGraphicsContext restoreGraphicsState];

@@ -61,6 +61,36 @@ NSImage *OS9SendImage(CGFloat size) {
     }];
 }
 
+NSImage *OS9FolderImage(CGFloat size) {
+    return [NSImage imageWithSize:NSMakeSize(size, size) flipped:NO
+                   drawingHandler:^BOOL(NSRect r) {
+        [[NSGraphicsContext currentContext] setShouldAntialias:NO];
+        CGFloat s = size / 16.0;                 // metric thiết kế cho 16px
+        // Thân + tab (non-flipped: y lớn = trên). Tab nhô lên ở góc trên-trái.
+        CGFloat x0   = floor(1 * s),  x1 = floor(15 * s);
+        CGFloat yBot = floor(2 * s),  yTop = floor(12 * s);   // mép trên thân
+        CGFloat tabW = floor(6 * s),  tabH = floor(2 * s);    // tab nhô thêm tabH
+        NSColor *fill = [NSColor colorWithCalibratedRed:0.62 green:0.74 blue:0.86 alpha:1.0];
+        NSColor *hi   = [NSColor colorWithCalibratedRed:0.82 green:0.90 blue:0.97 alpha:1.0];
+        NSColor *line = [NSColor colorWithCalibratedRed:0.27 green:0.38 blue:0.50 alpha:1.0];
+
+        NSBezierPath *p = [NSBezierPath bezierPath];
+        [p moveToPoint:NSMakePoint(x0,             yBot)];          // dưới-trái
+        [p lineToPoint:NSMakePoint(x1,             yBot)];          // dưới-phải
+        [p lineToPoint:NSMakePoint(x1,             yTop)];          // lên mép phải
+        [p lineToPoint:NSMakePoint(x0 + tabW + 2*s, yTop)];         // mép trên thân (phải)
+        [p lineToPoint:NSMakePoint(x0 + tabW,      yTop + tabH)];   // dốc lên đỉnh tab
+        [p lineToPoint:NSMakePoint(x0,             yTop + tabH)];   // đỉnh tab (trái)
+        [p closePath];
+
+        [fill set]; [p fill];
+        [hi set];                                                   // bevel sáng mép trên thân
+        NSRectFill(NSMakeRect(x0 + 1, yTop - 1, (x1 - x0) - 2, 1));
+        [line set]; p.lineWidth = 1.0; [p stroke];
+        return YES;
+    }];
+}
+
 NSArray<NSImage *> *OS9SpinnerFrames(CGFloat size, int frameCount) {
     static NSMutableDictionary<NSString *, NSArray<NSImage *> *> *cache;
     static dispatch_once_t once;
