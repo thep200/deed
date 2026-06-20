@@ -25,7 +25,7 @@ NOTARY_PROFILE ?=
 .DEFAULT_GOAL := help
 
 .PHONY: help doctor tools bootstrap baseline configure configure-release \
-        build build-all app release smoke test core-test run-ui run-ui-smoke \
+        build build-all app release dist smoke test core-test run-ui run-ui-smoke \
         setup notary-store package clean distclean
 
 help: ## Liet ke cac target
@@ -71,6 +71,18 @@ app: build ## Alias cua `build`
 
 release: configure-release ## Build Release (toan bo project)
 	$(RUN) cmake --build $(BUILD_DIR)
+
+# dist = 1 LENH RA APP DUNG NGAY: build Release (.app) + ky ad-hoc + copy ra dist/deed.app.
+# App link tinh (khong dylib ngoai) nen keo thang vao /Applications la chay. Khong notarize
+# (chi may minh); phan phoi may khac -> dung `make package` (Developer ID + notarize).
+dist: configure-release ## 1 lenh: Release .app da ky -> dist/deed.app (keo vao /Applications)
+	$(RUN) cmake --build $(BUILD_DIR) --target deed
+	codesign --force --sign - "$(APP_PATH)"          # ky lai ad-hoc (macdeployqtfix co the lam hong chu ky)
+	@mkdir -p "$(DIST_DIR)"
+	@rm -rf "$(DIST_DIR)/deed.app"
+	@cp -R "$(APP_PATH)" "$(DIST_DIR)/deed.app"
+	@echo "OK -> $(DIST_DIR)/deed.app (Release, ad-hoc signed, self-contained)."
+	@echo "    Keo $(DIST_DIR)/deed.app vao /Applications de dung."
 
 build-all: configure ## Build toan bo (core + cli + tests + app)
 	$(RUN) cmake --build $(BUILD_DIR)
