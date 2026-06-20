@@ -100,20 +100,21 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 @end
 
 @interface OS9EnvGrid ()
-- (void)drawBodyIn:(NSView *)v;
+- (void)drawBodyIn:(NSView *)v dirty:(NSRect)dirty;
 - (void)drawHeaderIn:(NSView *)v;
 - (void)bodyMouseDown:(NSEvent *)e;
 - (void)headerMouseDown:(NSEvent *)e;
 - (void)setHoverRowFromBodyEvent:(NSEvent *)e;
 - (void)headerMouseMoved:(NSEvent *)e;
 - (void)headerMouseExited;
+- (void)invalidateBodyRow:(NSInteger)row;   // invalidate ĐÚNG 1 hàng body (hover/selection)
 @end
 
 @implementation OS9EnvGridBody
 - (BOOL)isFlipped { return YES; }
 - (BOOL)isOpaque { return YES; }   // tự phủ trắng toàn bộ -> không ghosting khi resize/scroll
 - (BOOL)acceptsFirstMouse:(NSEvent *)e { return YES; }   // click đầu vẫn nhận (double-click ổn)
-- (void)drawRect:(NSRect)r { [self.owner drawBodyIn:self]; }
+- (void)drawRect:(NSRect)r { [self.owner drawBodyIn:self dirty:r]; }
 - (void)mouseDown:(NSEvent *)e { [self.owner bodyMouseDown:e]; }
 - (void)mouseMoved:(NSEvent *)e { [self.owner setHoverRowFromBodyEvent:e]; }
 - (void)mouseExited:(NSEvent *)e { [self.owner setHoverRowFromBodyEvent:nil]; }
@@ -280,7 +281,19 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     [self reloadData];
 }
 - (void)setAliases:(NSArray<NSString *> *)a { _aliases = [a copy]; [self reloadData]; }
-- (void)setSelectedRow:(NSInteger)r { _selectedRow = r; [_body setNeedsDisplay:YES]; }
+- (void)setSelectedRow:(NSInteger)r {
+    if (_selectedRow == r) return;
+    NSInteger old = _selectedRow;
+    _selectedRow = r;
+    [self invalidateBodyRow:old];   // chỉ vẽ lại hàng cũ + hàng mới (không cả bảng)
+    [self invalidateBodyRow:r];
+}
+
+// Invalidate ĐÚNG rect của 1 hàng body -> drawBodyIn chỉ re-query cell của hàng đó.
+- (void)invalidateBodyRow:(NSInteger)row {
+    if (row < 0 || row >= (NSInteger)_aliases.count) return;
+    [_body setNeedsDisplayInRect:NSMakeRect(0, row * kRowH, _body.bounds.size.width, kRowH)];
+}
 
 - (NSString *)displayForEnv:(NSInteger)e {   // e = index 0-based trong _envNames
     if (e == 0) return _baseDisplayName ?: StrEnvLocal;
@@ -342,7 +355,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 
 #pragma mark body drawing
 
-- (void)drawBodyIn:(NSView *)v {
+- (void)drawBodyIn:(NSView *)v dirty:(NSRect)dirty {
     [[NSColor whiteColor] set];
     NSRectFill(v.bounds);
 
@@ -350,6 +363,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     NSInteger nCols = _envNames.count;
     CGFloat cw = [self contentWidth];
 
+    // Nền zebra/selection + lưới: NSRectFill rẻ, để AppKit clip theo dirty (vẽ ngoài dirty bị bỏ).
     for (NSInteger row = 0; row < nRows; row++) {
         NSRect rr = NSMakeRect(0, row * kRowH, cw, kRowH);
         if (row == _selectedRow) { [[OS9Theme accent] set]; NSRectFill(rr); }
@@ -371,7 +385,12 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         [NSGraphicsContext restoreGraphicsState];
     }
 
-    for (NSInteger row = 0; row < nRows; row++) {
+    // Text + truy vấn delegate cho từng cell là phần ĐẮT (Ellipsize binary-search + valueForAlias).
+    // Chỉ chạy cho hàng GIAO với dirty rect -> hover/selection (invalidate 1 hàng) không re-query
+    // toàn bộ rows×cols. Full redraw (layout/reload) -> dirty = bounds -> mọi hàng vẫn vẽ.
+    NSInteger firstRow = MAX((NSInteger)0, (NSInteger)floor(NSMinY(dirty) / kRowH));
+    NSInteger lastRow  = MIN(nRows - 1, (NSInteger)floor((NSMaxY(dirty) - 1) / kRowH));
+    for (NSInteger row = firstRow; row <= lastRow; row++) {
         BOOL sel = (row == _selectedRow);
         NSColor *fg = sel ? [NSColor whiteColor] : [OS9Theme frame];
         CGFloat y = row * kRowH;
@@ -386,8 +405,11 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         }
     }
 
-    DrawPlus(NSMakeRect(8, nRows * kRowH + (kAddRowH - kGlyph) / 2, kGlyph, kGlyph), [OS9Theme shadow]);
-    DrawCellText(StrGridAddAlias, NSMakeRect(kGlyph + 14, nRows * kRowH, _aliasW, kAddRowH), [OS9Theme shadow]);
+    // Hàng "+ alias" chỉ vẽ khi dirty chạm tới (không đổi khi hover/selection -> bỏ qua redraw 1 hàng).
+    if (NSIntersectsRect(dirty, NSMakeRect(0, nRows * kRowH, cw, kAddRowH))) {
+        DrawPlus(NSMakeRect(8, nRows * kRowH + (kAddRowH - kGlyph) / 2, kGlyph, kGlyph), [OS9Theme shadow]);
+        DrawCellText(StrGridAddAlias, NSMakeRect(kGlyph + 14, nRows * kRowH, _aliasW, kAddRowH), [OS9Theme shadow]);
+    }
 }
 
 #pragma mark hit-testing
@@ -524,7 +546,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         NSInteger row = (NSInteger)(p.y / kRowH);
         _hoverRow = (row >= 0 && row < (NSInteger)_aliases.count) ? row : -1;
     }
-    if (old != _hoverRow) [_body setNeedsDisplay:YES];
+    if (old != _hoverRow) { [self invalidateBodyRow:old]; [self invalidateBodyRow:_hoverRow]; }
 }
 
 #pragma mark editing (OS9Dialog prompt — đáng tin trong config pane nhúng)

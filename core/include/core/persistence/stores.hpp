@@ -2,10 +2,13 @@
 // Tất cả I/O file nằm trong Core; UI chỉ gọi load/save. Atomic write cho mọi ghi.
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "core/types.hpp"
@@ -58,6 +61,16 @@ public:
 
 private:
     std::string root_;
+
+    // Index id->relPath dựng LƯỜI từ tên file (zero-read sau migrate) -> findRelPathById O(1)
+    // thay vì quét đệ quy CẢ cây mỗi lần gọi (resyncCurrentRelById chạy trước mỗi save/switch).
+    // Vô hiệu khi có mutation (create/rename/move/duplicate/remove/save/migrate/setRoot); lookup
+    // còn xác thực sự tồn tại của file -> tự dựng lại nếu lệch (an toàn trước thay đổi ngoài app).
+    mutable std::mutex idMu_;
+    mutable std::unordered_map<std::string, std::string> idIndex_;
+    mutable bool idIndexBuilt_ = false;
+    void buildIdIndexLocked() const;     // dựng lại idIndex_ (gọi KHI ĐÃ giữ idMu_)
+    void invalidateIdIndex() const;      // đánh dấu cần dựng lại (sau mutation)
 };
 
 // SessionStore — app-state (.session/session.json), KHÔNG version git.
@@ -117,8 +130,14 @@ public:
     // No-op nếu .secrets/ không tồn tại (đã migrate hoặc chưa từng có secret).
     void migrateLegacySecrets();
 
+    // Epoch tăng MỖI khi nội dung env đổi (save/remove/rename/renameAlias/migrate/setRoot).
+    // Engine dùng để cache merged-vars: cache hit khi (activeEnv, epoch) không đổi -> không đọc
+    // lại đĩa mỗi lần send/resolve; mọi sửa env bump epoch -> cache tự vô hiệu (không bị vars cũ).
+    std::uint64_t epoch() const { return epoch_.load(std::memory_order_relaxed); }
+
 private:
     std::string root_;
+    std::atomic<std::uint64_t> epoch_{0};
 };
 
 // AppConfigStore — app-global ở OS app-support, NGOÀI collection (README §12.1).

@@ -32,11 +32,10 @@
 
 - (void)drawRect:(NSRect)dirty {
     [OS9Theme drawButtonInRect:self.bounds pressed:_pressed isDefault:NO];
-    NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
-    ps.lineBreakMode = NSLineBreakByTruncatingTail;   // tên dài -> cắt "…" (tên đầy đủ ở toolTip)
+    // tên dài -> cắt "…" (tên đầy đủ ở toolTip); paragraph style hằng dùng chung (không alloc mỗi vẽ)
     NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont],
                             NSForegroundColorAttributeName : [OS9Theme buttonFGPressed:_pressed enabled:YES],
-                            NSParagraphStyleAttributeName : ps};
+                            NSParagraphStyleAttributeName : [OS9Theme truncatingTailStyle]};
     NSString *t = self.selectedTitle;
     NSSize sz = [t sizeWithAttributes:attrs];
     CGFloat tx = 7, tw = self.bounds.size.width - tx - 16;   // chừa chỗ mũi ▾ bên phải

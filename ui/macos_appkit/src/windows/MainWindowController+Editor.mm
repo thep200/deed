@@ -13,11 +13,40 @@
     [self finishSending];
 }
 
+// §A1: loadRequest đọc đĩa + parse JSON (request body lớn) -> chạy NỀN, áp model trên main.
+// Request CŨ giữ NGUYÊN (editor + _model + _currentRel) cho tới khi áp -> KHÔNG có "cửa sổ"
+// editor bị xoá giữa chừng (an toàn khi arrow-key duyệt cây nhanh). Token _loadReqSeq: chỉ kết
+// quả MỚI NHẤT được áp -> các lần chọn cũ bị bỏ (không hiện model của request đã chuyển đi).
 - (void)loadRequestAtRel:(NSString *)rel {
+    if (!_engine || rel.length == 0) return;
+    NSString *relCopy = [rel copy];
+    uint64_t token = ++_loadReqSeq;
+    __weak MainWindowController *ws = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        MainWindowController *s = ws;
+        if (!s || !s->_engine) return;
+        core::RequestModel model;
+        std::string err;
+        try { model = s->_engine->collection().loadRequest(relCopy.UTF8String); }  // I/O NGOÀI main
+        catch (const std::exception &e) { err = e.what(); }
+        __block core::RequestModel modelCopy = std::move(model);
+        __block std::string errCopy = std::move(err);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MainWindowController *s2 = ws;
+            if (!s2 || token != s2->_loadReqSeq) return;   // đã chọn request khác -> bỏ kết quả cũ
+            if (!errCopy.empty()) { [s2 toastWarn:N(errCopy)]; return; }
+            [s2 applyLoadedModel:modelCopy rel:relCopy];
+        });
+    });
+}
+
+// Áp model đã nạp lên UI (chạy trên MAIN). Teardown request cũ ở ĐÂY (editor cũ còn nguyên tới
+// lúc này) -> autosave đọc đúng nội dung A, không lưu nhầm editor đã xoá khi chuyển nhanh.
+- (void)applyLoadedModel:(const core::RequestModel &)model rel:(NSString *)rel {
     if (!_engine) return;
     BOOL switching = (_hasRequest && S(rel) != _currentRel);
     if (switching) {
-        [self autosaveCurrent];         // 1. A dirty -> tự lưu
+        [self autosaveCurrent];         // 1. A dirty -> tự lưu (editor A còn nguyên)
         [self cancelInFlightForSwitch]; // 2. huỷ request đang bay của A
         // 2b. (CRASH_FIX §2.1) commit + deactivate input context của A TRƯỚC khi xoá Scintilla.
         // Xoá nội dung khi editor/response còn first responder = tạo input context treo -> crash
@@ -33,7 +62,7 @@
         _hasResp = NO;
     }
     try {
-        _model = _engine->collection().loadRequest(rel.UTF8String);
+        _model = model;
         _currentRel = rel.UTF8String;
         _currentId = _model.id;          // theo dõi request đang mở bằng id ổn định
         _hasRequest = YES;
@@ -41,7 +70,7 @@
         [self setRequestType:_model.type];
         [self populateEditorsFromModel];
         [self setHasRequest:YES];
-        _engine->session().saveLastOpened(rel.UTF8String);
+        _engine->session().saveLastOpened(_currentRel);
         [self updateTitle];
         [self relayout];
         [self updateStatus:@""];
@@ -420,39 +449,61 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 }
 
 // Import + tạo request ngay, không hỏi; báo kết quả qua toast.
+// §A3: parse curl/grpcurl (có thể lớn) chạy NỀN -> không chặn main; marshal kết quả về main.
 - (void)importNow:(NSString *)text grpc:(BOOL)isGrpc {
-    core::ImportResult r = isGrpc ? _engine->importFromGrpc(text.UTF8String)
-                                  : _engine->importFromCurl(text.UTF8String);
-    if (!r.ok) {
-        [self toastWarn:[NSString stringWithFormat:StrFmtToastImportFailed,
-                         isGrpc ? @"grpcurl" : @"cURL", r.error.c_str()]];
-        [self restoreUrlField];
-        return;
-    }
-    [self applyImport:r.model];
+    if (!_engine) return;
+    NSString *t = [text copy];
+    __weak MainWindowController *ws = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        MainWindowController *s = ws; if (!s || !s->_engine) return;
+        core::ImportResult r = isGrpc ? s->_engine->importFromGrpc(t.UTF8String)
+                                      : s->_engine->importFromCurl(t.UTF8String);
+        __block core::ImportResult rb = std::move(r);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MainWindowController *s2 = ws; if (!s2) return;
+            if (!rb.ok) {
+                [s2 toastWarn:[NSString stringWithFormat:StrFmtToastImportFailed,
+                               isGrpc ? @"grpcurl" : @"cURL", rb.error.c_str()]];
+                [s2 restoreUrlField];
+                return;
+            }
+            [s2 applyImport:rb.model];
+        });
+    });
 }
 
 // Hiện preview xác nhận; nếu OK -> tạo request mới trong tree + mở editor.
+// §A3: parse chạy NỀN; dialog + applyImport trên main.
 - (void)offerImport:(NSString *)text grpc:(BOOL)isGrpc {
-    core::ImportResult r = isGrpc ? _engine->importFromGrpc(text.UTF8String)
-                                  : _engine->importFromCurl(text.UTF8String);
-    if (!r.ok) {
-        [self toastWarn:[NSString stringWithFormat:StrFmtToastImportFailed,
-                         isGrpc ? @"grpcurl" : @"cURL", r.error.c_str()]];
-        return;
-    }
-    NSString *primary = _hasRequest ? StrBtnReplaceCurrent : StrBtnCreateRequest;
-    NSString *body = [NSString stringWithFormat:@"%@\n\n%@",
-                      isGrpc ? StrGrpcurlDetected : StrCurlDetected,
-                      [self importSummary:r.model unknown:r.unknown grpc:isGrpc]];
-    NSInteger choice = [OS9Dialog confirmWithTitle:StrDlgImportTitle
-                                           message:body
-                                           buttons:@[ StrCancel, primary ]
-                                     defaultButton:1 cancelButton:0
-                                              icon:OS9AlertNote
-                                            parent:_window];
-    if (choice == 1) [self applyImport:r.model];
-    else [self restoreUrlField];   // bỏ: trả ô URL về giá trị request đang mở
+    if (!_engine) return;
+    NSString *t = [text copy];
+    __weak MainWindowController *ws = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        MainWindowController *s = ws; if (!s || !s->_engine) return;
+        core::ImportResult r = isGrpc ? s->_engine->importFromGrpc(t.UTF8String)
+                                      : s->_engine->importFromCurl(t.UTF8String);
+        __block core::ImportResult rb = std::move(r);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MainWindowController *s2 = ws; if (!s2) return;
+            if (!rb.ok) {
+                [s2 toastWarn:[NSString stringWithFormat:StrFmtToastImportFailed,
+                               isGrpc ? @"grpcurl" : @"cURL", rb.error.c_str()]];
+                return;
+            }
+            NSString *primary = s2->_hasRequest ? StrBtnReplaceCurrent : StrBtnCreateRequest;
+            NSString *body = [NSString stringWithFormat:@"%@\n\n%@",
+                              isGrpc ? StrGrpcurlDetected : StrCurlDetected,
+                              [s2 importSummary:rb.model unknown:rb.unknown grpc:isGrpc]];
+            NSInteger choice = [OS9Dialog confirmWithTitle:StrDlgImportTitle
+                                                   message:body
+                                                   buttons:@[ StrCancel, primary ]
+                                             defaultButton:1 cancelButton:0
+                                                      icon:OS9AlertNote
+                                                    parent:s2->_window];
+            if (choice == 1) [s2 applyImport:rb.model];
+            else [s2 restoreUrlField];   // bỏ: trả ô URL về giá trị request đang mở
+        });
+    });
 }
 
 - (NSString *)importSummary:(const core::RequestModel &)m unknown:(const std::vector<std::string> &)unknown grpc:(BOOL)isGrpc {
@@ -495,8 +546,9 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     if (!_hasRequest || _currentRel.empty() || ![self resyncCurrentRelById]) {
         NSString *name = [self deriveImportName:m];   // fallback: chưa mở request -> tạo mới
         try {
-            std::string rel = _engine->collection().createRequestFromModel([self selectedFolderRel], m, name.UTF8String);
-            [self reloadTree];
+            std::string folderRel = [self selectedFolderRel];   // §A4: chỉ refresh cấp đích, không reload cả cây
+            std::string rel = _engine->collection().createRequestFromModel(folderRel, m, name.UTF8String);
+            [self refreshTreeLevel:N(folderRel)];
             [self loadRequestAtRel:N(rel)];
             [self toastOk:[NSString stringWithFormat:StrFmtToastImportedCreated, name]];
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
@@ -517,7 +569,9 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     try {
         _currentRel = _engine->collection().saveRequest(_currentRel, _model);   // lưu + sync tên file (§4)
         _engine->session().saveLastOpened(_currentRel);
-        [self reloadTree];
+        NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];  // §A4: chỉ cấp chứa request
+        [self refreshTreeLevel:parentRel];
+        [self reselectTreeByRel:N(_currentRel)];
         [self toastOk:[NSString stringWithFormat:StrFmtToastReplaced,
                        _model.type == core::RequestType::Grpc ? @"gRPC" : @"HTTP"]];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
@@ -612,7 +666,9 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     try {
         _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // tên file đồng bộ method/name (§4)
         _engine->session().saveLastOpened(_currentRel);
-        [self reloadTree];
+        NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];  // §A4: cập nhật tăng dần
+        [self refreshTreeLevel:parentRel];
+        [self reselectTreeByRel:N(_currentRel)];
         [self toastOk:StrToastSaved];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }

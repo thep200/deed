@@ -15,7 +15,7 @@
     <key>CFBundleExecutable</key>
     <string>deed</string>
     <key>CFBundleIconFile</key>
-    <string>deed_1_rmbg</string>
+    <string>deed</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>

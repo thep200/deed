@@ -142,6 +142,16 @@ struct Engine::Impl {
 
     SenderRegistry registry;
 
+    // Cache merged-vars (Global + env active) -> không đọc/parse env từ đĩa MỖI lần resolve/send.
+    // Khoá theo (activeEnv, env-epoch): đổi env active hoặc sửa bất kỳ env nào -> epoch/khoá đổi
+    // -> tự dựng lại (không bao giờ dùng vars cũ). activeVars có thể chạy main (send) lẫn nền
+    // (listGrpcMethods qua reflection) -> bảo vệ bằng varsMu.
+    std::mutex varsMu;
+    std::map<std::string, std::string> varsCache;
+    std::string varsCacheEnv;
+    std::uint64_t varsCacheEpoch = 0;
+    bool varsCacheValid = false;
+
     std::atomic<RequestHandle> nextHandle{1};
 
     // Inflight registry tách thành object có shared_ptr: worker giữ tham chiếu riêng,
@@ -179,6 +189,14 @@ EnvironmentStore& Engine::environments() { return impl_->environments; }
 AppConfigStore& Engine::appConfig() { return impl_->appConfig; }
 
 std::map<std::string, std::string> Engine::activeVars() const {
+    std::string active = impl_->session.getActiveEnv();
+    std::uint64_t epoch = impl_->environments.epoch();
+    {   // Cache hit: (env active + epoch) không đổi -> trả bản copy, KHÔNG đọc đĩa.
+        std::lock_guard<std::mutex> lk(impl_->varsMu);
+        if (impl_->varsCacheValid && impl_->varsCacheEnv == active && impl_->varsCacheEpoch == epoch)
+            return impl_->varsCache;
+    }
+    // Miss: dựng lại NGOÀI lock (đọc + parse env từ đĩa).
     std::map<std::string, std::string> vars;
     auto merge = [&](const std::string& name) {
         try {
@@ -188,8 +206,14 @@ std::map<std::string, std::string> Engine::activeVars() const {
         } catch (...) { /* env không tồn tại -> bỏ qua */ }
     };
     merge("Global");                         // nền
-    std::string active = impl_->session.getActiveEnv();
     if (!active.empty() && active != "Global") merge(active); // override
+    {
+        std::lock_guard<std::mutex> lk(impl_->varsMu);
+        impl_->varsCache = vars;
+        impl_->varsCacheEnv = active;
+        impl_->varsCacheEpoch = epoch;
+        impl_->varsCacheValid = true;
+    }
     return vars;
 }
 

@@ -181,23 +181,28 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
         std::string data;
         // đọc file nhị phân
         FILE* f = std::fopen(b.binaryFilePath.c_str(), "rb");
-        if (f) {
-            // §2.2: cấp phát 1 lần theo kích thước file -> tránh realloc nhiều lần với file lớn.
-            if (std::fseek(f, 0, SEEK_END) == 0) {
-                long sz = std::ftell(f);
-                if (sz > 0) data.reserve(static_cast<size_t>(sz));
-                std::rewind(f);
-            }
-            char buf[64 * 1024];
-            size_t n;
-            bool aborted = false;
-            while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
-                if (cancel && cancel->isCancelled()) { aborted = true; break; }  // huỷ giữa lúc đọc file lớn
-                data.append(buf, n);
-            }
-            std::fclose(f);
-            if (aborted) { delegate.onError(handle, ApiError{ErrorKind::Cancelled, "Cancelled"}); return; }
+        if (!f) {
+            // Mở file thất bại (thiếu/không quyền): BÁO LỖI thay vì gửi body rỗng âm thầm
+            // -> user thấy "cannot open" thay vì 4xx/5xx khó hiểu từ server.
+            delegate.onError(handle, ApiError{ErrorKind::Unknown,
+                "cannot open binary file: " + b.binaryFilePath});
+            return;
         }
+        // §2.2: cấp phát 1 lần theo kích thước file -> tránh realloc nhiều lần với file lớn.
+        if (std::fseek(f, 0, SEEK_END) == 0) {
+            long sz = std::ftell(f);
+            if (sz > 0) data.reserve(static_cast<size_t>(sz));
+            std::rewind(f);
+        }
+        char buf[64 * 1024];
+        size_t n;
+        bool aborted = false;
+        while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+            if (cancel && cancel->isCancelled()) { aborted = true; break; }  // huỷ giữa lúc đọc file lớn
+            data.append(buf, n);
+        }
+        std::fclose(f);
+        if (aborted) { delegate.onError(handle, ApiError{ErrorKind::Cancelled, "Cancelled"}); return; }
         session.SetBody(cpr::Body{data});
     }
 

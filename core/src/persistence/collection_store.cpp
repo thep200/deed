@@ -123,7 +123,7 @@ TreeNode buildRequestLeaf(const fs::path& fullPath, const std::string& relPath) 
 } // namespace
 
 CollectionStore::CollectionStore(std::string root) : root_(std::move(root)) {}
-void CollectionStore::setRoot(std::string root) { root_ = std::move(root); }
+void CollectionStore::setRoot(std::string root) { root_ = std::move(root); invalidateIdIndex(); }
 
 // Quét 1 cấp — metadata-only. Folder con để fold (children rỗng). KHÔNG đọc nội dung
 // để render (chỉ fallback khi tên file sai grammar, trong buildRequestLeaf). §3.
@@ -182,21 +182,21 @@ RequestModel CollectionStore::loadRequest(const std::string& relPath) const {
     if (!fsutil::readFile(fsutil::join(root_, relPath), txt))
         throw std::runtime_error("cannot read request: " + relPath);
     RequestModel m = codec::requestFromJson(codec::json::parse(txt));
-    // id phải hợp lệ để nhúng vào TÊN FILE ([a-z0-9], không '_'). Rỗng hoặc legacy "req_..."
-    // -> sinh id sạch + ghi lại nội dung tại CHỖ (rename tên file để sau ở save/migrate).
+    // id phải hợp lệ để nhúng vào TÊN FILE ([a-z0-9], không '_'). Nội dung rỗng/legacy "req_..."
+    // -> KHÔNG ghi đĩa ở đây (loadRequest là READ thuần — tránh write-storm khi mở/duyệt request).
+    // Ưu tiên id TỪ TÊN FILE (đã ổn định sau migrateAddIdToFilenames); chỉ sinh tạm nếu tên file
+    // cũng chưa có id. Việc rewrite nội dung do saveRequest/migrateAddIdToFilenames sở hữu.
     if (!isValidFileId(m.id)) {
-        m.id = genId();
-        try { fsutil::writeFileAtomic(fsutil::join(root_, relPath), codec::dumpRequest(m)); }
-        catch (...) {}
+        ParsedRequestName p = parseRequestFilename(fs::path(relPath).filename().string());
+        m.id = (p.ok && isValidFileId(p.id)) ? p.id : genId();
     }
     return m;
 }
 
-std::string CollectionStore::findRelPathById(const std::string& id) const {
-    if (id.empty()) return "";
-    // Ưu tiên đọc id TỪ TÊN FILE (zero-read); chỉ đọc nội dung cho file CŨ chưa có id trong tên.
-    std::function<std::string(const std::string&)> walk =
-        [&](const std::string& rel) -> std::string {
+// Dựng idIndex_ một lượt: id ưu tiên TỪ TÊN FILE (zero-read), chỉ đọc nội dung cho file legacy.
+void CollectionStore::buildIdIndexLocked() const {
+    idIndex_.clear();
+    std::function<void(const std::string&)> walk = [&](const std::string& rel) {
         fs::path dir = fs::path(fsutil::join(root_, rel));
         std::error_code ec;
         for (const auto& e : fs::directory_iterator(dir, ec)) {
@@ -205,27 +205,43 @@ std::string CollectionStore::findRelPathById(const std::string& id) const {
             std::string childRel = rel.empty() ? fname : rel + "/" + fname;
             if (e.is_directory()) {
                 if (isReservedDir(fname) || isHidden(fname)) continue;
-                std::string r = walk(childRel);
-                if (!r.empty()) return r;
+                walk(childRel);
             } else if (e.is_regular_file()) {
                 if (e.path().extension() != ".json" || isConfigFile(fname) || isHidden(fname))
                     continue;
                 ParsedRequestName p = parseRequestFilename(fname);
-                if (!p.id.empty()) {                 // id từ tên file
-                    if (p.id == id) return childRel;
-                    continue;
+                std::string id = p.id;
+                if (id.empty()) {                    // file cũ chưa có id trong tên -> đọc nội dung
+                    std::string txt;
+                    if (fsutil::readFile(e.path().string(), txt)) {
+                        try { id = codec::json::parse(txt).value("id", std::string()); } catch (...) {}
+                    }
                 }
-                std::string txt;                     // file cũ chưa có id trong tên -> đọc nội dung
-                if (fsutil::readFile(e.path().string(), txt)) {
-                    try {
-                        if (codec::json::parse(txt).value("id", std::string()) == id) return childRel;
-                    } catch (...) {}
-                }
+                if (!id.empty()) idIndex_.emplace(id, childRel);  // id đầu tiên thắng (ổn định)
             }
         }
-        return "";
     };
-    return walk("");
+    walk("");
+    idIndexBuilt_ = true;
+}
+
+void CollectionStore::invalidateIdIndex() const {
+    std::lock_guard<std::mutex> lk(idMu_);
+    idIndexBuilt_ = false;
+}
+
+std::string CollectionStore::findRelPathById(const std::string& id) const {
+    if (id.empty()) return "";
+    std::lock_guard<std::mutex> lk(idMu_);
+    if (!idIndexBuilt_) buildIdIndexLocked();
+    auto it = idIndex_.find(id);
+    if (it == idIndex_.end()) return "";
+    // Xác thực: file còn tồn tại đúng đường dẫn đã cache? (chống lệch nếu đổi NGOÀI app)
+    // -> nếu mất, dựng lại 1 lần rồi tra lại; tránh trả path "ma".
+    if (fs::exists(fs::path(fsutil::join(root_, it->second)))) return it->second;
+    buildIdIndexLocked();
+    auto it2 = idIndex_.find(id);
+    return it2 != idIndex_.end() ? it2->second : "";
 }
 
 int CollectionStore::migrateAddIdToFilenames() const {
@@ -263,10 +279,12 @@ int CollectionStore::migrateAddIdToFilenames() const {
         }
     };
     walk("");
+    if (migrated) invalidateIdIndex();   // đổi tên file -> idIndex_ (theo relPath) đã lệch
     return migrated;
 }
 
 std::string CollectionStore::saveRequest(const std::string& relPath, const RequestModel& m) const {
+    invalidateIdIndex();   // có thể rename file (relPath đổi) -> idIndex_ cần dựng lại
     fs::path cur = fs::path(fsutil::join(root_, relPath));
     fs::path dir = cur.parent_path();
     std::string method = (m.type == RequestType::Http) ? m.http.method : std::string();
@@ -284,6 +302,7 @@ std::string CollectionStore::saveRequest(const std::string& relPath, const Reque
 
 std::string CollectionStore::createRequest(const std::string& folderRel, RequestType type,
                                            const std::string& name) const {
+    invalidateIdIndex();
     fs::path dir = fs::path(fsutil::join(root_, folderRel));
     fs::create_directories(dir);
     RequestModel m;
@@ -313,6 +332,7 @@ std::string CollectionStore::createRequest(const std::string& folderRel, Request
 
 std::string CollectionStore::createRequestFromModel(const std::string& folderRel, RequestModel m,
                                                     const std::string& name) const {
+    invalidateIdIndex();
     fs::path dir = fs::path(fsutil::join(root_, folderRel));
     fs::create_directories(dir);
     m.id = genId();      // id mới, độc lập với nguồn import
@@ -324,6 +344,7 @@ std::string CollectionStore::createRequestFromModel(const std::string& folderRel
 }
 
 std::string CollectionStore::createFolder(const std::string& parentRel, const std::string& name) const {
+    invalidateIdIndex();
     std::string slug = fsutil::slugify(name);
     fs::path dir = fs::path(fsutil::join(fsutil::join(root_, parentRel), slug));
     fs::create_directories(dir);
@@ -331,6 +352,7 @@ std::string CollectionStore::createFolder(const std::string& parentRel, const st
 }
 
 std::string CollectionStore::rename(const std::string& relPath, const std::string& newName) const {
+    invalidateIdIndex();
     fs::path src = fs::path(fsutil::join(root_, relPath));
     if (!fs::exists(src)) throw std::runtime_error("does not exist: " + relPath);
     if (fs::is_directory(src)) {
@@ -349,6 +371,7 @@ std::string CollectionStore::rename(const std::string& relPath, const std::strin
 }
 
 std::string CollectionStore::duplicate(const std::string& relPath) const {
+    invalidateIdIndex();
     fs::path src = fs::path(fsutil::join(root_, relPath));
     if (!fs::exists(src)) throw std::runtime_error("does not exist: " + relPath);
     if (fs::is_directory(src)) {
@@ -368,6 +391,7 @@ std::string CollectionStore::duplicate(const std::string& relPath) const {
 }
 
 std::string CollectionStore::move(const std::string& relPath, const std::string& destFolderRel) const {
+    invalidateIdIndex();
     fs::path src = fs::path(fsutil::join(root_, relPath));
     if (!fs::exists(src)) throw std::runtime_error("does not exist: " + relPath);
     fs::path destDir = fs::path(fsutil::join(root_, destFolderRel));
@@ -392,6 +416,7 @@ std::string CollectionStore::move(const std::string& relPath, const std::string&
 }
 
 void CollectionStore::remove(const std::string& relPath) const {
+    invalidateIdIndex();
     fs::path p = fs::path(fsutil::join(root_, relPath));
     std::error_code ec;
     fs::remove_all(p, ec);

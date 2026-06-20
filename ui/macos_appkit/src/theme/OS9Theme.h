@@ -23,6 +23,8 @@
 // Tên họ chữ đã cấu hình (nil nếu dùng mặc định) + size — cho engine ngoài AppKit (Scintilla).
 + (NSString *)configuredFontName;
 + (CGFloat)configuredFontSize;
+// Paragraph style cắt đuôi "…" DÙNG CHUNG (hằng số) — tránh alloc mỗi drawRect/mỗi hàng.
++ (NSParagraphStyle *)truncatingTailStyle;
 // Cấu hình font từ Settings (rỗng -> mặc định). size<=0 -> 11.
 + (void)setConfiguredFontName:(NSString *)name size:(CGFloat)size;
 

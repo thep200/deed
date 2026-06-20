@@ -25,3 +25,5 @@ CMakeUserPresets.json
 
 third_party/lexilla
 third_party/scintilla
+
+/scripts

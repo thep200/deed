@@ -14,7 +14,10 @@ namespace core {
 
 EnvironmentStore::EnvironmentStore(std::string root) : root_(std::move(root)) {}
 
-void EnvironmentStore::setRoot(std::string root) { root_ = std::move(root); }
+void EnvironmentStore::setRoot(std::string root) {
+    root_ = std::move(root);
+    epoch_.fetch_add(1, std::memory_order_relaxed);   // đổi collection -> vars cache phải dựng lại
+}
 
 namespace {
 std::string envDir(const std::string& root) { return fsutil::join(root, "environments"); }
@@ -50,11 +53,13 @@ Environment EnvironmentStore::load(const std::string& name) const {
 void EnvironmentStore::save(const Environment& e) {
     if (e.name.empty()) throw std::runtime_error("env must have a name");
     fsutil::writeFileAtomic(envFile(root_, e.name), codec::toJson(e).dump(2));
+    epoch_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void EnvironmentStore::remove(const std::string& name) {
     std::error_code ec;
     fs::remove(fs::path(envFile(root_, name)), ec);
+    epoch_.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool EnvironmentStore::renameEnv(const std::string& oldName, const std::string& newName) {
@@ -70,6 +75,7 @@ bool EnvironmentStore::renameEnv(const std::string& oldName, const std::string& 
     e.name = newName;
     fsutil::writeFileAtomic(envFile(root_, newName), codec::toJson(e).dump(2));
     fs::remove(src, ec);
+    epoch_.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 

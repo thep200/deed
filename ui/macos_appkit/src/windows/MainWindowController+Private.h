@@ -72,6 +72,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     BOOL _hasRequest;
     std::vector<core::GrpcMethodInfo> _grpcMethods; // song song với item của _servicePopup
     uint64_t _grpcMethodsReqSeq;  // chống race: chỉ áp kết quả listGrpcMethods mới nhất
+    uint64_t _loadReqSeq;         // token: chỉ áp model của lần loadRequestAtRel MỚI NHẤT (nạp async)
 
     // Chrome + containers
     NSWindow *_window;
@@ -212,6 +213,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (BOOL)outlineView:(NSOutlineView *)ov acceptDrop:(id<NSDraggingInfo>)info item:(id)item childIndex:(NSInteger)idx;
 - (void)cancelInFlightForSwitch;
 - (void)loadRequestAtRel:(NSString *)rel;
+- (void)applyLoadedModel:(const core::RequestModel &)model rel:(NSString *)rel;  // áp model đã nạp (trên main)
 - (void)showCachedResponseForId:(const std::string &)reqId;
 - (void)populateEditorsFromModel;
 - (NSInteger)tabIndexForKey:(NSString *)key inTitles:(NSArray<NSString *> *)titles;

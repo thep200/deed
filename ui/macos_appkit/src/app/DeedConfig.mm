@@ -30,6 +30,15 @@
         if (eq.location == NSNotFound) continue;
         NSString *k = [[line substringToIndex:eq.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         NSString *v = [[line substringFromIndex:eq.location + 1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        // Bỏ inline comment "value # ghi chú": cắt từ dấu # ĐẦU TIÊN có KHOẢNG TRẮNG đứng trước
+        // (chuẩn dotenv). Giữ được value chứa '#' liền kề (vd màu #DDDDDD đứng một mình).
+        // KHÔNG strip -> "classic # ..." không khớp "classic" -> rơi nhầm về kiểu mặc định.
+        NSRange c1 = [v rangeOfString:@" #"], c2 = [v rangeOfString:@"\t#"];
+        NSUInteger cut = NSNotFound;
+        if (c1.location != NSNotFound) cut = c1.location;
+        if (c2.location != NSNotFound && (cut == NSNotFound || c2.location < cut)) cut = c2.location;
+        if (cut != NSNotFound)
+            v = [[v substringToIndex:cut] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         // bỏ nháy bao quanh nếu có
         if (v.length >= 2 && ([v hasPrefix:@"\""] || [v hasPrefix:@"'"]))
             v = [v substringWithRange:NSMakeRange(1, v.length - 2)];

@@ -22,11 +22,22 @@ static NSString *gFontName = nil;   // tên font người dùng cấu hình (tru
 static CGFloat gFontSize = 11;
 static NSFont *gUiFont = nil;    // cache: tránh tra cứu font mỗi lần vẽ/đo chữ
 static NSFont *gMonoFont = nil;
+static NSFont *gBoldUiFont = nil;   // cache: boldUiFont gọi mỗi drawRect title bar (NSFontManager đắt)
 
 + (void)setConfiguredFontName:(NSString *)name size:(CGFloat)size {
     gFontName = (name.length ? [name copy] : nil);
     gFontSize = (size > 0 ? size : 11);
-    gUiFont = nil; gMonoFont = nil;   // đổi cấu hình -> bỏ cache để dựng lại
+    gUiFont = nil; gMonoFont = nil; gBoldUiFont = nil;   // đổi cấu hình -> bỏ cache để dựng lại
+}
+
++ (NSParagraphStyle *)truncatingTailStyle {
+    static NSParagraphStyle *ps;
+    if (!ps) {
+        NSMutableParagraphStyle *m = [[NSMutableParagraphStyle alloc] init];
+        m.lineBreakMode = NSLineBreakByTruncatingTail;
+        ps = [m copy];
+    }
+    return ps;
 }
 
 + (NSFont *)uiFont {
@@ -54,7 +65,11 @@ static NSFont *gMonoFont = nil;
 }
 
 // Đậm ở ĐÚNG size cấu hình (gFontSize) — title bar & tiêu đề màn theo size người dùng đặt.
-+ (NSFont *)boldUiFont { return [self uiFontOfSize:gFontSize bold:YES]; }
+// Cache: title bar gọi mỗi drawRect; convertFont qua NSFontManager không nên chạy lại mỗi frame.
++ (NSFont *)boldUiFont {
+    if (!gBoldUiFont) gBoldUiFont = [self uiFontOfSize:gFontSize bold:YES];
+    return gBoldUiFont;
+}
 
 + (NSString *)configuredFontName { return gFontName; }   // truyền thẳng tên cấu hình (cho Scintilla)
 + (CGFloat)configuredFontSize { return gFontSize; }

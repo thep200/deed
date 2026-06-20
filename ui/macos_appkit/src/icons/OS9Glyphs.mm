@@ -62,7 +62,14 @@ NSImage *OS9SendImage(CGFloat size) {
 }
 
 NSImage *OS9FolderImage(CGFloat size) {
-    return [NSImage imageWithSize:NSMakeSize(size, size) flipped:NO
+    // Cache theo size: icon là HẰNG (vẽ giống hệt mỗi lần) nhưng title bar inactive gọi mỗi
+    // drawRect -> không dựng lại NSImage + rasterize mỗi lần (giống OS9SpinnerFrames).
+    static NSMutableDictionary<NSNumber *, NSImage *> *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache = [NSMutableDictionary dictionary]; });
+    NSImage *cached = cache[@(size)];
+    if (cached) return cached;
+    NSImage *img = [NSImage imageWithSize:NSMakeSize(size, size) flipped:NO
                    drawingHandler:^BOOL(NSRect r) {
         [[NSGraphicsContext currentContext] setShouldAntialias:NO];
         CGFloat s = size / 16.0;                 // metric thiết kế cho 16px
@@ -89,6 +96,8 @@ NSImage *OS9FolderImage(CGFloat size) {
         [line set]; p.lineWidth = 1.0; [p stroke];
         return YES;
     }];
+    cache[@(size)] = img;
+    return img;
 }
 
 NSArray<NSImage *> *OS9SpinnerFrames(CGFloat size, int frameCount) {

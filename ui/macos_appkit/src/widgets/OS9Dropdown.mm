@@ -103,6 +103,11 @@
     NSRectFill(_listRect);
     NSDictionary *norm = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor blackColor]};
     NSDictionary *hi   = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor whiteColor]};
+    // Biến thể cắt "…" dựng MỘT LẦN trước vòng lặp (paragraph style hằng dùng chung) — trước đây
+    // alloc NSMutableParagraphStyle + mutableCopy mỗi hàng.
+    NSParagraphStyle *trunc = [OS9Theme truncatingTailStyle];
+    NSDictionary *normTr = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor blackColor], NSParagraphStyleAttributeName : trunc};
+    NSDictionary *hiTr   = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor whiteColor], NSParagraphStyleAttributeName : trunc};
     for (NSInteger i = 0; i < (NSInteger)_items.count; i++) {
         NSRect row = NSMakeRect(_listRect.origin.x, _listRect.origin.y + 1 + i * _rowH, _listRect.size.width, _rowH);
         BOOL hot = (i == _hover);
@@ -111,10 +116,7 @@
         if (i == _selected)
             [@"✓" drawAtPoint:NSMakePoint(row.origin.x + 7, row.origin.y + (_rowH - 12) / 2) withAttributes:attrs];
         // Cắt "…" theo bề rộng hàng; tên đầy đủ xem ở tooltip.
-        NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
-        ps.lineBreakMode = NSLineBreakByTruncatingTail;
-        NSMutableDictionary *trAttrs = [attrs mutableCopy];
-        trAttrs[NSParagraphStyleAttributeName] = ps;
+        NSDictionary *trAttrs = hot ? hiTr : normTr;
         CGFloat textX = row.origin.x + 22;
         NSSize sz = [_items[i] sizeWithAttributes:attrs];
         NSRect textRect = NSMakeRect(textX, row.origin.y + (_rowH - sz.height) / 2,

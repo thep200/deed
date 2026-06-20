@@ -57,12 +57,10 @@ static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClo
     NSSize gs = [[self glyph] sizeWithAttributes:ga];
     [[self glyph] drawAtPoint:NSMakePoint(kToastPadL + (kToastIcon - gs.width) / 2,
                                           (body.size.height - gs.height) / 2) withAttributes:ga];
-    // text (cắt đuôi bằng … nếu dài quá)
-    NSMutableParagraphStyle *ps = [[NSMutableParagraphStyle alloc] init];
-    ps.lineBreakMode = NSLineBreakByTruncatingTail;
+    // text (cắt đuôi bằng … nếu dài quá) — paragraph style hằng dùng chung
     NSDictionary *ta = @{NSFontAttributeName : [OS9Toast textFont],
                          NSForegroundColorAttributeName : [NSColor blackColor],
-                         NSParagraphStyleAttributeName : ps};
+                         NSParagraphStyleAttributeName : [OS9Theme truncatingTailStyle]};
     CGFloat tx = kToastPadL + kToastIcon + kToastGapL;
     NSRect tr = NSMakeRect(tx, 0, NSMinX([self closeRect]) - tx - 4, body.size.height);
     NSSize ts = [(_message ?: @"") sizeWithAttributes:ta];
