@@ -1,5 +1,5 @@
 // sender_registry.hpp — map RequestType -> IRequestSender (README §8.1).
-// Engine nhìn request.type -> tra registry -> sender->send(...). Thêm protocol không đụng Engine.
+// Engine looks at request.type -> queries the registry -> sender->send(...). Adding a protocol does not touch Engine.
 #pragma once
 
 #include <map>

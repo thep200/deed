@@ -32,26 +32,26 @@
 
 - (void)drawRect:(NSRect)dirty {
     [OS9Theme drawButtonInRect:self.bounds pressed:_pressed isDefault:NO];
-    // tên dài -> cắt "…" (tên đầy đủ ở toolTip); paragraph style hằng dùng chung (không alloc mỗi vẽ)
+    // long names -> truncate with "…" (full name in toolTip); shared paragraph style (no per-draw alloc)
     NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont],
                             NSForegroundColorAttributeName : [OS9Theme buttonFGPressed:_pressed enabled:YES],
                             NSParagraphStyleAttributeName : [OS9Theme truncatingTailStyle]};
     NSString *t = self.selectedTitle;
     NSSize sz = [t sizeWithAttributes:attrs];
-    CGFloat tx = 7, tw = self.bounds.size.width - tx - 16;   // chừa chỗ mũi ▾ bên phải
+    CGFloat tx = 7, tw = self.bounds.size.width - tx - 16;   // leave room for ▾ arrow on the right
     [t drawInRect:NSMakeRect(tx, floor((self.bounds.size.height - sz.height) / 2), tw, sz.height)
         withAttributes:attrs];
-    [OS9Theme drawDropdownArrowInRect:self.bounds]; // ▾ + vạch ngăn theo dropdown.svg
+    [OS9Theme drawDropdownArrowInRect:self.bounds]; // ▾ + divider per dropdown.svg
 }
 
 - (void)mouseDown:(NSEvent *)e {
     _pressed = YES; [self setNeedsDisplay:YES]; [self displayIfNeeded];
     if (self.onClick) {
-        self.onClick();          // owner tự quyết (vd: nạp RPC qua mạng rồi openMenu)
+        self.onClick();          // owner decides (e.g. load RPC over network then openMenu)
     } else {
         [self openMenu];
     }
-    _pressed = NO; [self setNeedsDisplay:YES];   // overlay là modeless -> nhả nút ngay
+    _pressed = NO; [self setNeedsDisplay:YES];   // overlay is modeless -> release button immediately
 }
 
 - (void)openMenu {

@@ -1,5 +1,5 @@
-// core/i_request_sender.hpp — Trừu tượng hoá giao thức (README §8.1).
-// HTTP và gRPC dùng chung đường gửi; thêm protocol mới = sender mới, Engine không đụng.
+// core/i_request_sender.hpp — Protocol abstraction (README §8.1).
+// HTTP and gRPC share the send path; a new protocol = a new sender, Engine untouched.
 #pragma once
 
 #include <atomic>
@@ -10,7 +10,7 @@
 
 namespace core {
 
-// Token huỷ chia sẻ giữa Engine và sender. Sender poll isCancelled() trong vòng gửi.
+// Cancel token shared between Engine and sender. Sender polls isCancelled() in the send loop.
 class CancelToken {
 public:
     void cancel() { flag_.store(true, std::memory_order_relaxed); }
@@ -23,8 +23,8 @@ class IRequestSender {
 public:
     virtual ~IRequestSender() = default;
 
-    // Gửi request ĐÃ resolve. Gọi từ thread nền (Engine đã đẩy ra pool).
-    // Sender chịu trách nhiệm gọi đúng MỘT callback terminal trên delegate.
+    // Send a RESOLVED request. Called from a background thread (Engine already dispatched to a pool).
+    // Sender is responsible for calling exactly ONE terminal callback on the delegate.
     virtual void send(const ResolvedRequest& req,
                       RequestHandle handle,
                       IUiDelegate& delegate,

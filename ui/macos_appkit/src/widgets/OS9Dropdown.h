@@ -1,5 +1,5 @@
-// Dropdown tuỳ biến: danh sách item GÓC VUÔNG (không dùng NSMenu hệ thống), hiện ngay
-// dưới (hoặc trên nếu hết chỗ) anchor. onPick(index) khi chọn; tự đóng khi click ngoài/Esc.
+// Custom dropdown: SQUARE-CORNERED item list (no system NSMenu), shown just
+// below (or above if no room) the anchor. onPick(index) on select; auto-closes on outside click/Esc.
 #import <Cocoa/Cocoa.h>
 
 void OS9ShowDropdown(NSArray<NSString *> *items, NSInteger selected, NSView *anchor,

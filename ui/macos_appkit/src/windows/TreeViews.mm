@@ -22,7 +22,7 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     if (!n.isFolder) {
         it.grpc = (n.requestType == core::RequestType::Grpc);
         it.badge = [NSString stringWithFormat:@"%s %s", core::toString(n.requestType).c_str(), n.methodOrType.c_str()];
-        // HTTP -> tên method (GET/POST...); gRPC -> "gRPC".
+        // HTTP -> method name (GET/POST...); gRPC -> "gRPC".
         it.mark = it.grpc ? @"gRPC" : N(n.methodOrType);
     }
     return it;
@@ -34,10 +34,10 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     NSInteger row = [self rowAtPoint:p];
     return self.menuProvider ? self.menuProvider(row) : nil;
 }
-// Bỏ mũi tên fold (disclosure triangle) — folder luôn mở sẵn.
+// Drop the fold arrow (disclosure triangle) — we draw our own in the cell.
 - (NSRect)frameOfOutlineCellAtRow:(NSInteger)row { return NSZeroRect; }
-// Bỏ phần thụt mặc định dành cho tam giác disclosure (ta tự vẽ trong cell) -> nội dung sát
-// mép trái, GIỮ thụt theo cấp (indentationPerLevel) để con vẫn lùi vào dưới cha.
+// Drop the default indent reserved for the disclosure triangle (we draw it in the cell) -> content
+// hugs the left edge, but KEEP per-level indent (indentationPerLevel) so children stay under parent.
 - (NSRect)frameOfCellAtColumn:(NSInteger)column row:(NSInteger)row {
     NSRect f = [super frameOfCellAtColumn:column row:row];
     CGFloat want = self.indentationPerLevel * [self levelForRow:row];
@@ -47,14 +47,14 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
 }
 @end
 
-// --- Geometry hàng (khớp ảnh OS9 Platinum, SPEC §2) ---
-static const CGFloat kTreeLeftMargin = 5;   // lề trái cho tam giác disclosure (cách mép trong panel)
-static const CGFloat kTreeGutterW   = 19;   // ô tam giác disclosure (trước icon folder) = margin + tam giác
-static const CGFloat kTreeIconW     = 16;   // icon folder
-static const CGFloat kTreeIconGap   = 5;    // khoảng icon -> nhãn
-static const CGFloat kTreeFileTextPad = 5;  // request: text "method name" lề trái (khớp tam giác)
+// --- Row geometry (matches OS9 Platinum reference, SPEC §2) ---
+static const CGFloat kTreeLeftMargin = 5;   // left margin for disclosure triangle (from panel inner edge)
+static const CGFloat kTreeGutterW   = 19;   // disclosure-triangle cell (before folder icon) = margin + triangle
+static const CGFloat kTreeIconW     = 16;   // folder icon
+static const CGFloat kTreeIconGap   = 5;    // gap icon -> label
+static const CGFloat kTreeFileTextPad = 5;  // request: left padding of "method name" text (aligns with triangle)
 
-// Cắt nhãn cho vừa maxW + thêm "…" (drawAtPoint không tự truncate).
+// Trim a label to fit maxW + append "…" (drawAtPoint does not truncate).
 static NSString *TreeEllipsize(NSString *s, CGFloat maxW, NSDictionary *attrs) {
     if (maxW <= 0) return @"";
     if ([s sizeWithAttributes:attrs].width <= maxW) return s;
@@ -68,12 +68,12 @@ static NSString *TreeEllipsize(NSString *s, CGFloat maxW, NSDictionary *attrs) {
     return [[s substringToIndex:lo] stringByAppendingString:e];
 }
 
-// --- Pixel-art mũi tên disclosure (nguồn: assets/Position={Down,Right}…Purple.svg) ---
-// Mỗi pixel = nửa point (SVG 8x8pt, lưới 0.5) -> sắc nét 1:1 trên Retina. Đã đổi mặt
-// gradient tím -> xám (R==G của mọi màu tím nên lấy kênh R làm mức xám), viền #262626 giữ nguyên.
+// --- Pixel-art disclosure arrows (source: assets/Position={Down,Right}…Purple.svg) ---
+// Each pixel = half a point (SVG 8x8pt, 0.5 grid) -> crisp 1:1 on Retina. Converted the
+// purple gradient to gray (R==G in every purple, so use the R channel as gray level); #262626 border kept.
 typedef struct { unsigned char x, y, gray; float a; } TreePx;
 
-// ▽ trỏ xuống (folder đang mở) — 16x10 nửa-pt = 8x5 pt.
+// ▽ pointing down (folder open) — 16x10 half-pt = 8x5 pt.
 static const TreePx kTreeArrowDown[] = {
     {0,0,38,0.05f}, {1,0,38,0.20f}, {2,0,38,0.40f}, {3,0,38,0.40f}, {4,0,38,0.40f},
     {5,0,38,0.40f}, {6,0,38,0.40f}, {7,0,38,0.40f}, {8,0,38,0.40f}, {9,0,38,0.40f},
@@ -100,7 +100,7 @@ static const TreePx kTreeArrowDown[] = {
     {8,9,38,0.20f}, {9,9,38,0.05f},
 };
 
-// ▷ trỏ phải (folder đang đóng) — 10x16 nửa-pt = 5x8 pt.
+// ▷ pointing right (folder closed) — 10x16 half-pt = 5x8 pt.
 static const TreePx kTreeArrowRight[] = {
     {0,0,38,0.05f}, {1,0,38,0.20f}, {2,0,38,0.20f}, {3,0,38,0.05f}, {0,1,38,0.20f},
     {1,1,38,0.70f}, {2,1,38,0.70f}, {3,1,38,0.20f}, {0,2,38,0.40f}, {1,2,38,1.00f},
@@ -127,11 +127,11 @@ static const TreePx kTreeArrowRight[] = {
     {2,15,38,0.20f}, {3,15,38,0.05f},
 };
 
-// Kích thước 1 pixel art (point). 0.5 = đúng tỉ lệ SVG (8x8pt); tăng lên cho mũi tên to hơn.
-static const CGFloat kArrowPx = 0.625;   // ~+25% so với bản gốc
+// Size of one pixel-art unit (points). 0.5 = exact SVG scale (8x8pt); raise for a bigger arrow.
+static const CGFloat kArrowPx = 0.625;   // ~+25% vs original
 
-// Vẽ pixel-art tại góc trên-trái (ox,oy) trong toạ độ FLIPPED của cell (y hướng xuống,
-// trùng hệ toạ độ SVG). Blend SourceOver để giữ viền mờ (alpha < 1).
+// Draw pixel-art at top-left corner (ox,oy) in the cell's FLIPPED coords (y downward,
+// matching SVG coordinate system). SourceOver blend to keep the faint border (alpha < 1).
 static void DrawTreeArrow(const TreePx *px, size_t n, CGFloat ox, CGFloat oy) {
     const CGFloat s = kArrowPx;
     for (size_t i = 0; i < n; i++) {
@@ -142,45 +142,45 @@ static void DrawTreeArrow(const TreePx *px, size_t n, CGFloat ox, CGFloat oy) {
 }
 
 @implementation TreeCellView
-- (BOOL)isFlipped { return YES; }   // toạ độ từ trên xuống (y nhỏ = trên)
+- (BOOL)isFlipped { return YES; }   // top-down coords (small y = top)
 
 - (void)setIsExpanded:(BOOL)e { _isExpanded = e; [self setNeedsDisplay:YES]; }
 
-// Đường biên folder (tab trên-trái + thân) tại góc trên-trái (x,y), y hướng xuống.
+// Folder outline (top-left tab + body) at top-left corner (x,y), y downward.
 static NSBezierPath *TreeFolderPath(CGFloat x, CGFloat y) {
     const CGFloat bodyW = 13, bodyH = 10, tabW = 5, tabH = 2;
     NSBezierPath *p = [NSBezierPath bezierPath];
-    [p moveToPoint:NSMakePoint(x,             y)];               // tab trên-trái
-    [p lineToPoint:NSMakePoint(x + tabW,      y)];               // tab trên-phải
-    [p lineToPoint:NSMakePoint(x + tabW + 2,  y + tabH)];        // dốc xuống mép thân
-    [p lineToPoint:NSMakePoint(x + bodyW,     y + tabH)];        // mép trên thân (phải)
-    [p lineToPoint:NSMakePoint(x + bodyW,     y + tabH + bodyH)];// mép phải
-    [p lineToPoint:NSMakePoint(x,             y + tabH + bodyH)];// mép dưới
-    [p closePath];                                               // mép trái thẳng (x)
+    [p moveToPoint:NSMakePoint(x,             y)];               // tab top-left
+    [p lineToPoint:NSMakePoint(x + tabW,      y)];               // tab top-right
+    [p lineToPoint:NSMakePoint(x + tabW + 2,  y + tabH)];        // slope down to body edge
+    [p lineToPoint:NSMakePoint(x + bodyW,     y + tabH)];        // body top edge (right)
+    [p lineToPoint:NSMakePoint(x + bodyW,     y + tabH + bodyH)];// right edge
+    [p lineToPoint:NSMakePoint(x,             y + tabH + bodyH)];// bottom edge
+    [p closePath];                                               // straight left edge (x)
     return p;
 }
 
-// Icon folder 3D: mặt trước sáng nổi lên, mặt bên tối lệch xuống-phải (lộ 2 mép) + đổ bóng.
+// 3D folder icon: bright front face raised, dark side face offset down-right (shows 2 edges) + shadow.
 - (void)drawFolderIconInRect:(NSRect)r {
     CGFloat x = r.origin.x + 0.5, y = r.origin.y + 1.5;
-    NSColor *face = [NSColor colorWithCalibratedWhite:0.88 alpha:1.0];   // mặt trước (sáng)
-    NSColor *side = [NSColor colorWithCalibratedWhite:0.56 alpha:1.0];   // mặt bên/depth (tối)
+    NSColor *face = [NSColor colorWithCalibratedWhite:0.88 alpha:1.0];   // front face (bright)
+    NSColor *side = [NSColor colorWithCalibratedWhite:0.56 alpha:1.0];   // side/depth face (dark)
     NSColor *line = [OS9Theme frame];
-    const CGFloat d = 2.5;   // độ dày 3D (lệch chéo trái->phải, xuống dưới)
+    const CGFloat d = 2.5;   // 3D thickness (diagonal offset left->right, downward)
 
-    // 1) đổ bóng mờ (xa nhất, dưới-phải)
+    // 1) faint drop shadow (farthest, bottom-right)
     [[NSColor colorWithCalibratedWhite:0.40 alpha:0.30] set];
     [TreeFolderPath(x + d + 1.0, y + d + 1.0) fill];
 
-    // 2) mặt bên (tối) lệch xuống-phải -> lộ độ dày 3D ở mép phải + đáy
+    // 2) side face (dark) offset down-right -> reveals 3D thickness at right edge + bottom
     NSBezierPath *back = TreeFolderPath(x + d, y + d);
     [side set]; [back fill];
     [line set]; back.lineWidth = 1.0; [back stroke];
 
-    // 3) mặt trước (sáng) ở gốc -> nổi lên, thấy rõ 2 mép (mặt trước + mặt bên)
+    // 3) front face (bright) at origin -> raised, both edges visible (front + side face)
     NSBezierPath *front = TreeFolderPath(x, y);
     [face set]; [front fill];
-    [[NSColor colorWithCalibratedWhite:0.97 alpha:1.0] set];   // bevel sáng mép trên thân
+    [[NSColor colorWithCalibratedWhite:0.97 alpha:1.0] set];   // bright bevel on body top edge
     NSRectFill(NSMakeRect(x + 1, y + 3, 11, 1));
     [line set]; front.lineWidth = 1.0; [front stroke];
 }
@@ -192,24 +192,24 @@ static NSBezierPath *TreeFolderPath(CGFloat x, CGFloat y) {
 
     if (_isFolder) {
         [NSGraphicsContext saveGraphicsState];
-        [[NSGraphicsContext currentContext] setShouldAntialias:NO];   // nét bitmap sắc kiểu OS9
-        // Mũi tên disclosure pixel-art (xám) dựng lại từ assets/Position=*.svg.
-        const CGFloat arrowCenterX = kTreeLeftMargin + 4.0;   // tâm ngang vùng mũi tên
+        [[NSGraphicsContext currentContext] setShouldAntialias:NO];   // crisp OS9-style bitmap edges
+        // Pixel-art disclosure arrow (gray) rebuilt from assets/Position=*.svg.
+        const CGFloat arrowCenterX = kTreeLeftMargin + 4.0;   // horizontal center of arrow area
         if (_isExpanded) {
-            // ▽ trỏ xuống: lưới 16x10 pixel — căn giữa theo chiều dọc của hàng.
+            // ▽ pointing down: 16x10 pixel grid — vertically centered in the row.
             const CGFloat aw = 16 * kArrowPx, ah = 10 * kArrowPx;
             DrawTreeArrow(kTreeArrowDown, sizeof(kTreeArrowDown) / sizeof(TreePx),
                           arrowCenterX - aw / 2, cy - ah / 2);
         } else {
-            // ▷ trỏ phải: lưới 10x16 pixel — căn giữa theo chiều dọc của hàng.
+            // ▷ pointing right: 10x16 pixel grid — vertically centered in the row.
             const CGFloat aw = 10 * kArrowPx, ah = 16 * kArrowPx;
             DrawTreeArrow(kTreeArrowRight, sizeof(kTreeArrowRight) / sizeof(TreePx),
                           arrowCenterX - aw / 2, cy - ah / 2);
         }
-        // Icon folder OS9 tại gutter
+        // OS9 folder icon in the gutter
         [self drawFolderIconInRect:NSMakeRect(kTreeGutterW, cy - 8, kTreeIconW, 16)];
         [NSGraphicsContext restoreGraphicsState];
-        tx = kTreeGutterW + kTreeIconW + kTreeIconGap;   // nhãn folder sau icon
+        tx = kTreeGutterW + kTreeIconW + kTreeIconGap;   // folder label after icon
     }
 
     NSDictionary *attrs = @{ NSFontAttributeName : [OS9Theme uiFont],
@@ -217,22 +217,22 @@ static NSBezierPath *TreeFolderPath(CGFloat x, CGFloat y) {
     CGFloat ty = floor((h - [@"Mg" sizeWithAttributes:attrs].height) / 2);
 
     if (_isFolder) {
-        // Nhãn folder: ellipsize cuối + tooltip khi bị cắt.
+        // Folder label: trailing ellipsis + tooltip when truncated.
         CGFloat avail = self.bounds.size.width - tx - 4;
         NSString *full = _text ?: @"";
         NSString *show = TreeEllipsize(full, avail, attrs);
         self.toolTip = [show isEqualToString:full] ? nil : full;
         [show drawAtPoint:NSMakePoint(tx, ty) withAttributes:attrs];
     } else {
-        // Request: method CĂN PHẢI trong cột cố định -> ký tự cuối thẳng hàng (vd "GET"/"POST"
-        // thì 2 chữ T cùng mốc). Tên bắt đầu sau cột (mốc x cố định) -> tên cũng thẳng hàng.
+        // Request: method RIGHT-ALIGNED in a fixed column -> last chars align (e.g. "GET"/"POST"
+        // share the final T position). Name starts after the column (fixed x) -> names align too.
         CGFloat pad = kTreeFileTextPad;
         CGFloat methodColW = ceil([@"OPTIONS" sizeWithAttributes:attrs].width);
-        CGFloat methodRight = pad + methodColW;   // mép phải cột method (mọi method canh tới đây)
+        CGFloat methodRight = pad + methodColW;   // right edge of method column (all methods align here)
         NSString *mk = _mark ?: @"";
         CGFloat mkW = [mk sizeWithAttributes:attrs].width;
-        [mk drawAtPoint:NSMakePoint(methodRight - mkW, ty) withAttributes:attrs];   // canh phải
-        CGFloat nameX = methodRight + 8;          // khoảng cách cố định method -> tên
+        [mk drawAtPoint:NSMakePoint(methodRight - mkW, ty) withAttributes:attrs];   // right-align
+        CGFloat nameX = methodRight + 8;          // fixed gap method -> name
         CGFloat avail = self.bounds.size.width - nameX - 4;
         NSString *full = _text ?: @"";
         NSString *show = TreeEllipsize(full, avail, attrs);
@@ -243,20 +243,20 @@ static NSBezierPath *TreeFolderPath(CGFloat x, CGFloat y) {
 @end
 
 @implementation OS9RowView
-// Tô nền xám nhẹ khi row được chọn (đơn HOẶC nhiều); KHÔNG đảo chữ trắng.
+// Fill a light gray background when the row is selected (single OR multi); do NOT invert to white text.
 - (void)drawBackgroundInRect:(NSRect)dirtyRect {
     [[NSColor whiteColor] set];
     NSRectFill(self.bounds);
     if (self.selected) { [[OS9Theme rowSelectionGray] set]; NSRectFill(self.bounds); }
-    // Đường kẻ ngăn hàng 1px full-width (Platinum nhạt) — idempotent, antialias off.
+    // 1px full-width row separator (light Platinum) — idempotent, antialias off.
     [NSGraphicsContext saveGraphicsState];
     [[NSGraphicsContext currentContext] setShouldAntialias:NO];
     [[NSColor colorWithCalibratedWhite:0.84 alpha:1.0] set];
     NSRect b = self.bounds;
-    NSRectFill(NSMakeRect(0, 0, b.size.width, 1));   // đáy hàng (non-flipped: y=0 = đáy)
+    NSRectFill(NSMakeRect(0, 0, b.size.width, 1));   // row bottom (non-flipped: y=0 = bottom)
     [NSGraphicsContext restoreGraphicsState];
 }
-// Vô hiệu mọi hiệu ứng selection/emphasized mặc định (không vẽ xanh ở bất kỳ trạng thái nào).
+// Disable all default selection/emphasized effects (never draw blue in any state).
 - (void)drawSelectionInRect:(NSRect)dirtyRect {}
 - (BOOL)isEmphasized { return NO; }
 - (void)setEmphasized:(BOOL)emphasized { [super setEmphasized:NO]; }

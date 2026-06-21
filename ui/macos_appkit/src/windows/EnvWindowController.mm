@@ -12,8 +12,8 @@
 #include "core/persistence/stores.hpp"
 #include "core/types.hpp"
 
-// Key nội bộ của cột base. UI hiển thị "Local" (SPEC §T4 / Q2) nhưng key vẫn "Global"
-// để KHÔNG đổi ngữ nghĩa resolve {{var}} ở core.
+// Internal key of the base column. UI shows "Local" (SPEC §T4 / Q2) but the key stays
+// "Global" so {{var}} resolution semantics in core are unchanged.
 static NSString *const kBaseEnv = @"Global";
 static NSString *const kBaseLabel = @"Local";
 
@@ -22,14 +22,14 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 @implementation EnvWindowController {
-    core::Engine *_engine; // không sở hữu
+    core::Engine *_engine; // not owned
     OS9EnvGrid *_grid;
 
     NSMutableArray<NSString *> *_envNames;  // index 0 = kBaseEnv
     NSMutableArray<NSString *> *_aliases;
     NSMutableDictionary<NSString *, NSString *> *_values; // Key(env,alias) -> value
     NSMutableSet<NSString *> *_dirtyEnvs;
-    NSMutableSet<NSString *> *_removedEnvs; // env cần xoá file lúc save (rename/delete)
+    NSMutableSet<NSString *> *_removedEnvs; // envs whose file to delete on save (rename/delete)
 }
 
 - (instancetype)initWithEngine:(core::Engine *)engine {
@@ -103,7 +103,7 @@ static NSString *Key(NSString *env, NSString *alias) {
         e.name = env.UTF8String;
         for (NSString *alias in _aliases) {
             core::EnvKey k;
-            k.key = alias.uppercaseString.UTF8String;   // biến luôn lưu dạng UPPER
+            k.key = alias.uppercaseString.UTF8String;   // variables always stored UPPER
             k.enabled = true;
             k.value = (_values[Key(env, alias)] ?: @"").UTF8String;
             e.keys.push_back(k);
@@ -131,8 +131,8 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)envGrid:(OS9EnvGrid *)g renameAlias:(NSString *)oldAlias to:(NSString *)newAlias {
-    newAlias = [newAlias uppercaseString];               // biến luôn lưu dạng UPPER
-    if ([newAlias isEqualToString:oldAlias]) return;     // upper xong trùng tên cũ -> không đổi
+    newAlias = [newAlias uppercaseString];               // variables always stored UPPER
+    if ([newAlias isEqualToString:oldAlias]) return;     // uppercased matches old name -> no change
     if ([_aliases containsObject:newAlias]) {
         [self errorDialog:[NSString stringWithFormat:StrFmtAliasExists, newAlias]];
         return;
@@ -152,7 +152,7 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)envGrid:(OS9EnvGrid *)g renameEnv:(NSString *)oldEnv to:(NSString *)newEnv {
-    if ([oldEnv isEqualToString:kBaseEnv]) return;   // base không đổi tên
+    if ([oldEnv isEqualToString:kBaseEnv]) return;   // base cannot be renamed
     if ([_envNames containsObject:newEnv]) {
         [self errorDialog:[NSString stringWithFormat:StrFmtEnvExists, newEnv]];
         return;
@@ -167,15 +167,15 @@ static NSString *Key(NSString *env, NSString *alias) {
     NSInteger idx = [_envNames indexOfObject:oldEnv];
     if (idx != NSNotFound) _envNames[idx] = newEnv;
     [_dirtyEnvs addObject:newEnv];
-    [_removedEnvs addObject:oldEnv];   // xoá file cũ khi save
-    // Cập nhật activeEnv nếu trùng.
+    [_removedEnvs addObject:oldEnv];   // delete old file on save
+    // Update activeEnv if it matches.
     if (_engine && _engine->session().getActiveEnv() == std::string(oldEnv.UTF8String))
         _engine->session().setActiveEnv(newEnv.UTF8String);
     [self pushToGrid];
 }
 
 - (void)envGrid:(OS9EnvGrid *)g addEnvNamed:(NSString *)name {
-    if (!name.length || [_envNames containsObject:name]) return;   // grid đã validate; thủ thêm lần nữa
+    if (!name.length || [_envNames containsObject:name]) return;   // grid already validated; guard again
     [_envNames addObject:name];
     [_dirtyEnvs addObject:name];
     [_removedEnvs removeObject:name];
@@ -196,12 +196,12 @@ static NSString *Key(NSString *env, NSString *alias) {
     [_dirtyEnvs removeObject:env];
     [_removedEnvs addObject:env];
     if (_engine && _engine->session().getActiveEnv() == std::string(env.UTF8String))
-        _engine->session().setActiveEnv(kBaseEnv.UTF8String);   // reset về base
+        _engine->session().setActiveEnv(kBaseEnv.UTF8String);   // reset to base
     [self pushToGrid];
 }
 
 - (void)envGrid:(OS9EnvGrid *)g addAliasNamed:(NSString *)name {
-    name = [name uppercaseString];                       // biến luôn lưu dạng UPPER
+    name = [name uppercaseString];                       // variables always stored UPPER
     if (!name.length || [_aliases containsObject:name]) return;
     [_aliases addObject:name];
     for (NSString *env in _envNames) { _values[Key(env, name)] = @""; [_dirtyEnvs addObject:env]; }
@@ -229,7 +229,7 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)warnVarRename:(NSString *)oldAlias {
-    // SPEC §T3: đổi tên alias KHÔNG tự sửa {{old}} trong request đã lưu -> cảnh báo.
+    // SPEC §T3: renaming an alias does NOT auto-fix {{old}} in saved requests -> warn.
     NSWindow *win = _grid.window;
     if (!win) return;
     NSString *msg = [NSString stringWithFormat:StrFmtVarRenamed, oldAlias];

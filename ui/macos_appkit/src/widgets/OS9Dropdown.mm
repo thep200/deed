@@ -1,7 +1,7 @@
 #import "widgets/OS9Dropdown.h"
 #import "theme/OS9Theme.h"
 
-#pragma mark - OS9 custom dropdown (góc vuông, không dùng NSMenu hệ thống)
+#pragma mark - OS9 custom dropdown (square corners, no system NSMenu)
 
 @interface OS9DropdownOverlay : NSView {
     NSArray<NSString *> *_items;
@@ -16,7 +16,7 @@
 
 @implementation OS9DropdownOverlay
 
-- (BOOL)isFlipped { return YES; }            // khớp toạ độ contentView (top-down)
+- (BOOL)isFlipped { return YES; }            // match contentView coords (top-down)
 - (BOOL)acceptsFirstResponder { return YES; }
 
 - (void)layoutForItems:(NSArray<NSString *> *)items selected:(NSInteger)sel
@@ -26,18 +26,18 @@
     _hover = -1;
     _onPick = [onPick copy];
     _rowH = 22;
-    _prevResponder = anchor.window.firstResponder;   // trả focus khi đóng
+    _prevResponder = anchor.window.firstResponder;   // restore focus on close
 
     NSView *content = self.superview;
     NSRect a = [anchor convertRect:anchor.bounds toView:content];
     NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont]};
     CGFloat w = a.size.width;
     for (NSString *t in items) w = MAX(w, [t sizeWithAttributes:attrs].width + 34);
-    w = MIN(w, 360);                          // chặn trần -> tên dài bị cắt "…" (xem drawRect)
+    w = MIN(w, 360);                          // cap width -> long names get "…" truncated (see drawRect)
     CGFloat h = items.count * _rowH + 2;
 
-    CGFloat downY = NSMaxY(a) + 1;           // ngay dưới anchor
-    CGFloat upY   = a.origin.y - h - 1;       // ngay trên anchor
+    CGFloat downY = NSMaxY(a) + 1;           // just below anchor
+    CGFloat upY   = a.origin.y - h - 1;       // just above anchor
     CGFloat y = (downY + h <= content.bounds.size.height || upY < 0) ? downY : upY;
     CGFloat x = a.origin.x;
     if (x + w > content.bounds.size.width) x = content.bounds.size.width - w - 2;
@@ -53,7 +53,7 @@
                                          owner:self userInfo:nil];
     [self addTrackingArea:_ta];
 
-    // Tooltip mỗi hàng: hover hiện tên đầy đủ (kể cả khi đã cắt "…" trong drawRect).
+    // Per-row tooltip: hover shows full name (even when truncated to "…" in drawRect).
     [self removeAllToolTips];
     for (NSInteger i = 0; i < (NSInteger)_items.count; i++) {
         NSRect row = NSMakeRect(_listRect.origin.x, _listRect.origin.y + 1 + i * _rowH,
@@ -98,13 +98,13 @@
 }
 
 - (void)drawRect:(NSRect)dirty {
-    // Hộp danh sách: nền platinum + viền nét đen, GÓC VUÔNG.
+    // List box: platinum background + black outline, SQUARE CORNERS.
     [[OS9Theme buttonFace] set];
     NSRectFill(_listRect);
     NSDictionary *norm = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor blackColor]};
     NSDictionary *hi   = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor whiteColor]};
-    // Biến thể cắt "…" dựng MỘT LẦN trước vòng lặp (paragraph style hằng dùng chung) — trước đây
-    // alloc NSMutableParagraphStyle + mutableCopy mỗi hàng.
+    // Truncating "…" variant built ONCE before the loop (shared constant paragraph style) — previously
+    // alloc'd NSMutableParagraphStyle + mutableCopy per row.
     NSParagraphStyle *trunc = [OS9Theme truncatingTailStyle];
     NSDictionary *normTr = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor blackColor], NSParagraphStyleAttributeName : trunc};
     NSDictionary *hiTr   = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor whiteColor], NSParagraphStyleAttributeName : trunc};
@@ -115,7 +115,7 @@
         NSDictionary *attrs = hot ? hi : norm;
         if (i == _selected)
             [@"✓" drawAtPoint:NSMakePoint(row.origin.x + 7, row.origin.y + (_rowH - 12) / 2) withAttributes:attrs];
-        // Cắt "…" theo bề rộng hàng; tên đầy đủ xem ở tooltip.
+        // Truncate "…" to row width; full name shown in tooltip.
         NSDictionary *trAttrs = hot ? hiTr : normTr;
         CGFloat textX = row.origin.x + 22;
         NSSize sz = [_items[i] sizeWithAttributes:attrs];
@@ -123,8 +123,8 @@
                                      NSMaxX(_listRect) - textX - 6, sz.height);
         [_items[i] drawInRect:textRect withAttributes:trAttrs];
     }
-    // Viền hộp: NSFrameRect (no AA, crisp, vẽ trong _listRect) — vẽ lại khi hover không cộng
-    // dồn alpha ở mép như NSBezierPath stroke antialias (view không layer-backed).
+    // Box border: NSFrameRect (no AA, crisp, drawn within _listRect) — redrawing on hover doesn't
+    // accumulate edge alpha like NSBezierPath stroke antialias would (view not layer-backed).
     [[NSColor colorWithCalibratedWhite:0.15 alpha:1] set];
     NSFrameRect(_listRect);
 }

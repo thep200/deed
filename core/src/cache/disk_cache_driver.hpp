@@ -1,5 +1,5 @@
-// disk_cache_driver.hpp — L2 cache trên đĩa: .session/responses/<id>.json + _index.json.
-// Index nhẹ để hạch toán cap + LRU mà KHÔNG stat toàn bộ file. RESPONSE_CACHE.md §3/§5.
+// disk_cache_driver.hpp — L2 on-disk cache: .session/responses/<id>.json + _index.json.
+// Lightweight index to account cap + LRU WITHOUT statting every file. RESPONSE_CACHE.md §3/§5.
 #pragma once
 
 #include <list>
@@ -13,9 +13,9 @@ namespace core {
 
 class DiskCacheDriver : public ICacheDriver {
 public:
-    // dir = thư mục lưu response (vd <root>/.session/responses). Tạo nếu chưa có.
+    // dir = response storage dir (e.g. <root>/.session/responses). Created if absent.
     DiskCacheDriver(std::string dir, std::uint64_t capBytes);
-    ~DiskCacheDriver() override;    // flush index nếu còn dirty (atime cập nhật khi get)
+    ~DiskCacheDriver() override;    // flush index if still dirty (atime updated on get)
 
     std::optional<ResponseRecord> get(const std::string& id) override;
     bool put(const std::string& id, const ResponseRecord& r, std::uint64_t bytes) override;
@@ -29,14 +29,14 @@ private:
     struct IndexEntry {
         std::uint64_t bytes = 0;
         std::int64_t receivedAt = 0;
-        std::int64_t atime = 0;     // last-access tick (LRU; persist để khôi phục thứ tự sau restart)
-        std::list<std::string>::iterator lru;  // vị trí trong lru_ (front = mới dùng nhất)
+        std::int64_t atime = 0;     // last-access tick (LRU; persisted to restore order after restart)
+        std::list<std::string>::iterator lru;  // position in lru_ (front = most recently used)
     };
-    void loadIndex();               // đọc _index.json (gọi 1 lần lúc khởi tạo)
-    void persistIndex() const;      // ghi lại _index.json (atomic) + clear dirty_/unflushed_
-    void noteIndexDirty();          // đánh dấu bẩn + flush GỘP sau mỗi N thay đổi (tránh ghi mỗi put)
-    void touch(IndexEntry& e, const std::string& id);  // đưa id lên front LRU (O(1))
-    void evictToFit();              // pop back (oldest-atime) tới khi used_ <= cap_ (O(1)/victim)
+    void loadIndex();               // read _index.json (called once at init)
+    void persistIndex() const;      // rewrite _index.json (atomic) + clear dirty_/unflushed_
+    void noteIndexDirty();          // mark dirty + BATCHED flush every N changes (avoid writing on every put)
+    void touch(IndexEntry& e, const std::string& id);  // move id to LRU front (O(1))
+    void evictToFit();              // pop back (oldest-atime) until used_ <= cap_ (O(1)/victim)
     std::string fileFor(const std::string& id) const;  // <dir>/<safeId>.json
     static std::string safeId(const std::string& id);
 
@@ -44,11 +44,11 @@ private:
     std::string dir_;
     std::uint64_t cap_;
     std::uint64_t used_ = 0;
-    std::int64_t tick_ = 0;         // tăng mỗi truy cập -> thứ tự LRU
-    mutable bool dirty_ = false;    // atime đổi khi get (chỉ RAM) -> cần flush; tránh ghi mỗi đọc (§1.1)
-    mutable int unflushed_ = 0;     // số thay đổi index chưa ghi đĩa (put/remove gộp -> flush mỗi N)
+    std::int64_t tick_ = 0;         // incremented per access -> LRU order
+    mutable bool dirty_ = false;    // atime changes on get (RAM only) -> needs flush; avoid writing per read (§1.1)
+    mutable int unflushed_ = 0;     // index changes not yet written to disk (put/remove batched -> flush every N)
     std::map<std::string, IndexEntry> index_;
-    std::list<std::string> lru_;    // front = vừa dùng, back = lâu nhất (evict O(1) — §1.2)
+    std::list<std::string> lru_;    // front = recently used, back = oldest (evict O(1) — §1.2)
 };
 
 } // namespace core

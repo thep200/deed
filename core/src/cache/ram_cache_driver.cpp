@@ -32,32 +32,32 @@ std::optional<ResponseRecord> RamCacheDriver::get(const std::string& id) {
     return it->second.rec;
 }
 
-// Thân chung: R&& là forwarding ref -> `e.rec = std::forward<R>(r)` copy nếu lvalue (const&),
-// move nếu rvalue. Định nghĩa ở đây (cùng TU với 2 overload dưới) nên không cần instantiate tường minh.
+// Shared body: R&& is a forwarding ref -> `e.rec = std::forward<R>(r)` copies if lvalue (const&),
+// moves if rvalue. Defined here (same TU as the two overloads below) so no explicit instantiation needed.
 template <class R>
 bool RamCacheDriver::putImpl(const std::string& id, R&& r, std::uint64_t bytes) {
     std::lock_guard<std::mutex> lk(mu_);
-    // Record đơn lẻ lớn hơn cap -> không cache RAM (caller dùng disk). §5.
+    // Single record larger than cap -> don't cache in RAM (caller uses disk). §5.
     if (bytes > cap_) {
-        // nếu trùng id cũ đang giữ -> bỏ bản cũ để không lệch hạch toán.
+        // if an old entry with the same id is held -> drop it to keep accounting consistent.
         auto old = map_.find(id);
         if (old != map_.end()) { used_ -= old->second.bytes; lru_.erase(old->second.lru); map_.erase(old); }
         return false;
     }
     auto it = map_.find(id);
-    if (it != map_.end()) {          // ghi đè: trừ size cũ trước
+    if (it != map_.end()) {          // overwrite: subtract old size first
         used_ -= it->second.bytes;
         lru_.erase(it->second.lru);
         map_.erase(it);
     }
     lru_.push_front(id);
     Entry e;
-    e.rec = std::forward<R>(r);      // move nếu caller truyền rvalue -> không copy body lớn
+    e.rec = std::forward<R>(r);      // move if caller passes an rvalue -> avoid copying a large body
     e.bytes = bytes;
     e.lru = lru_.begin();
     used_ += bytes;
     map_.emplace(id, std::move(e));
-    evictToFit();                    // bound: evict LRU tới khi vừa cap
+    evictToFit();                    // bound: evict LRU until within cap
     return true;
 }
 
@@ -87,7 +87,7 @@ void RamCacheDriver::clear() {
 void RamCacheDriver::setCapBytes(std::uint64_t cap) {
     std::lock_guard<std::mutex> lk(mu_);
     cap_ = cap;
-    evictToFit();                    // cap nhỏ đi -> evict ngay
+    evictToFit();                    // smaller cap -> evict immediately
 }
 
 std::uint64_t RamCacheDriver::usedBytes() const {

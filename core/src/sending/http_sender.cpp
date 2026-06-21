@@ -12,14 +12,14 @@ namespace core {
 
 namespace {
 
-// Thay :id trong path bằng pathVariables (đã resolve {{var}}).
+// Replace :id in the path with pathVariables (already resolved {{var}}).
 std::string applyPathVariables(std::string url, const std::vector<KeyValue>& vars) {
     for (const auto& v : vars) {
         if (!v.enabled || v.key.empty()) continue;
         std::string token = ":" + v.key;
         size_t pos = 0;
         while ((pos = url.find(token, pos)) != std::string::npos) {
-            // chỉ thay khi sau token là '/', '?', hết chuỗi (tránh :id khớp :identifier)
+            // only replace when token is followed by '/', '?', or end of string (avoid :id matching :identifier)
             size_t end = pos + token.size();
             char nxt = end < url.size() ? url[end] : '/';
             if (nxt == '/' || nxt == '?' || nxt == '&' || end == url.size()) {
@@ -56,11 +56,11 @@ ErrorKind mapCprError(cpr::ErrorCode code) {
     }
 }
 
-// Parse Set-Cookie header tối giản (POC: hiển thị, không jar). README §12.4.
+// Minimal Set-Cookie header parse (POC: display only, no jar). README §12.4.
 Cookie parseSetCookie(const std::string& raw) {
     Cookie c;
     size_t i = 0;
-    // phần đầu "name=value"
+    // leading "name=value" part
     size_t semi = raw.find(';');
     std::string first = raw.substr(0, semi);
     size_t eq = first.find('=');
@@ -68,7 +68,7 @@ Cookie parseSetCookie(const std::string& raw) {
         c.name = first.substr(0, eq);
         c.value = first.substr(eq + 1);
     }
-    // các attribute
+    // the attributes
     while (semi != std::string::npos) {
         size_t next = raw.find(';', semi + 1);
         std::string attr = raw.substr(semi + 1, (next == std::string::npos ? raw.size() : next) - semi - 1);
@@ -99,12 +99,12 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
     cpr::Session session;
 
     std::string url = applyPathVariables(h.url, h.pathVariables);
-    // Người dùng có thể tự gõ query vào URL -> tách ra (decode) để gửi đúng, url còn raw.
+    // User may type a query into the URL -> split it out (decode) to send correctly, url stays raw.
     std::vector<KeyValue> urlQuery;
     urlutil::splitUrlQuery(url, urlQuery);
     session.SetUrl(cpr::Url{url});
 
-    // Query params (từ tab Query + query lẫn trong URL). cpr tự encode lại.
+    // Query params (from the Query tab + query embedded in the URL). cpr re-encodes them.
     cpr::Parameters params;
     for (const auto& p : h.params) {
         if (p.enabled && !p.key.empty()) params.Add({p.key, p.value});
@@ -114,16 +114,16 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
     }
     session.SetParameters(params);
 
-    // Headers (auth có thể ghi đè Authorization sau)
+    // Headers (auth may override Authorization later)
     cpr::Header header;
     for (const auto& hd : h.headers) {
         if (hd.enabled && !hd.key.empty()) header[hd.key] = hd.value;
     }
 
-    // --- Auth (ưu tiên hơn header Authorization thủ công — README §7.2) ---
+    // --- Auth (takes priority over a manual Authorization header — README §7.2) ---
     bool authActive = (h.auth.type != "none" && !h.auth.type.empty());
     if (authActive && hasAuthHeader(h.headers)) {
-        // Bỏ header Authorization thủ công, auth thắng.
+        // Drop the manual Authorization header, auth wins.
         for (auto it = header.begin(); it != header.end();) {
             std::string k = it->first;
             for (auto& c : k) c = static_cast<char>(::tolower(c));
@@ -146,7 +146,7 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
     }
     session.SetHeader(header);
 
-    // --- Body theo mode ---
+    // --- Body by mode ---
     const Body& b = h.body;
     if (b.mode == "json") {
         session.SetBody(cpr::Body{b.json});
@@ -179,16 +179,16 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
         session.SetMultipart(mp);
     } else if (b.mode == "binary") {
         std::string data;
-        // đọc file nhị phân
+        // read the binary file
         FILE* f = std::fopen(b.binaryFilePath.c_str(), "rb");
         if (!f) {
-            // Mở file thất bại (thiếu/không quyền): BÁO LỖI thay vì gửi body rỗng âm thầm
-            // -> user thấy "cannot open" thay vì 4xx/5xx khó hiểu từ server.
+            // Open failed (missing/no permission): REPORT AN ERROR instead of silently sending an empty body
+            // -> user sees "cannot open" instead of a confusing 4xx/5xx from the server.
             delegate.onError(handle, ApiError{ErrorKind::Unknown,
                 "cannot open binary file: " + b.binaryFilePath});
             return;
         }
-        // §2.2: cấp phát 1 lần theo kích thước file -> tránh realloc nhiều lần với file lớn.
+        // §2.2: allocate once based on file size -> avoid repeated reallocs for large files.
         if (std::fseek(f, 0, SEEK_END) == 0) {
             long sz = std::ftell(f);
             if (sz > 0) data.reserve(static_cast<size_t>(sz));
@@ -198,7 +198,7 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
         size_t n;
         bool aborted = false;
         while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
-            if (cancel && cancel->isCancelled()) { aborted = true; break; }  // huỷ giữa lúc đọc file lớn
+            if (cancel && cancel->isCancelled()) { aborted = true; break; }  // cancel mid-read of a large file
             data.append(buf, n);
         }
         std::fclose(f);
@@ -211,7 +211,7 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
     session.SetRedirect(cpr::Redirect{h.settings.followRedirects ? 50L : 0L});
     session.SetVerifySsl(cpr::VerifySsl{h.settings.verifyTls});
 
-    // Cancellation: cpr progress callback trả false -> huỷ.
+    // Cancellation: cpr progress callback returns false -> cancel.
     session.SetProgressCallback(cpr::ProgressCallback{
         [cancel](cpr::cpr_off_t, cpr::cpr_off_t, cpr::cpr_off_t, cpr::cpr_off_t, intptr_t) -> bool {
             return !(cancel && cancel->isCancelled());
@@ -219,7 +219,7 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
 
     auto start = std::chrono::steady_clock::now();
 
-    // Chọn verb
+    // Pick verb
     std::string method = h.method.empty() ? "GET" : h.method;
     cpr::Response r;
     if (method == "GET") r = session.Get();

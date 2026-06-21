@@ -1,5 +1,5 @@
-// core/stores.hpp — Các store của Core (README §6, §8.3, UI spec §2.3).
-// Tất cả I/O file nằm trong Core; UI chỉ gọi load/save. Atomic write cho mọi ghi.
+// core/stores.hpp — Core's stores (README §6, §8.3, UI spec §2.3).
+// All file I/O lives in Core; UI only calls load/save. Atomic write for every write.
 #pragma once
 
 #include <atomic>
@@ -15,8 +15,8 @@
 
 namespace core {
 
-// CollectionStore — load/save request, quét cây (README §6.2).
-// Đường thật trên đĩa = cây folder; tên file = slug; tên hiển thị ở field name.
+// CollectionStore — load/save requests, scan the tree (README §6.2).
+// Real on-disk path = folder tree; filename = slug; display name in the name field.
 class CollectionStore {
 public:
     explicit CollectionStore(std::string root);
@@ -24,65 +24,65 @@ public:
     const std::string& root() const { return root_; }
     void setRoot(std::string root);
 
-    // Quét MỘT cấp thư mục, CHỈ metadata (parse tên file, KHÔNG đọc nội dung).
-    // dirRelPath rỗng = cấp gốc. Folder con để trạng thái fold (children rỗng). §3.
+    // Scan ONE directory level, metadata ONLY (parse filename, do NOT read content).
+    // empty dirRelPath = root level. Subfolders kept folded (empty children). §3.
     std::vector<TreeNode> scanLevel(const std::string& dirRelPath) const;
 
-    // Quét đệ quy toàn bộ (metadata-only, content-free). Dùng cho test/tiện ích;
-    // UI dựng cây bằng scanLevel lazy thay vì hàm này.
+    // Scan the whole tree recursively (metadata-only, content-free). For test/utility;
+    // UI builds the tree via lazy scanLevel instead of this.
     TreeNode scanTree() const;
 
-    RequestModel loadRequest(const std::string& relPath) const;     // throws nếu lỗi
-    // Ghi atomic; nếu tên file lệch type/method/name -> đổi tên cho khớp (§4).
-    // Trả relPath SAU khi ghi (có thể đổi nếu rename). Atomic.
+    RequestModel loadRequest(const std::string& relPath) const;     // throws on error
+    // Atomic write; if filename mismatches type/method/name -> rename to match (§4).
+    // Returns relPath AFTER write (may change on rename). Atomic.
     std::string saveRequest(const std::string& relPath, const RequestModel&) const;
 
-    // CRUD — trả relPath của item vừa tạo/đổi.
+    // CRUD — return relPath of the created/changed item.
     std::string createRequest(const std::string& folderRel, RequestType, const std::string& name) const;
-    // Tạo request mới TỪ model có sẵn (vd import cURL/grpcurl). Gán id mới + name, ghi atomic.
+    // Create a new request FROM an existing model (e.g. cURL/grpcurl import). Assign new id + name, atomic write.
     std::string createRequestFromModel(const std::string& folderRel, RequestModel model,
                                        const std::string& name) const;
     std::string createFolder(const std::string& parentRel, const std::string& name) const;
     std::string rename(const std::string& relPath, const std::string& newName) const;
     std::string duplicate(const std::string& relPath) const;
     void remove(const std::string& relPath) const;
-    // Di chuyển request/folder vào folder đích (drag-drop). Trả relPath mới.
+    // Move a request/folder into the destination folder (drag-drop). Returns new relPath.
     std::string move(const std::string& relPath, const std::string& destFolderRel) const;
 
-    // Tìm relPath của request theo id ổn định (id ưu tiên đọc từ tên file). Rỗng nếu không thấy.
+    // Find a request's relPath by stable id (id preferably read from filename). Empty if not found.
     std::string findRelPathById(const std::string& id) const;
 
-    // Migrate 1 lần: thêm <id> vào ĐẦU tên file cho các file CŨ chưa có id (git mv).
-    // File đã có id trong tên -> bỏ qua KHÔNG đọc nội dung. Trả số file đã đổi tên. §2A.
+    // One-time migrate: prepend <id> to the filename for OLD files lacking an id (git mv).
+    // Files that already have an id -> skipped WITHOUT reading content. Returns count renamed. §2A.
     int migrateAddIdToFilenames() const;
 
-    // Đảm bảo .gitignore có entry cho .session/ và .secrets/ (app tự quản — README §6.3).
+    // Ensure .gitignore has entries for .session/ and .secrets/ (app-managed — README §6.3).
     void ensureGitignore() const;
 
 private:
     std::string root_;
 
-    // Index id->relPath dựng LƯỜI từ tên file (zero-read sau migrate) -> findRelPathById O(1)
-    // thay vì quét đệ quy CẢ cây mỗi lần gọi (resyncCurrentRelById chạy trước mỗi save/switch).
-    // Vô hiệu khi có mutation (create/rename/move/duplicate/remove/save/migrate/setRoot); lookup
-    // còn xác thực sự tồn tại của file -> tự dựng lại nếu lệch (an toàn trước thay đổi ngoài app).
+    // id->relPath index built LAZILY from filenames (zero-read after migrate) -> findRelPathById O(1)
+    // instead of scanning the WHOLE tree each call (resyncCurrentRelById runs before every save/switch).
+    // Invalidated on mutation (create/rename/move/duplicate/remove/save/migrate/setRoot); lookup
+    // also verifies the file still exists -> rebuilds itself if stale (safe against out-of-app changes).
     mutable std::mutex idMu_;
     mutable std::unordered_map<std::string, std::string> idIndex_;
     mutable bool idIndexBuilt_ = false;
-    void buildIdIndexLocked() const;     // dựng lại idIndex_ (gọi KHI ĐÃ giữ idMu_)
-    void invalidateIdIndex() const;      // đánh dấu cần dựng lại (sau mutation)
+    void buildIdIndexLocked() const;     // rebuild idIndex_ (call WHILE holding idMu_)
+    void invalidateIdIndex() const;      // mark for rebuild (after mutation)
 };
 
-// SessionStore — app-state (.session/session.json), KHÔNG version git.
-// Ghi có DEBOUNCE: nhiều thay đổi liên tiếp (vd click qua nhiều request) gộp thành 1 lần ghi đĩa
-// sau ~kDebounceMs, do 1 worker thread đảm nhiệm. flush()/destructor ghi nốt phần còn treo.
+// SessionStore — app-state (.session/session.json), NOT git-versioned.
+// Writes are DEBOUNCED: many consecutive changes (e.g. clicking through requests) coalesce into one disk write
+// after ~kDebounceMs, handled by one worker thread. flush()/destructor writes out any pending.
 class SessionStore {
 public:
     explicit SessionStore(std::string root);
-    ~SessionStore();                                 // flush phần treo + dừng worker
-    void setRoot(std::string root);                  // flush root cũ trước khi đổi
+    ~SessionStore();                                 // flush pending + stop worker
+    void setRoot(std::string root);                  // flush old root before switching
 
-    // Fail-safe: file thiếu/hỏng -> trả Session mặc định, không throw.
+    // Fail-safe: missing/corrupt file -> return default Session, no throw.
     Session load() const;
 
     std::string loadLastOpened() const;
@@ -90,49 +90,49 @@ public:
     std::string getActiveEnv() const;
     void setActiveEnv(const std::string& name);      // debounce
 
-    void flush();                                    // ghi NGAY nếu đang treo (quit/đổi collection)
+    void flush();                                    // write NOW if pending (quit/switch collection)
 
 private:
     Session current_;
     std::string root_;
 
-    // --- Debounce ghi đĩa ---
-    mutable std::mutex mu_;                           // bảo vệ current_/root_/cờ; worker + main truy cập
+    // --- Disk-write debounce ---
+    mutable std::mutex mu_;                           // guards current_/root_/flags; worker + main access it
     std::condition_variable cv_;
     std::thread worker_;
-    bool dirty_ = false;                              // có thay đổi chưa ghi
-    bool stop_ = false;                               // tín hiệu dừng worker (destructor)
-    void markDirtyLocked();                           // set dirty_ + đánh thức worker (giữ lock khi gọi)
-    void workerLoop();                                // chờ debounce rồi ghi snapshot
-    static void writeSnapshot(const std::string& root, const Session& s);  // ghi atomic (ngoài lock)
+    bool dirty_ = false;                              // has unwritten changes
+    bool stop_ = false;                               // worker stop signal (destructor)
+    void markDirtyLocked();                           // set dirty_ + wake worker (hold lock when calling)
+    void workerLoop();                                // wait for debounce then write snapshot
+    static void writeSnapshot(const std::string& root, const Session& s);  // atomic write (outside lock)
 };
 
-// EnvironmentStore — mỗi env một file trong environments/ (README §8.3).
-// Giá trị biến lưu plaintext trong chính file env (cơ chế secret đã gỡ — SPEC §T5).
+// EnvironmentStore — one file per env in environments/ (README §8.3).
+// Variable values stored plaintext in the env file itself (secret mechanism removed — SPEC §T5).
 class EnvironmentStore {
 public:
     explicit EnvironmentStore(std::string root);
     void setRoot(std::string root);
 
-    std::vector<std::string> list() const;          // tên env (không gồm "Global" ảo)
+    std::vector<std::string> list() const;          // env names (excluding the virtual "Global")
     Environment load(const std::string& name) const;
     void save(const Environment&);                   // atomic
     void remove(const std::string& name);
 
-    // Đổi tên env (rename file atomic). Trả false nếu rỗng/trùng tên env khác.
+    // Rename an env (atomic file rename). Returns false if empty/clashes with another env name.
     bool renameEnv(const std::string& oldName, const std::string& newName);
-    // Đổi key alias trên TẤT CẢ env cùng lúc (alias là khoá hàng dùng chung).
-    // Trả false nếu rỗng/trùng alias khác trên bất kỳ env nào.
+    // Rename a key alias across ALL envs at once (alias is the shared row key).
+    // Returns false if empty/clashes with another alias on any env.
     bool renameAlias(const std::string& oldAlias, const std::string& newAlias);
 
-    // Migration một lần (SPEC §T5): gộp value trong .secrets/secrets.json (định dạng
-    // cũ {env:{key:value}}) ngược vào file env như biến thường, rồi xoá .secrets/.
-    // No-op nếu .secrets/ không tồn tại (đã migrate hoặc chưa từng có secret).
+    // One-time migration (SPEC §T5): fold values from .secrets/secrets.json (old
+    // {env:{key:value}} format) back into the env file as normal vars, then delete .secrets/.
+    // No-op if .secrets/ doesn't exist (already migrated or never had secrets).
     void migrateLegacySecrets();
 
-    // Epoch tăng MỖI khi nội dung env đổi (save/remove/rename/renameAlias/migrate/setRoot).
-    // Engine dùng để cache merged-vars: cache hit khi (activeEnv, epoch) không đổi -> không đọc
-    // lại đĩa mỗi lần send/resolve; mọi sửa env bump epoch -> cache tự vô hiệu (không bị vars cũ).
+    // Epoch bumps EACH time env content changes (save/remove/rename/renameAlias/migrate/setRoot).
+    // Engine uses it to cache merged-vars: cache hit when (activeEnv, epoch) unchanged -> avoid re-reading
+    // disk on every send/resolve; any env edit bumps epoch -> cache self-invalidates (no stale vars).
     std::uint64_t epoch() const { return epoch_.load(std::memory_order_relaxed); }
 
 private:
@@ -140,15 +140,15 @@ private:
     std::atomic<std::uint64_t> epoch_{0};
 };
 
-// AppConfigStore — app-global ở OS app-support, NGOÀI collection (README §12.1).
+// AppConfigStore — app-global in OS app-support, OUTSIDE the collection (README §12.1).
 class AppConfigStore {
 public:
     AppConfigStore();
     explicit AppConfigStore(std::string path); // override (test)
-    // Giá trị mặc định (từ .env, UI nạp) dùng khi config.json thiếu/khuyết key.
+    // Default values (from .env, loaded by UI) used when config.json misses/omits a key.
     void setDefaults(const AppConfig& d) { defaults_ = d; }
     const AppConfig& defaults() const { return defaults_; }
-    AppConfig load() const;                     // thiếu key/file -> rơi về defaults_
+    AppConfig load() const;                     // missing key/file -> fall back to defaults_
     void save(const AppConfig&) const;          // atomic
     const std::string& path() const { return path_; }
 private:

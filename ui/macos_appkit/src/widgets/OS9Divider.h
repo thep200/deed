@@ -1,4 +1,4 @@
-// Thanh kéo chia pane (dọc): kéo ngang -> báo dx (điểm ảnh) cho handler.
+// Vertical pane splitter handle: horizontal drag -> reports dx (pixels) to handler.
 #import <Cocoa/Cocoa.h>
 
 @interface OS9Divider : NSView

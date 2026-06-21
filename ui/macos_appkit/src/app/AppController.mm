@@ -8,7 +8,7 @@
 @implementation AppController
 #if DEED_DEBUG_TOOLS
 {
-    StressRunner *_stressRunner;   // giữ sống suốt vòng lặp stress
+    StressRunner *_stressRunner;   // keep alive through the stress loop
 }
 #endif
 
@@ -16,12 +16,12 @@
     self.mainWC = [MainWindowController new];
     [self.mainWC showWindow];
 
-    // Dev/CI: APICLIENT_OPEN=<path> -> mở sẵn collection lúc khởi động (bỏ qua file picker).
+    // Dev/CI: APICLIENT_OPEN=<path> -> open a collection at launch (skip the file picker).
     const char *autoOpen = getenv("APICLIENT_OPEN");
     if (autoOpen && *autoOpen) {
         [self.mainWC openCollectionRoot:[NSString stringWithUTF8String:autoOpen]];
     }
-    // CI smoke: APICLIENT_SEND=1 -> tự bấm Send sau khi nạp (kiểm full luồng UI→Core→UI).
+    // CI smoke: APICLIENT_SEND=1 -> auto-tap Send after load (exercise the full UI→Core→UI flow).
     if (getenv("APICLIENT_SEND")) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
@@ -36,7 +36,7 @@
     }
 
 #if DEED_DEBUG_TOOLS
-    // Stress runner (STRESS_TEST.md §5) — chỉ khi DEED_STRESS=1 và build có DEED_DEBUG_TOOLS.
+    // Stress runner (STRESS_TEST.md §5) — only when DEED_STRESS=1 and built with DEED_DEBUG_TOOLS.
     if ([StressRunner enabledFromEnv]) {
         _stressRunner = [[StressRunner alloc] initWithController:self.mainWC];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),

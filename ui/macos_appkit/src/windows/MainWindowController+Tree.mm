@@ -11,8 +11,8 @@
     if ([p runModal] == NSModalResponseOK) [self openCollectionRoot:p.URL.path];
 }
 
-// Giá trị mặc định app-config đọc từ .env (DeedConfig). Dùng khi config.json thiếu key,
-// để người dùng chỉnh default qua .env mà không cần sửa code.
+// App-config defaults read from .env (DeedConfig). Used when config.json lacks a key,
+// so users can tweak defaults via .env without editing code.
 - (core::AppConfig)appDefaultsFromEnv {
     DeedConfig *dc = [DeedConfig shared];
     core::AppConfig d;
@@ -27,27 +27,27 @@
 
 - (void)openCollectionRoot:(NSString *)path {
     [self autosaveCurrent];
-    [_expandedFolders removeAllObjects];   // collection mới: reset trạng thái fold (mặc định fold)
+    [_expandedFolders removeAllObjects];   // new collection: reset fold state (folded by default)
     _root = path.UTF8String;
     core::EngineConfig cfg; cfg.collectionRoot = _root;
-    // Trần/sàn cache đọc từ .env (DeedConfig) -> truyền vào Core (Core không tự đọc .env).
+    // Cache ceiling/floor read from .env (DeedConfig) -> passed into Core (Core doesn't read .env).
     DeedConfig *dc = [DeedConfig shared];
     cfg.cacheLimits.ramMaxMb = (int)[dc intFor:@"RAM_CACHE_SIZE_MAX" def:0];
     cfg.cacheLimits.ramMinMb = (int)[dc intFor:@"RAM_CACHE_SIZE_MIN" def:0];
     cfg.cacheLimits.diskMaxMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MAX" def:0];
     cfg.cacheLimits.diskMinMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MIN" def:0];
     cfg.cacheLimits.thresholdKb = (int)[dc intFor:@"RAM_CACHE_THRESHOLD_KB" def:0];
-    cfg.appDefaults = [self appDefaultsFromEnv];   // giá trị mặc định app-config từ .env
+    cfg.appDefaults = [self appDefaultsFromEnv];   // app-config defaults from .env
     _engine = std::make_unique<core::Engine>(cfg);
     _bridge = std::make_unique<UiDelegateBridge>(self);
     _envVC = [[EnvWindowController alloc] initWithEngine:_engine.get()];
-    // Ghi nhớ thư mục này vào app-support để lần sau mở lại đúng nó.
+    // Remember this folder in app-support so it reopens next time.
     try { core::AppConfig ac = _engine->appConfig().load(); ac.lastCollectionRoot = _root;
           _engine->appConfig().save(ac); } catch (...) {}
     _openButton.title = [self abbreviatePath:path];
     _openButton.toolTip = path;
     [self setHasRequest:NO];
-    // Migrate 1 lần: file cũ -> thêm id vào tên (chỉ đụng file thiếu id). Trước khi dựng cây.
+    // One-time migrate: old files -> add id to filename (only touches files missing id). Before building tree.
     try { _engine->collection().migrateAddIdToFilenames(); } catch (...) {}
     [self reloadTree];
     [self refreshEnvButton];
@@ -62,17 +62,17 @@
     } catch (...) {}
 }
 
-// Đồng bộ _currentRel theo id ổn định trước khi ghi: sau rename/move, đường dẫn cũ đã đổi
-// -> tránh save ghi vào path cũ tạo file "ma". Trả NO nếu request đang mở đã bị xoá.
+// Resync _currentRel by stable id before writing: after rename/move the old path has changed
+// -> avoid save writing to the old path and creating a "ghost" file. Returns NO if the open request was deleted.
 - (BOOL)resyncCurrentRelById {
     if (_currentId.empty() || !_engine) return !_currentRel.empty();
     std::string rel = _engine->collection().findRelPathById(_currentId);
-    if (rel.empty()) return NO;          // không còn trên đĩa (đã xoá) -> đừng tái tạo
+    if (rel.empty()) return NO;          // no longer on disk (deleted) -> don't recreate
     _currentRel = rel;
     return YES;
 }
 
-// Nạp con của 1 folder theo yêu cầu (1 lần readdir cấp đó — §3). Không đệ quy.
+// Load a folder's children on demand (one readdir of that level — §3). No recursion.
 - (void)loadChildrenOf:(TreeItem *)folder {
     if (!folder || folder.childrenLoaded || !_engine) return;
     [folder.children removeAllObjects];
@@ -84,8 +84,8 @@
 }
 
 - (void)reloadTree {
-    // T6: reloadData reset selection -> highlight folder/request đang chọn biến mất khi Cmd+S.
-    // Lưu relPath đang chọn TRƯỚC reload, khôi phục theo relPath SAU reload (index có thể đổi).
+    // T6: reloadData resets selection -> the selected folder/request highlight vanishes on Cmd+S.
+    // Save selected relPath BEFORE reload, restore by relPath AFTER reload (index may change).
     NSString *selRel = nil;
     NSInteger selRow = _tree.selectedRow;
     if (selRow >= 0) {
@@ -95,17 +95,17 @@
 
     [_roots removeAllObjects];
     if (_engine) {
-        try {                               // CHỈ quét cấp gốc; folder con fold mặc định (§3)
+        try {                               // scan ROOT level only; child folders folded by default (§3)
             for (const auto &c : _engine->collection().scanLevel(""))
                 [_roots addObject:TreeItemFromNode(c)];
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
     }
     [_tree reloadData];
-    [self restoreExpansion:_roots];         // giữ lại các folder user đang mở qua reload
+    [self restoreExpansion:_roots];         // keep the folders the user had open across reload
     if (selRel.length) [self reselectTreeByRel:selRel];
 }
 
-// Chọn lại node (folder hoặc request) theo relPath sau reload, KHÔNG kích hoạt auto-load.
+// Re-select a node (folder or request) by relPath after reload, WITHOUT triggering auto-load.
 - (void)reselectTreeByRel:(NSString *)rel {
     TreeItem *t = [self loadedItemForRel:rel inItems:_roots];
     if (!t) return;
@@ -116,7 +116,7 @@
     _revealingSelection = NO;
 }
 
-// Tìm TreeItem (folder hoặc request) theo relPath trong các item ĐÃ NẠP (đệ quy). nil nếu không thấy.
+// Find a TreeItem (folder or request) by relPath among LOADED items (recursive). nil if not found.
 - (TreeItem *)loadedItemForRel:(NSString *)rel inItems:(NSArray<TreeItem *> *)items {
     for (TreeItem *t in items) {
         if ([t.relPath isEqualToString:rel]) return t;
@@ -128,18 +128,18 @@
     return nil;
 }
 
-// Mở lại các folder đang trong _expandedFolders (lazy: expandItem kích hoạt nạp con).
+// Reopen folders present in _expandedFolders (lazy: expandItem triggers loading children).
 - (void)restoreExpansion:(NSArray<TreeItem *> *)items {
     for (TreeItem *t in items) {
         if (!t.isFolder) continue;
         if ([_expandedFolders containsObject:t.relPath]) {
-            [_tree expandItem:t];           // -> numberOfChildren nạp con nếu cần
-            [self restoreExpansion:t.children];  // đệ quy vào con vừa nạp
+            [_tree expandItem:t];           // -> numberOfChildren loads children if needed
+            [self restoreExpansion:t.children];  // recurse into the just-loaded children
         }
     }
 }
 
-// Tìm TreeItem folder theo relPath TRONG SỐ item ĐÃ NẠP (không đọc đĩa). nil nếu chưa nạp/đóng.
+// Find a folder TreeItem by relPath AMONG LOADED items (no disk read). nil if not loaded/closed.
 - (TreeItem *)loadedFolderItemForRel:(NSString *)rel {
     if (rel.length == 0) return nil;
     NSMutableArray<TreeItem *> *stack = [_roots mutableCopy];
@@ -152,8 +152,8 @@
     return nil;
 }
 
-// Quét lại 1 cấp (rel; "" = gốc) rồi MERGE vào `items` tại chỗ: giữ lại TreeItem cũ khớp theo
-// relPath (bảo toàn con đã nạp + trạng thái mở của nhánh đó), chỉ tạo mới cho entry mới.
+// Rescan one level (rel; "" = root) then MERGE into `items` in place: keep old TreeItems matching by
+// relPath (preserving loaded children + that branch's open state), create new only for new entries.
 - (void)mergeScanLevel:(const std::string &)rel into:(NSMutableArray<TreeItem *> *)items {
     if (!_engine) return;
     std::vector<core::TreeNode> nodes;
@@ -166,7 +166,7 @@
         TreeItem *fresh = TreeItemFromNode(n);
         TreeItem *existing = byRel[fresh.relPath];
         if (existing && existing.isFolder == fresh.isFolder) {
-            // Cập nhật metadata leaf (tên/badge có thể đổi) nhưng GIỮ children + childrenLoaded.
+            // Update leaf metadata (name/badge may change) but KEEP children + childrenLoaded.
             existing.name = fresh.name;
             existing.requestId = fresh.requestId;
             existing.badge = fresh.badge;
@@ -180,24 +180,24 @@
     [items setArray:merged];
 }
 
-// Cập nhật tăng dần cho 1 cấp bị thay đổi (§T1) — KHÔNG đập bỏ toàn cây.
+// Incremental update for one changed level (§T1) — does NOT tear down the whole tree.
 - (void)refreshTreeLevel:(NSString *)parentRel {
     if (!_engine) return;
-    if (parentRel.length == 0) {                 // mutation ở GỐC
+    if (parentRel.length == 0) {                 // mutation at ROOT
         [self mergeScanLevel:"" into:_roots];
         [_tree reloadData];
-        [self restoreExpansion:_roots];          // expandItem -> KHÔNG re-scan (TreeItem giữ childrenLoaded)
+        [self restoreExpansion:_roots];          // expandItem -> NO re-scan (TreeItem keeps childrenLoaded)
         return;
     }
     TreeItem *f = [self loadedFolderItemForRel:parentRel];
-    if (!f) {                                    // folder cha chưa nạp (đang đóng) -> lazy sẽ nạp khi mở
-        return;                                  // không cần làm gì: lần expand sau scanLevel mới
+    if (!f) {                                    // parent folder not loaded (closed) -> lazy load on open
+        return;                                  // nothing to do: next expand will scanLevel
     }
     if (f.childrenLoaded) [self mergeScanLevel:f.relPath.UTF8String into:f.children];
-    [_tree reloadItem:f reloadChildren:YES];     // chỉ re-query CON của f, nhánh khác nguyên vẹn
+    [_tree reloadItem:f reloadChildren:YES];     // re-query only f's CHILDREN, other branches intact
 }
 
-// Đổi prefix relPath cũ->mới trong _expandedFolders (rename/move folder) — giữ trạng thái mở (§T3).
+// Remap old->new relPath prefix in _expandedFolders (folder rename/move) — keep open state (§T3).
 - (void)remapExpandedFoldersFrom:(NSString *)oldRel to:(NSString *)newRel {
     if (oldRel.length == 0) return;
     NSMutableSet<NSString *> *updated = [NSMutableSet set];
@@ -209,7 +209,7 @@
     }
     [_expandedFolders setSet:updated];
 }
-// Click vào folder -> fold/unfold.
+// Click on a folder -> fold/unfold.
 - (void)treeClicked:(id)sender {
     NSInteger row = _tree.clickedRow;
     if (row < 0) return;
@@ -226,7 +226,7 @@
     [self promptRenameItem:[_tree itemAtRow:row]];
 }
 
-// Rename qua dialog Platinum (CUSTOM_DIALOG §6.1): prompt + validate, rồi đồng bộ tên file (LAZY_TREE §4).
+// Rename via Platinum dialog (CUSTOM_DIALOG §6.1): prompt + validate, then sync the filename (LAZY_TREE §4).
 - (void)promptRenameItem:(TreeItem *)t {
     if (!t || t.relPath.length == 0 || !_engine) return;
     NSString *newName = [OS9Dialog promptWithTitle:StrRename
@@ -241,21 +241,21 @@
         return nil;
     }
                                             parent:_window];
-    if (!newName || [newName isEqualToString:t.name]) return;   // cancel hoặc không đổi
+    if (!newName || [newName isEqualToString:t.name]) return;   // cancelled or unchanged
     [self autosaveCurrent];
     BOOL wasCurrent = (!_currentId.empty() && t.requestId.length && S(t.requestId) == _currentId);
     NSString *oldRel = t.relPath;
     NSString *parentRel = [oldRel stringByDeletingLastPathComponent];
     try {
         std::string newRel = _engine->collection().rename(oldRel.UTF8String, newName.UTF8String);
-        if (t.isFolder) [self remapExpandedFoldersFrom:oldRel to:N(newRel)];  // §T3: giữ trạng thái mở
+        if (t.isFolder) [self remapExpandedFoldersFrom:oldRel to:N(newRel)];  // §T3: keep open state
         if (wasCurrent) {
-            // Đồng bộ tên vào model đang mở: nếu không, Save sau đó ghi tên CŨ -> rollback tên file.
+            // Sync the name into the open model: otherwise a later Save writes the OLD name -> filename rollback.
             _model.name = newName.UTF8String;
             _currentRel = newRel;
             [self updateTitle];
         }
-        [self refreshTreeLevel:parentRel];   // §T1: chỉ quét lại cấp chứa item, không re-scan toàn cây
+        [self refreshTreeLevel:parentRel];   // §T1: rescan only the level holding the item, not the whole tree
         if (wasCurrent) [self revealAndSelectRequestById:N(_currentId) relPath:N(_currentRel)];
         [self toastOk:StrToastRenamed];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
@@ -264,19 +264,19 @@
 - (void)outlineViewItemDidExpand:(NSNotification *)n {
     TreeItem *t = n.userInfo[@"NSObject"];
     if (t.relPath) [_expandedFolders addObject:t.relPath];
-    [self refreshDisclosureForItem:t expanded:YES];   // lật tam giác ▷ -> ▽
+    [self refreshDisclosureForItem:t expanded:YES];   // flip triangle ▷ -> ▽
 }
 - (void)outlineViewItemDidCollapse:(NSNotification *)n {
     TreeItem *t = n.userInfo[@"NSObject"];
     if (t.relPath) [_expandedFolders removeObject:t.relPath];
-    [self refreshDisclosureForItem:t expanded:NO];     // lật tam giác ▽ -> ▷
+    [self refreshDisclosureForItem:t expanded:NO];     // flip triangle ▽ -> ▷
 }
 
 - (NSInteger)outlineView:(NSOutlineView *)ov numberOfChildrenOfItem:(id)item {
     if (item == nil) return _roots.count;
     TreeItem *t = item;
     if (!t.isFolder) return 0;
-    if (!t.childrenLoaded) [self loadChildrenOf:t];   // lazy: chỉ nạp khi cần đếm/hiển thị
+    if (!t.childrenLoaded) [self loadChildrenOf:t];   // lazy: load only when counting/displaying needs it
     return t.children.count;
 }
 - (id)outlineView:(NSOutlineView *)ov child:(NSInteger)idx ofItem:(id)item {
@@ -285,9 +285,9 @@
     if (!t.childrenLoaded) [self loadChildrenOf:t];
     return t.children[idx];
 }
-// Folder LUÔN expandable (rẻ, không đọc đĩa); request: không.
+// Folders are ALWAYS expandable (cheap, no disk read); requests are not.
 - (BOOL)outlineView:(NSOutlineView *)ov isItemExpandable:(id)item { return ((TreeItem *)item).isFolder; }
-// VIỆC 3: row view tự vẽ nền xám khi selected (ảo hoá/tái dùng của NSOutlineView).
+// TASK 3: row view self-draws gray background when selected (NSOutlineView virtualization/reuse).
 - (NSTableRowView *)outlineView:(NSOutlineView *)ov rowViewForItem:(id)item {
     OS9RowView *rv = [ov makeViewWithIdentifier:@"os9row" owner:self];
     if (!rv) { rv = [[OS9RowView alloc] initWithFrame:NSZeroRect]; rv.identifier = @"os9row"; }
@@ -302,14 +302,14 @@
         cell.translatesAutoresizingMaskIntoConstraints = YES;
     }
     cell.isFolder = t.isFolder;
-    cell.isExpanded = t.isFolder && [ov isItemExpanded:item];   // tam giác ▽/▷
-    // Request: method ở cột riêng (mark) + tên -> tên thẳng hàng dù method dài/ngắn khác nhau. KHÔNG icon.
+    cell.isExpanded = t.isFolder && [ov isItemExpanded:item];   // ▽/▷ triangle
+    // Request: method in its own column (mark) + name -> names align even with different method lengths. NO icon.
     cell.mark = t.isFolder ? nil : (t.mark ?: @"");
     cell.text = t.name;
     [cell setNeedsDisplay:YES];
     return cell;
 }
-// Lật tam giác disclosure khi folder mở/đóng (mọi đường: click, double-click, phím, restore).
+// Flip the disclosure triangle when a folder opens/closes (all paths: click, double-click, key, restore).
 - (void)refreshDisclosureForItem:(id)item expanded:(BOOL)expanded {
     if (![item isKindOfClass:[TreeItem class]]) return;
     NSInteger row = [_tree rowForItem:item];
@@ -318,8 +318,8 @@
     if ([cell isKindOfClass:[TreeCellView class]]) ((TreeCellView *)cell).isExpanded = expanded;
 }
 - (void)outlineViewSelectionDidChange:(NSNotification *)note {
-    if (_revealingSelection) return;                 // chọn do reveal -> KHÔNG nạp lại (tránh đệ quy)
-    if (_tree.selectedRowIndexes.count != 1) return; // multi-select -> không auto-load
+    if (_revealingSelection) return;                 // selection from reveal -> do NOT reload (avoid recursion)
+    if (_tree.selectedRowIndexes.count != 1) return; // multi-select -> no auto-load
     NSInteger row = _tree.selectedRow;
     if (row < 0) return;
     TreeItem *t = [_tree itemAtRow:row];
@@ -327,8 +327,8 @@
     [self loadRequestAtRel:t.relPath];
 }
 
-// VIỆC 2B: mở/cuộn tới + chọn request đang hiển thị — CHỈ mở nhánh tổ tiên (O(depth), không scan
-// toàn cây, không đọc nội dung; dùng id từ tên file để chống trùng tên).
+// TASK 2B: open/scroll to + select the shown request — open ONLY ancestor branches (O(depth), no
+// full-tree scan, no content read; uses id from filename to avoid name collisions).
 - (void)revealAndSelectRequestById:(NSString *)reqId relPath:(NSString *)relPath {
     if (relPath.length == 0 || !_tree) return;
     NSArray<NSString *> *parts = [relPath componentsSeparatedByString:@"/"];
@@ -339,18 +339,18 @@
         accum = accum.length ? [accum stringByAppendingFormat:@"/%@", parts[i]] : parts[i];
         BOOL isLast = (i + 1 == parts.count);
         TreeItem *match = nil;
-        if (isLast) {                                // lá: ưu tiên khớp id EXACT, fallback relPath
+        if (isLast) {                                // leaf: prefer EXACT id match, fall back to relPath
             for (TreeItem *t in level)
                 if (!t.isFolder && reqId.length && [t.requestId isEqualToString:reqId]) { match = t; break; }
             if (!match)
                 for (TreeItem *t in level)
                     if (!t.isFolder && [t.relPath isEqualToString:accum]) { match = t; break; }
             target = match;
-        } else {                                     // folder tổ tiên: tìm theo relPath, unfold lazy
+        } else {                                     // ancestor folder: find by relPath, unfold lazily
             for (TreeItem *t in level)
                 if (t.isFolder && [t.relPath isEqualToString:accum]) { match = t; break; }
-            if (!match) return;                      // nhánh không tồn tại
-            if (!match.childrenLoaded) [self loadChildrenOf:match];  // CHỈ scan folder này
+            if (!match) return;                      // branch does not exist
+            if (!match.childrenLoaded) [self loadChildrenOf:match];  // scan ONLY this folder
             [_tree expandItem:match];
             [_expandedFolders addObject:match.relPath];
             level = match.children;
@@ -360,13 +360,13 @@
     if (!target) return;
     NSInteger row = [_tree rowForItem:target];
     if (row < 0) return;
-    _revealingSelection = YES;                       // không kích hoạt nạp lại
+    _revealingSelection = YES;                       // don't trigger a reload
     [_tree selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
     [_tree scrollRowToVisible:row];
     _revealingSelection = NO;
 }
 
-// --- Kéo-thả: di chuyển request/folder vào folder ---
+// --- Drag-and-drop: move request/folder into a folder ---
 - (id<NSPasteboardWriting>)outlineView:(NSOutlineView *)ov pasteboardWriterForItem:(id)item {
     TreeItem *t = item;
     if (t.relPath.length == 0) return nil;
@@ -377,7 +377,7 @@
 - (NSDragOperation)outlineView:(NSOutlineView *)ov validateDrop:(id<NSDraggingInfo>)info
                    proposedItem:(id)item proposedChildIndex:(NSInteger)idx {
     TreeItem *t = item;
-    if (item == nil || t.isFolder) {            // chỉ thả vào folder hoặc gốc
+    if (item == nil || t.isFolder) {            // only drop onto a folder or root
         [ov setDropItem:item dropChildIndex:NSOutlineViewDropOnItemIndex];
         return NSDragOperationMove;
     }
@@ -388,35 +388,35 @@
     TreeItem *dest = item;
     std::string destFolder = (dest && dest.isFolder) ? std::string(dest.relPath.UTF8String) : std::string();
     BOOL any = NO;
-    NSMutableSet<NSString *> *affected = [NSMutableSet setWithObject:N(destFolder)];  // cấp đích
+    NSMutableSet<NSString *> *affected = [NSMutableSet setWithObject:N(destFolder)];  // destination level
     for (NSPasteboardItem *pb in [[info draggingPasteboard] pasteboardItems]) {
         NSString *src = [pb stringForType:kTreeDragType];
         if (!src.length) continue;
         NSString *srcParent = [src stringByDeletingLastPathComponent];
         try {
             std::string newRel = _engine->collection().move(src.UTF8String, destFolder);
-            [self remapExpandedFoldersFrom:src to:N(newRel)];  // folder: giữ mở (no-op cho file)
-            [affected addObject:srcParent];                    // cấp nguồn cũng đổi
+            [self remapExpandedFoldersFrom:src to:N(newRel)];  // folder: keep open (no-op for files)
+            [affected addObject:srcParent];                    // source level also changes
             any = YES;
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
     }
-    if (any) for (NSString *p in affected) [self refreshTreeLevel:p];  // §T1: chỉ các cấp đụng tới
+    if (any) for (NSString *p in affected) [self refreshTreeLevel:p];  // §T1: only the touched levels
     return any;
 }
 
-#pragma mark Tree context menu (chuột phải) + multi-select
+#pragma mark Tree context menu (right-click) + multi-select
 
 - (NSMenu *)contextMenuForRow:(NSInteger)row {
     if (!_engine) return nil;
-    // Nếu chuột phải vào item chưa được chọn -> chọn riêng item đó.
+    // Right-click on an unselected item -> select just that item.
     if (row >= 0 && ![_tree.selectedRowIndexes containsIndex:row])
         [_tree selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
-    if (row < 0) [_tree deselectAll:nil]; // vùng trống -> thao tác ở gốc cây
+    if (row < 0) [_tree deselectAll:nil]; // empty area -> operate at tree root
 
     NSMenu *m = [[NSMenu alloc] init];
     NSUInteger selCount = _tree.selectedRowIndexes.count;
 
-    // Chọn nhiều -> chỉ Delete.
+    // Multi-select -> Delete only.
     if (selCount > 1) {
         [[m addItemWithTitle:[NSString stringWithFormat:StrFmtDeleteItems, (unsigned long)selCount]
                       action:@selector(deleteSelectedMulti:) keyEquivalent:@""] setTarget:self];
@@ -425,11 +425,11 @@
 
     TreeItem *t = (row >= 0) ? [_tree itemAtRow:row] : nil;
     if (t == nil || t.isFolder) {
-        // Vùng trống hoặc folder -> thêm request/folder.
+        // Empty area or folder -> add request/folder.
         [[m addItemWithTitle:StrMenuNewHttp action:@selector(newHttp:) keyEquivalent:@""] setTarget:self];
         [[m addItemWithTitle:StrMenuNewGrpc action:@selector(newGrpc:) keyEquivalent:@""] setTarget:self];
         [[m addItemWithTitle:StrNewFolder action:@selector(newFolder:) keyEquivalent:@""] setTarget:self];
-        if (t != nil) { // folder cũng cho rename/dup/delete
+        if (t != nil) { // folder also allows rename/dup/delete
             [m addItem:[NSMenuItem separatorItem]];
             [[m addItemWithTitle:StrRename action:@selector(renameSel:) keyEquivalent:@""] setTarget:self];
             [[m addItemWithTitle:StrDuplicate action:@selector(dupSel:) keyEquivalent:@""] setTarget:self];
@@ -444,15 +444,15 @@
     return m;
 }
 
-// Xoá cache response của request bị xoá (cả 2 tầng — §7). §T2: id LẤY TỪ TÊN FILE (zero-read)
-// qua parseRequestFilename/scanLevel; CHỈ fallback đọc (và có thể ghi) nội dung cho file legacy
-// thiếu id trong tên -> không đọc/ghi cả folder ngay trước khi xoá.
+// Purge the response cache of a deleted request (both tiers — §7). §T2: id TAKEN FROM FILENAME (zero-read)
+// via parseRequestFilename/scanLevel; ONLY fall back to reading (and possibly writing) content for
+// legacy files missing the id in their name -> avoid reading/writing the whole folder right before delete.
 - (void)purgeCacheAtRel:(NSString *)rel isFolder:(BOOL)isFolder {
     if (!_engine || rel.length == 0) return;
     if (!isFolder) {
         core::ParsedRequestName p = core::parseRequestFilename(rel.lastPathComponent.UTF8String);
         std::string id = p.id;
-        if (id.empty()) {                         // file legacy chưa có id trong tên -> đọc nội dung
+        if (id.empty()) {                         // legacy file with no id in name -> read content
             try { id = _engine->collection().loadRequest(rel.UTF8String).id; } catch (...) {}
         }
         if (!id.empty()) _engine->removeResponse(id);
@@ -461,8 +461,8 @@
     try {
         for (const auto &c : _engine->collection().scanLevel(rel.UTF8String)) {
             if (c.isFolder) [self purgeCacheAtRel:N(c.relPath) isFolder:YES];
-            else if (!c.id.empty()) _engine->removeResponse(c.id);  // id sẵn từ scanLevel (zero-read)
-            else [self purgeCacheAtRel:N(c.relPath) isFolder:NO];   // legacy -> nhánh đọc nội dung
+            else if (!c.id.empty()) _engine->removeResponse(c.id);  // id already from scanLevel (zero-read)
+            else [self purgeCacheAtRel:N(c.relPath) isFolder:NO];   // legacy -> content-reading branch
         }
     } catch (...) {}
 }
@@ -480,12 +480,12 @@
                                       buttons:@[ StrCancel, StrDelete ]
                                 defaultButton:1 cancelButton:0 icon:OS9AlertNone parent:_window];
     if (r != 1) return;
-    [self closeEditorIfDeleted:items];    // tránh autosave tạo lại file vừa xoá
+    [self closeEditorIfDeleted:items];    // prevent autosave from recreating the just-deleted file
     NSMutableSet<NSString *> *parents = [NSMutableSet set];
     for (TreeItem *t in items) [parents addObject:[t.relPath stringByDeletingLastPathComponent]];
     for (TreeItem *t in items) [self purgeCacheAtRel:t.relPath isFolder:t.isFolder];
     for (TreeItem *t in items) { try { _engine->collection().remove(t.relPath.UTF8String); } catch (...) {} }
-    for (NSString *p in parents) [self refreshTreeLevel:p];   // §T1: chỉ các cấp cha bị xoá
+    for (NSString *p in parents) [self refreshTreeLevel:p];   // §T1: only the affected parent levels
 }
 - (std::string)selectedFolderRel {
     NSInteger row = _tree.selectedRow;
@@ -496,14 +496,14 @@
 }
 - (void)newHttp:(id)s { [self createRequest:core::RequestType::Http name:StrDefaultRequestName]; }
 - (void)newGrpc:(id)s { [self createRequest:core::RequestType::Grpc name:StrDefaultRpcName]; }
-// Tên mặc định, KHÔNG popup. Đổi tên sau bằng inline-rename trên cây. loadRequestAtRel
-// tự autosave request đang mở trước khi chuyển.
+// Default name, NO popup. Rename later via inline-rename in the tree. loadRequestAtRel
+// autosaves the open request before switching.
 - (void)createRequest:(core::RequestType)t name:(NSString *)name {
     if (!_engine) { [self toastWarn:StrToastOpenFolderFirst]; return; }
     try {
         std::string folderRel = [self selectedFolderRel];
         std::string rel = _engine->collection().createRequest(folderRel, t, name.UTF8String);
-        [self refreshTreeLevel:N(folderRel)];   // §T1: chỉ quét lại folder đích (reveal sẽ mở nếu đang đóng)
+        [self refreshTreeLevel:N(folderRel)];   // §T1: rescan only the target folder (reveal opens it if closed)
         [self loadRequestAtRel:N(rel)];
         [self toastOk:[NSString stringWithFormat:StrFmtToastCreated, name]];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
@@ -516,7 +516,7 @@
         [self refreshTreeLevel:N(folderRel)];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
-// Rename: chỉnh ngay trên cây (inline), không popup.
+// Rename: edit inline in the tree, no popup.
 - (void)renameSel:(id)s {
     NSInteger row = _tree.selectedRow; if (row < 0) return;
     [self promptRenameItem:[_tree itemAtRow:row]];
@@ -524,12 +524,12 @@
 - (void)dupSel:(id)s {
     NSInteger row = _tree.selectedRow; if (row < 0) return;
     TreeItem *t = [_tree itemAtRow:row];
-    [self autosaveCurrent];   // flush edits hiện tại trước (tránh trạng thái treo)
+    [self autosaveCurrent];   // flush current edits first (avoid dangling state)
     NSString *parentRel = [t.relPath stringByDeletingLastPathComponent];
     try {
         std::string dupRel = _engine->collection().duplicate(t.relPath.UTF8String);
-        [self refreshTreeLevel:parentRel];   // §T1: bản sao nằm cùng cấp -> chỉ quét lại cấp đó
-        if (!t.isFolder) [self loadRequestAtRel:N(dupRel)];   // mở bản sao -> _currentRel đúng
+        [self refreshTreeLevel:parentRel];   // §T1: the copy is at the same level -> rescan only that level
+        if (!t.isFolder) [self loadRequestAtRel:N(dupRel)];   // open the copy -> correct _currentRel
         [self toastOk:StrToastDuplicated];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
@@ -541,7 +541,7 @@
                                       buttons:@[ StrCancel, StrDelete ]
                                 defaultButton:1 cancelButton:0 icon:OS9AlertNone parent:_window];
     if (r != 1) return;
-    [self closeEditorIfDeleted:@[ t ]];   // tránh autosave tạo lại file vừa xoá
+    [self closeEditorIfDeleted:@[ t ]];   // prevent autosave from recreating the just-deleted file
     [self purgeCacheAtRel:t.relPath isFolder:t.isFolder];
     NSString *parentRel = [t.relPath stringByDeletingLastPathComponent];
     try { _engine->collection().remove(t.relPath.UTF8String); [self refreshTreeLevel:parentRel]; }

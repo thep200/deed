@@ -1,77 +1,77 @@
-// OS9Theme — bảng màu Platinum (Mac OS 9) + helper vẽ bevel/inset (README §5).
-// Look custom, KHÔNG dùng control AppKit mặc định (render Aqua hiện đại).
+// OS9Theme — Platinum (Mac OS 9) color palette + bevel/inset drawing helpers (README §5).
+// Custom look, does NOT use default AppKit controls (modern Aqua render).
 #import <Cocoa/Cocoa.h>
 
 @interface OS9Theme : NSObject
-+ (NSColor *)face;        // xám nền platinum
-+ (NSColor *)buttonFace;  // #DDDDDD — nền nút (theo button.svg)
-+ (NSColor *)faceLight;   // sáng hơn (gradient nhẹ)
-+ (NSColor *)highlight;   // trắng (cạnh trên-trái)
-+ (NSColor *)shadow;      // xám đậm (cạnh dưới-phải)
-+ (NSColor *)darkShadow;  // đậm hơn
-+ (NSColor *)frame;       // viền đen
-+ (NSColor *)titleActive; // nền title bar active
-+ (NSColor *)windowBg;    // nền cửa sổ
-+ (NSColor *)accent;      // xanh chọn (selection)
-+ (NSColor *)rowSelectionGray; // nền xám nhẹ cho row được chọn trong cây (thay xanh mặc định)
++ (NSColor *)face;        // platinum background gray
++ (NSColor *)buttonFace;  // #DDDDDD — button face (per button.svg)
++ (NSColor *)faceLight;   // lighter (subtle gradient)
++ (NSColor *)highlight;   // white (top-left edge)
++ (NSColor *)shadow;      // dark gray (bottom-right edge)
++ (NSColor *)darkShadow;  // darker
++ (NSColor *)frame;       // black border
++ (NSColor *)titleActive; // active title bar background
++ (NSColor *)windowBg;    // window background
++ (NSColor *)accent;      // selection blue
++ (NSColor *)rowSelectionGray; // subtle gray for selected tree row (instead of default blue)
 + (NSFont  *)uiFont;
 + (NSFont  *)monoFont;
-// Font cấu hình ở size/đậm tuỳ vai trò (heading, title...) NHƯNG cùng họ chữ với uiFont.
+// Configured font at role-specific size/weight (heading, title...) BUT same family as uiFont.
 + (NSFont  *)uiFontOfSize:(CGFloat)size bold:(BOOL)bold;
-// Font cấu hình (đúng size người dùng đặt) + đậm — cho title bar & tiêu đề màn (KHÔNG hardcode size).
+// Configured font (at the exact user-set size) + bold — for title bar & screen titles (do NOT hardcode size).
 + (NSFont  *)boldUiFont;
-// Tên họ chữ đã cấu hình (nil nếu dùng mặc định) + size — cho engine ngoài AppKit (Scintilla).
+// Configured font family name (nil if using default) + size — for non-AppKit engine (Scintilla).
 + (NSString *)configuredFontName;
 + (CGFloat)configuredFontSize;
-// Paragraph style cắt đuôi "…" DÙNG CHUNG (hằng số) — tránh alloc mỗi drawRect/mỗi hàng.
+// SHARED tail-truncating paragraph style (constant) — avoids alloc per drawRect/per row.
 + (NSParagraphStyle *)truncatingTailStyle;
-// Cấu hình font từ Settings (rỗng -> mặc định). size<=0 -> 11.
+// Configure font from Settings (empty -> default). size<=0 -> 11.
 + (void)setConfiguredFontName:(NSString *)name size:(CGFloat)size;
 
-// Vẽ nút bevel CŨ (button.svg): góc răng cưa, #DDDDDD, viền đen. pressed = lõm.
+// Draw OLD bevel button (button.svg): serrated corners, #DDDDDD, black border. pressed = sunken.
 + (void)drawBevelInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
-// Vẽ nút MỚI (btn-new.svg): góc vuông, #CCCCCC, viền #484848, bevel trắng/xám.
+// Draw NEW button (btn-new.svg): square corners, #CCCCCC, #484848 border, white/gray bevel.
 + (void)drawNewBevelInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
-// Vẽ nút kiểu LINE (retro, border-line): nền phẳng + viền nét, góc vuông; nhấn = đảo nền.
+// Draw LINE-style button (retro, border-line): flat fill + stroked border, square corners; pressed = inverted fill.
 + (void)drawLineButtonInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
-// Bộ chọn kiểu nút (dùng cho mọi button): "line" (mặc định) | "new" | "classic" (.env BUTTON_STYLE).
+// Button style selector (for all buttons): "line" (default) | "new" | "classic" (.env BUTTON_STYLE).
 + (void)setButtonStyleName:(NSString *)name;
-+ (void)setClassicButtonStyle:(BOOL)classic;   // giữ tương thích (classic<->new)
++ (void)setClassicButtonStyle:(BOOL)classic;   // kept for compatibility (classic<->new)
 + (void)drawButtonInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
-// Màu chữ phù hợp trạng thái nút (kiểu line khi nhấn đảo nền -> chữ trắng).
+// Text color matching button state (line style inverts fill when pressed -> white text).
 + (NSColor *)buttonFGPressed:(BOOL)pressed enabled:(BOOL)enabled;
-// Vẽ viền inset (sunken) cho ô nhập: tối trên-trái, sáng dưới-phải.
+// Draw inset (sunken) border for input field: dark top-left, light bottom-right.
 + (void)drawInsetInRect:(NSRect)r;
-// Vẽ title bar kẻ sọc platinum. Sọc chỉ vẽ trong stripesRect (giữa 2 cụm icon),
-// nền nền (band) vẫn phủ toàn bộ r.
+// Draw platinum striped title bar. Stripes drawn only within stripesRect (between the 2 icon clusters),
+// the band background still covers all of r.
 + (void)drawStripedTitleInRect:(NSRect)r stripesInRect:(NSRect)stripesRect active:(BOOL)active;
 
-// Path nút góc bo kiểu pixel (theo button.svg).
+// Pixel-style rounded button path (per button.svg).
 + (NSBezierPath *)steppedPathInRect:(NSRect)r;
 
-// Path góc răng cưa nhỏ (cho ô input URL / status line).
+// Small serrated-corner path (for URL input field / status line).
 + (NSBezierPath *)serratedPathInRect:(NSRect)r;
 
-// Ô điều khiển cửa sổ kiểu Mac (theo *_box.svg). glyph: 0=close, 1=collapse, 2=zoom.
+// Mac-style window control box (per *_box.svg). glyph: 0=close, 1=collapse, 2=zoom.
 + (void)drawMacControlBox:(NSRect)r glyph:(int)glyph;
 
-// === Title bar OS9 Platinum (PROMPT_os9_titlebar_objcpp.md — vẽ pixel-accurate) ===
-// Nền thanh active: viền dưới #262626 + nền #CCCCCC.
+// === OS9 Platinum title bar (PROMPT_os9_titlebar_objcpp.md — pixel-accurate draw) ===
+// Active bar background: #262626 bottom border + #CCCCCC fill.
 + (void)drawTitleBarFrameInRect:(NSRect)r;
-// Nền thanh INACTIVE: phẳng #D6D6D6, không pinstripe (nút + icon do title bar vẽ).
+// INACTIVE bar background: flat #D6D6D6, no pinstripe (buttons + icons drawn by title bar).
 + (void)drawTitleBarInactiveInRect:(NSRect)r;
-// Dải vân pinstripe: nền #DDDDDD, cạnh #EEEEEE/#C5C5C5, đường #999999 mỗi 2px;
-// cao cố định 13px căn giữa dọc trong r, co giãn theo r.width.
+// Pinstripe grip band: #DDDDDD fill, #EEEEEE/#C5C5C5 edges, #999999 line every 2px;
+// fixed 13px tall, vertically centered in r, stretches with r.width.
 + (void)drawTitleGripInRect:(NSRect)r;
-// Nút title (close/zoom/collapse) — hộp bevel hình vuông cạnh r.size.width.
-// Cấu trúc (ngoài→trong, mỗi lớp 1px): outer bevel (TL #808080 / BR #FFFFFF, lõm) ->
-// khung đen #262626 -> mặt gradient dọc #C9C9C9(đỉnh)→#F1F1F1(đáy) -> inner bevel
-// (TL #FFFFFF / BR #9A9A9A, nổi) -> glyph #262626.
-// glyph: 0=close (trống), 1=zoom (ô vuông nhỏ góc trên-trái dùng chung cạnh),
-//        2=collapse (2 vạch ngang chạm 2 cạnh -> 3 dải, windowshade).
-// pressed=YES -> phủ overlay #353535→#9C9C9C @0.8 chéo TL→BR lên mặt (mouse-down).
+// Title button (close/zoom/collapse) — square bevel box with side r.size.width.
+// Structure (outer→inner, each layer 1px): outer bevel (TL #808080 / BR #FFFFFF, sunken) ->
+// black frame #262626 -> vertical gradient face #C9C9C9(top)→#F1F1F1(bottom) -> inner bevel
+// (TL #FFFFFF / BR #9A9A9A, raised) -> glyph #262626.
+// glyph: 0=close (empty), 1=zoom (small square top-left, shares an edge),
+//        2=collapse (2 horizontal bars touching both edges -> 3 bands, windowshade).
+// pressed=YES -> overlay #353535→#9C9C9C @0.8 diagonal TL→BR on the face (mouse-down).
 + (void)drawTitleButtonInRect:(NSRect)r glyph:(int)glyph pressed:(BOOL)pressed;
 
-// Mũi tên ▾ + vạch ngăn cho dropdown (method/env) — theo dropdown.svg.
+// ▾ arrow + divider line for dropdown (method/env) — per dropdown.svg.
 + (void)drawDropdownArrowInRect:(NSRect)r;
 @end

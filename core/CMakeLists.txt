@@ -1,5 +1,5 @@
-# --- Codegen stub client cho gRPC ServerReflection (third_party/grpc_reflection/reflection.proto) ---
-# vcpkg KHÔNG export stub client reflection -> tự sinh bằng protoc + grpc_cpp_plugin.
+# --- Codegen client stub for gRPC ServerReflection (third_party/grpc_reflection/reflection.proto) ---
+# vcpkg does NOT export the reflection client stub -> generate it with protoc + grpc_cpp_plugin.
 set(REFL_PROTO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/grpc_reflection)
 set(REFL_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${REFL_GEN_DIR})
@@ -17,7 +17,7 @@ add_custom_command(
   VERBATIM
 )
 
-# core — static lib, pure C++ (cross-platform). UI link vào đây. README §3.
+# core — static lib, pure C++ (cross-platform). The UI links against this. README §3.
 add_library(core STATIC
   src/domain/types.cpp
   src/variables/variable_resolver.cpp
@@ -45,8 +45,8 @@ add_library(core STATIC
   ${REFL_GEN_DIR}/reflection.grpc.pb.cc
 )
 
-# include/ = header public (UI chỉ thấy phần này); src/ = riêng tư.
-# generated/ = stub reflection sinh lúc build (grpc_descriptors.cpp include "reflection.grpc.pb.h").
+# include/ = public headers (the UI only sees this); src/ = private.
+# generated/ = reflection stub generated at build time (grpc_descriptors.cpp includes "reflection.grpc.pb.h").
 target_include_directories(core
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src ${REFL_GEN_DIR}
@@ -54,12 +54,12 @@ target_include_directories(core
 
 target_link_libraries(core
   PUBLIC
-    nlohmann_json::nlohmann_json   # dùng trong codec (header nội bộ); DTO public không leak
+    nlohmann_json::nlohmann_json   # used in codec (internal header); public DTOs do not leak it
   PRIVATE
     cpr::cpr                       # REST (libcurl)
     gRPC::grpc++                   # gRPC C++
     protobuf::libprotobuf          # descriptor / dynamic_message / json_util
-    protobuf::libprotoc            # compiler::Importer / DiskSourceTree (nạp .proto runtime)
+    protobuf::libprotoc            # compiler::Importer / DiskSourceTree (load .proto at runtime)
 )
 
 target_compile_features(core PUBLIC cxx_std_17)

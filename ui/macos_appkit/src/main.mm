@@ -1,4 +1,4 @@
-// main.mm — điểm vào app AppKit (Phase 2). Dựng NSApplication + menu + cửa sổ chính.
+// main.mm — AppKit app entry point (Phase 2). Sets up NSApplication + menu + main window.
 #import <Cocoa/Cocoa.h>
 
 #import "app/AppController.h"
@@ -12,7 +12,7 @@ int main(int argc, const char *argv[]) {
         AppController *controller = [AppController new];
         app.delegate = controller;
 
-        // Menu tối thiểu (đủ phím tắt Cmd+S / Cmd+Enter / Cmd+Q).
+        // Minimal menu (enough for Cmd+S / Cmd+Enter / Cmd+Q shortcuts).
         NSMenu *mainMenu = [NSMenu new];
         NSMenuItem *appItem = [NSMenuItem new];
         [mainMenu addItem:appItem];
@@ -29,8 +29,8 @@ int main(int argc, const char *argv[]) {
         [send setTarget:controller];
         fileItem.submenu = fileMenu;
 
-        // Edit menu: cần thiết để Cmd+C/X/V/A/Z định tuyến tới first responder
-        // (NSTextView) -> bật copy/paste với dữ liệu từ NGOÀI app. target=nil = responder chain.
+        // Edit menu: needed so Cmd+C/X/V/A/Z route to the first responder
+        // (NSTextView) -> enables copy/paste with data from OUTSIDE the app. target=nil = responder chain.
         NSMenuItem *editItem = [NSMenuItem new];
         [mainMenu addItem:editItem];
         NSMenu *editMenu = [[NSMenu alloc] initWithTitle:StrMenuEdit];
@@ -43,7 +43,7 @@ int main(int argc, const char *argv[]) {
         [editMenu addItemWithTitle:StrMenuSelectAll action:@selector(selectAll:) keyEquivalent:@"a"];
         editItem.submenu = editMenu;
 
-        // Window menu: minimize / zoom (close đã có trên title bar tùy biến).
+        // Window menu: minimize / zoom (close is already on the custom title bar).
         NSMenuItem *winItem = [NSMenuItem new];
         [mainMenu addItem:winItem];
         NSMenu *winMenu = [[NSMenu alloc] initWithTitle:StrMenuWindow];

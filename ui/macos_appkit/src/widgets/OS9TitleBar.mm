@@ -1,26 +1,26 @@
-// Title bar OS9 Platinum — vẽ pixel-accurate theo docs/PROMPT_os9_titlebar_objcpp.md.
-// 5 trạng thái: Active (default) + Close/Zoom/Collapse pressed + Inactive.
-// Active: close ghim trái; cụm phải Zoom (trái) + Collapse (ngoài cùng phải);
-//         pinstripe ngắt quanh tiêu đề đậm căn giữa.
-// Inactive: nền phẳng #D6D6D6, KHÔNG pinstripe, KHÔNG nút, có icon folder + chữ xám.
+// OS9 Platinum title bar — pixel-accurate drawing per docs/PROMPT_os9_titlebar_objcpp.md.
+// 5 states: Active (default) + Close/Zoom/Collapse pressed + Inactive.
+// Active: close pinned left; right cluster Zoom (left) + Collapse (far right);
+//         pinstripe breaks around the centered bold title.
+// Inactive: flat #D6D6D6 background, NO pinstripe, NO buttons, with folder icon + gray text.
 #import "widgets/OS9TitleBar.h"
 #import "theme/OS9Theme.h"
 #import "icons/OS9Glyphs.h"
 
-// Kích thước & lề. Hộp bevel hiển thị = kBox (vuông), hit-area nới rộng quanh hộp.
-static const CGFloat kBox      = 16;  // hộp bevel hiển thị (to hơn để glyph rõ)
-static const CGFloat kHitPad   = 2;   // nới mỗi cạnh -> hit-area ~20×20
-static const CGFloat kEdge     = 5;   // lề tham chiếu (iconSideInset = kEdge+1) cho pane/nút
-// Lề TRÁI close = mép trái nút Open Folder (= iconSideInset). Lề PHẢI collapse = mép phải Pretty.
-static const CGFloat kInsetL   = kEdge + 1;       // close.left = 6 (thẳng hàng Open Folder)
-static const CGFloat kInsetR   = kEdge + 1 + 2;   // collapse.right từ mép phải = 8 (thẳng hàng Pretty)
-static const CGFloat kBtnGap   = 6;   // gap giữa zoom và collapse
-static const CGFloat kGripGap  = 6;   // gap giữa nút và dải pinstripe
-static const CGFloat kTitlePad = 8;   // khoảng trơn ngắt pinstripe mỗi bên tiêu đề
-static const CGFloat kFolder   = 16;  // icon folder (trạng thái Inactive)
-static const CGFloat kFolderGap = 5;  // gap icon folder ↔ tiêu đề
+// Sizes & insets. Visible bevel box = kBox (square), hit-area expanded around the box.
+static const CGFloat kBox      = 16;  // visible bevel box (larger for a clear glyph)
+static const CGFloat kHitPad   = 2;   // expand each edge -> hit-area ~20×20
+static const CGFloat kEdge     = 5;   // reference inset (iconSideInset = kEdge+1) for panes/buttons
+// LEFT inset close = left edge of Open Folder button (= iconSideInset). RIGHT inset collapse = right edge of Pretty.
+static const CGFloat kInsetL   = kEdge + 1;       // close.left = 6 (aligned with Open Folder)
+static const CGFloat kInsetR   = kEdge + 1 + 2;   // collapse.right from right edge = 8 (aligned with Pretty)
+static const CGFloat kBtnGap   = 6;   // gap between zoom and collapse
+static const CGFloat kGripGap  = 6;   // gap between button and pinstripe band
+static const CGFloat kTitlePad = 8;   // plain gap breaking the pinstripe on each side of the title
+static const CGFloat kFolder   = 16;  // folder icon (Inactive state)
+static const CGFloat kFolderGap = 5;  // gap folder icon ↔ title
 
-// Nút đang nhấn (pressed). 0=không, 1=close, 2=zoom, 3=collapse.
+// Pressed button. 0=none, 1=close, 2=zoom, 3=collapse.
 typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBHide };
 
 @implementation OS9TitleBar {
@@ -29,12 +29,12 @@ typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBH
 
 - (BOOL)isFlipped { return NO; }
 
-// Mép trái close = iconSideInset (= mép trái nút Open Folder dưới pane).
+// Left edge of close = iconSideInset (= left edge of Open Folder button under the pane).
 + (CGFloat)iconSideInset { return kInsetL; }
 
 - (BOOL)isActive { return self.window ? self.window.isKeyWindow : YES; }
 
-// Hộp bevel hiển thị (vuông kBox) căn giữa dọc trong bounds.
+// Visible bevel box (kBox square) vertically centered in bounds.
 - (NSRect)closeRect {
     CGFloat y = floor((self.bounds.size.height - kBox) / 2);
     return NSMakeRect(kInsetL, y, kBox, kBox);
@@ -48,7 +48,7 @@ typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBH
     return NSMakeRect(h.origin.x - kBtnGap - kBox, h.origin.y, kBox, kBox);
 }
 
-// Bề rộng tiêu đề (đo theo font đậm) — để tính khoảng ngắt pinstripe / canh nhóm icon.
+// Title width (measured with bold font) — to compute the pinstripe break / icon group alignment.
 - (NSDictionary *)titleAttrsActive:(BOOL)active {
     CGFloat w = active ? 0.149 : 0.541;   // #262626 active / #8A8A8A inactive
     return @{NSFontAttributeName : [OS9Theme boldUiFont],
@@ -59,23 +59,23 @@ typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBH
     BOOL active = [self isActive];
     if (!active) { [self drawInactive]; return; }
 
-    // Nền thanh active (#CCCCCC + line đáy #262626).
+    // Active bar background (#CCCCCC + bottom line #262626).
     [OS9Theme drawTitleBarFrameInRect:self.bounds];
 
-    // Khoảng pinstripe tổng (giữa 2 cụm nút) + khoảng trơn quanh tiêu đề.
+    // Total pinstripe span (between the 2 button clusters) + plain gap around the title.
     CGFloat sx = NSMaxX([self closeRect]) + kGripGap;
     CGFloat sr = NSMinX([self zoomRect]) - kGripGap;
     NSRect tr = NSZeroRect;
     if (_title.length) {
         NSDictionary *attrs = [self titleAttrsActive:YES];
         NSSize sz = [_title sizeWithAttributes:attrs];
-        CGFloat maxW = MAX(0, sr - sx - 2 * kTitlePad - 8);  // không đè lên 2 dải/nút
+        CGFloat maxW = MAX(0, sr - sx - 2 * kTitlePad - 8);  // don't overlap the 2 bands/buttons
         CGFloat tw = MIN(sz.width, maxW);
         tr = NSMakeRect(floor(NSMidX(self.bounds) - tw / 2),
                         floor((self.bounds.size.height - sz.height) / 2), tw, sz.height);
     }
 
-    // Dải pinstripe: ngắt thành 2 vùng (trái/phải) quanh tiêu đề; rỗng -> 1 dải liền.
+    // Pinstripe band: split into 2 regions (left/right) around the title; empty -> 1 continuous band.
     if (_title.length && tr.size.width > 0) {
         CGFloat gapL = NSMinX(tr) - kTitlePad, gapR = NSMaxX(tr) + kTitlePad;
         [self drawGripFrom:sx to:gapL];
@@ -84,11 +84,11 @@ typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBH
         [self drawGripFrom:sx to:sr];
     }
 
-    // Tiêu đề đậm #262626 căn giữa (trên nền trơn #CCCCCC).
+    // Bold #262626 title centered (on plain #CCCCCC background).
     if (tr.size.width > 0)
         [_title drawInRect:tr withAttributes:[self titleAttrsActive:YES]];
 
-    // 3 nút + trạng thái pressed.
+    // 3 buttons + pressed state.
     [OS9Theme drawTitleButtonInRect:[self closeRect] glyph:0 pressed:(_pressed == OS9TBClose)];
     [OS9Theme drawTitleButtonInRect:[self zoomRect]  glyph:1 pressed:(_pressed == OS9TBZoom)];
     [OS9Theme drawTitleButtonInRect:[self hideRect]  glyph:2 pressed:(_pressed == OS9TBHide)];
@@ -99,14 +99,14 @@ typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBH
     [OS9Theme drawTitleGripInRect:NSMakeRect(x0, self.bounds.origin.y, x1 - x0, self.bounds.size.height)];
 }
 
-// Inactive: nền phẳng + icon folder (màu) + tiêu đề xám, căn giữa thành nhóm. Không nút.
+// Inactive: flat background + folder icon (color) + gray title, centered as a group. No buttons.
 - (void)drawInactive {
     [OS9Theme drawTitleBarInactiveInRect:self.bounds];
 
     NSDictionary *attrs = [self titleAttrsActive:NO];
     NSSize sz = _title.length ? [_title sizeWithAttributes:attrs] : NSZeroSize;
     CGFloat tw = sz.width;
-    // Kẹp bề rộng tiêu đề trong khung (chừa lề + icon).
+    // Clamp title width within the frame (leave room for inset + icon).
     CGFloat avail = self.bounds.size.width - 2 * kInsetL - kFolder - kFolderGap;
     if (tw > avail) tw = MAX(0, avail);
 
@@ -135,14 +135,14 @@ typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBH
 }
 
 - (void)mouseDown:(NSEvent *)e {
-    // Inactive: không có nút -> click chỉ kích hoạt + kéo cửa sổ.
+    // Inactive: no buttons -> click only activates + drags the window.
     if (![self isActive]) { [self.window performWindowDragWithEvent:e]; return; }
 
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
     OS9TBButton btn = [self hitTestButton:p];
     if (btn == OS9TBNone) { [self.window performWindowDragWithEvent:e]; return; }
 
-    // Theo dõi tới khi nhả: pressed chỉ khi con trỏ còn trong hit-area (kéo ra -> huỷ).
+    // Track until release: pressed only while the cursor stays in the hit-area (drag out -> cancel).
     _pressed = btn;
     [self setNeedsDisplay:YES];
     while (YES) {

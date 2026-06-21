@@ -10,7 +10,7 @@ NSTextField *OS9Label(NSString *text) {
     return l;
 }
 
-// Cell tự căn giữa text theo chiều dọc trong bounds.
+// Cell that vertically centers its text within bounds.
 @interface OS9VCenterCell : NSTextFieldCell
 @end
 @implementation OS9VCenterCell

@@ -1,5 +1,5 @@
-// Unit test cho Core — chỉ dùng API public (include/core/). Không cần UI.
-// Harness tối giản: đếm pass/fail, trả mã != 0 khi có lỗi (CTest đọc exit code).
+// Unit tests for Core — public API only (include/core/). No UI needed.
+// Minimal harness: count pass/fail, return code != 0 on error (CTest reads exit code).
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -35,7 +35,7 @@ static int g_fail = 0;
         else { ++g_fail; std::printf("  FAIL: %s  (%s:%d)\n", msg, __FILE__, __LINE__); } \
     } while (0)
 
-// Thư mục tạm cô lập cho mỗi run.
+// Isolated temp directory for each run.
 static std::string makeTempRoot() {
     auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
     auto base = fs::temp_directory_path() / ("apiclient_test_" + std::to_string(stamp));
@@ -50,96 +50,96 @@ static void test_variable_resolver() {
     std::map<std::string, std::string> vars{{"baseUrl", "http://x"}, {"empty", ""}};
 
     auto r1 = VariableResolver::resolve("{{baseUrl}}/users", vars);
-    CHECK_EQ(r1.text, std::string("http://x/users"), "resolve cơ bản");
-    CHECK(r1.missing.empty(), "không có missing");
+    CHECK_EQ(r1.text, std::string("http://x/users"), "basic resolve");
+    CHECK(r1.missing.empty(), "no missing");
 
     auto r2 = VariableResolver::resolve("a{{empty}}b", vars);
-    CHECK_EQ(r2.text, std::string("ab"), "biến rỗng -> \"\"");
+    CHECK_EQ(r2.text, std::string("ab"), "empty var -> \"\"");
 
     auto r3 = VariableResolver::resolve("x{{nope}}y", vars);
-    CHECK_EQ(r3.text, std::string("x{{nope}}y"), "thiếu biến -> giữ literal");
-    CHECK_EQ(r3.missing.size(), size_t(1), "ghi nhận 1 missing");
+    CHECK_EQ(r3.text, std::string("x{{nope}}y"), "missing var -> keep literal");
+    CHECK_EQ(r3.missing.size(), size_t(1), "record 1 missing");
 
     auto r4 = VariableResolver::resolve("{{ baseUrl }}", vars);
-    CHECK_EQ(r4.text, std::string("http://x"), "trim khoảng trắng trong {{ }}");
+    CHECK_EQ(r4.text, std::string("http://x"), "trim whitespace inside {{ }}");
 }
 
-// ---------------- Request filename naming (new_format.file.md §2A: id ở ĐẦU) ----------------
+// ---------------- Request filename naming (new_format.file.md §2A: id FIRST) ----------------
 static void test_request_naming() {
     std::printf("[request_naming]\n");
 
-    // parse MỚI: <id>_<type>_... — token đầu = id; slug giữ '_'/'-'.
+    // NEW parse: <id>_<type>_... — first token = id; slug keeps '_'/'-'.
     auto g = parseRequestFilename("ab12cd_grpc_get-list-user.json");
     CHECK(g.ok && g.type == RequestType::Grpc, "grpc parse ok");
-    CHECK_EQ(g.id, std::string("ab12cd"), "id = token đầu");
-    CHECK_EQ(g.slug, std::string("get-list-user"), "grpc slug = phần sau grpc_");
-    CHECK(g.method.empty(), "grpc KHÔNG có method");
+    CHECK_EQ(g.id, std::string("ab12cd"), "id = first token");
+    CHECK_EQ(g.slug, std::string("get-list-user"), "grpc slug = part after grpc_");
+    CHECK(g.method.empty(), "grpc has NO method");
 
     auto h = parseRequestFilename("xy9z_http_get_get_list_user.json");
     CHECK(h.ok && h.type == RequestType::Http, "http parse ok");
-    CHECK_EQ(h.id, std::string("xy9z"), "id = token đầu");
+    CHECK_EQ(h.id, std::string("xy9z"), "id = first token");
     CHECK_EQ(h.method, std::string("get"), "http method");
-    CHECK_EQ(h.slug, std::string("get_list_user"), "http slug giữ nguyên '_'");
+    CHECK_EQ(h.slug, std::string("get_list_user"), "http slug keeps '_'");
 
-    // BACK-COMPAT: file CŨ không id (token đầu = http/grpc) -> parse được, id rỗng.
+    // BACK-COMPAT: OLD file with no id (first token = http/grpc) -> parses, id empty.
     auto old = parseRequestFilename("http_get_tours-configs.json");
-    CHECK(old.ok && old.id.empty() && old.type == RequestType::Http, "file cũ: id rỗng, vẫn parse");
-    CHECK_EQ(old.slug, std::string("tours-configs"), "file cũ slug đúng");
+    CHECK(old.ok && old.id.empty() && old.type == RequestType::Http, "old file: id empty, still parses");
+    CHECK_EQ(old.slug, std::string("tours-configs"), "old file slug correct");
 
-    CHECK(!parseRequestFilename("collection.json").ok, "tên không đúng grammar -> ok=false");
-    CHECK(!parseRequestFilename("README.md").ok, "không có '_' -> ok=false");
-    CHECK(!parseRequestFilename("ab12_xxx_slug.json").ok, "type lạ -> ok=false");
+    CHECK(!parseRequestFilename("collection.json").ok, "name not matching grammar -> ok=false");
+    CHECK(!parseRequestFilename("README.md").ok, "no '_' -> ok=false");
+    CHECK(!parseRequestFilename("ab12_xxx_slug.json").ok, "unknown type -> ok=false");
 
-    // isValidFileId: chỉ [a-z0-9], không '_'/hoa.
-    CHECK(isValidFileId("ab12cd34"), "id base36 hợp lệ");
-    CHECK(!isValidFileId("req_ABC"), "id legacy chứa '_'/hoa -> không hợp lệ");
-    CHECK(!isValidFileId(""), "id rỗng -> không hợp lệ");
+    // isValidFileId: only [a-z0-9], no '_'/uppercase.
+    CHECK(isValidFileId("ab12cd34"), "valid base36 id");
+    CHECK(!isValidFileId("req_ABC"), "legacy id with '_'/uppercase -> invalid");
+    CHECK(!isValidFileId(""), "empty id -> invalid");
 
-    // normalizeDisplayName: sentence-case, '_'/'-' -> space, bỏ ký tự đặc biệt.
+    // normalizeDisplayName: sentence-case, '_'/'-' -> space, drop special chars.
     CHECK_EQ(normalizeDisplayName("get-list-user"), std::string("Get list user"), "de-slug grpc");
     CHECK_EQ(normalizeDisplayName("get_list_user"), std::string("Get list user"), "de-slug '_'");
     CHECK_EQ(normalizeDisplayName("name@of#request!"), std::string("Nameofrequest"),
-             "ký tự đặc biệt bị loại");
+             "special chars dropped");
 
-    // encode: <id> ở đầu; http có method, grpc KHÔNG.
+    // encode: <id> first; http has method, grpc does NOT.
     CHECK_EQ(encodeRequestFilename("k7id", RequestType::Http, "POST", "Create Tour"),
              std::string("k7id_http_post_create-tour.json"), "encode http: id + method");
     CHECK_EQ(encodeRequestFilename("k7id", RequestType::Grpc, "", "Get List User"),
-             std::string("k7id_grpc_get-list-user.json"), "encode grpc: id, KHÔNG method");
+             std::string("k7id_grpc_get-list-user.json"), "encode grpc: id, NO method");
 
-    // round-trip: encode -> parse giữ id; label = slug chuẩn hoá, KHÔNG kèm id/prefix.
+    // round-trip: encode -> parse keeps id; label = normalized slug, NO id/prefix.
     std::string fn = encodeRequestFilename("zz9", RequestType::Grpc, "", "Get List User");
     auto rt = parseRequestFilename(fn);
-    CHECK_EQ(rt.id, std::string("zz9"), "round-trip giữ id");
+    CHECK_EQ(rt.id, std::string("zz9"), "round-trip keeps id");
     std::string label = normalizeDisplayName(rt.slug);
     CHECK(label.find("grpc") == std::string::npos && label.find("zz9") == std::string::npos,
-          "label KHÔNG chứa id/prefix");
-    CHECK_EQ(label, std::string("Get list user"), "label = name đã chuẩn hoá");
+          "label does NOT contain id/prefix");
+    CHECK_EQ(label, std::string("Get list user"), "label = normalized name");
 }
 
-// Migration: file CŨ (không id ở tên) -> thêm id vào tên (git mv), zero-read lần sau.
+// Migration: OLD file (no id in name) -> add id to name (git mv), zero-read next time.
 static void test_filename_migration(const std::string& root) {
     std::printf("[filename_migration]\n");
     std::string mroot = (fs::path(root) / "migrate_root").string();
     fs::create_directories(mroot);
     CollectionStore store(mroot);
 
-    std::string oldName = "http_get_legacy-req.json";   // dạng cũ, id legacy trong nội dung
+    std::string oldName = "http_get_legacy-req.json";   // old form, legacy id in content
     { std::ofstream o((fs::path(mroot) / oldName));
       o << R"({"schemaVersion":1,"id":"req_OLD","name":"Legacy Req","type":"http","http":{"method":"GET","url":""}})"; }
 
     int n = store.migrateAddIdToFilenames();
-    CHECK(n >= 1, "migrate đổi tên >=1 file cũ");
-    CHECK(!fs::exists(fs::path(mroot) / oldName), "tên cũ không còn sau migrate");
+    CHECK(n >= 1, "migrate renames >=1 old file");
+    CHECK(!fs::exists(fs::path(mroot) / oldName), "old name gone after migrate");
 
     std::vector<TreeNode> lvl = store.scanLevel("");
     bool ok = false; std::string newId;
     for (auto& c : lvl)
         if (!c.isFolder) { ok = !c.id.empty() && c.name == "Legacy req"; newId = c.id; }
-    CHECK(ok, "scanLevel: id lấy từ TÊN file (zero-read), name chuẩn hoá");
-    CHECK(isValidFileId(newId), "id mới hợp lệ [a-z0-9], không '_'");
-    CHECK_EQ(store.migrateAddIdToFilenames(), 0, "migrate lần 2: 0 (đã có id, không đọc nội dung)");
-    CHECK(!store.findRelPathById(newId).empty(), "findRelPathById theo id từ tên file");
+    CHECK(ok, "scanLevel: id from FILENAME (zero-read), name normalized");
+    CHECK(isValidFileId(newId), "new id valid [a-z0-9], no '_'");
+    CHECK_EQ(store.migrateAddIdToFilenames(), 0, "migrate 2nd time: 0 (already has id, no content read)");
+    CHECK(!store.findRelPathById(newId).empty(), "findRelPathById by id from filename");
 }
 
 // ---------------- CollectionStore round-trip + CRUD ----------------
@@ -148,39 +148,39 @@ static void test_collection_store(const std::string& root) {
     CollectionStore store(root);
 
     std::string rel = store.createRequest("", RequestType::Http, "Get Users");
-    CHECK(!rel.empty(), "tạo request trả relPath");
-    CHECK(fs::exists(fs::path(root) / rel), "file request tồn tại");
+    CHECK(!rel.empty(), "create request returns relPath");
+    CHECK(fs::exists(fs::path(root) / rel), "request file exists");
 
     RequestModel m = store.loadRequest(rel);
-    CHECK_EQ(m.name, std::string("Get Users"), "name giữ nguyên");
+    CHECK_EQ(m.name, std::string("Get Users"), "name preserved");
     CHECK(m.type == RequestType::Http, "type = http");
-    CHECK(!m.id.empty(), "có id");
-    // id duy nhất + tìm theo id (sửa bug xoá nhầm do trùng id/đường dẫn).
+    CHECK(!m.id.empty(), "has id");
+    // unique id + find by id (fixes bug deleting wrong file due to duplicate id/path).
     std::string r2 = store.createRequest("", RequestType::Http, "Another");
     RequestModel ma = store.loadRequest(r2);
-    CHECK(!ma.id.empty() && ma.id != m.id, "2 request có id khác nhau");
-    CHECK_EQ(store.findRelPathById(m.id), rel, "findRelPathById trả đúng path");
-    CHECK(store.findRelPathById("req_nope").empty(), "id không có -> rỗng");
+    CHECK(!ma.id.empty() && ma.id != m.id, "2 requests have different ids");
+    CHECK_EQ(store.findRelPathById(m.id), rel, "findRelPathById returns correct path");
+    CHECK(store.findRelPathById("req_nope").empty(), "missing id -> empty");
     store.remove(r2);
 
-    CHECK(m.http.headers.size() >= 5, "HTTP request mới có header mặc định");
+    CHECK(m.http.headers.size() >= 5, "new HTTP request has default headers");
     bool hasContentType = false;
     for (const auto& h : m.http.headers) if (h.key == "Content-Type") hasContentType = true;
-    CHECK(hasContentType, "có Content-Type mặc định");
+    CHECK(hasContentType, "has default Content-Type");
 
-    // sửa + lưu + đọc lại (round-trip). Đổi method -> tên file phải đổi http_get_* -> http_post_*.
+    // edit + save + reload (round-trip). Change method -> filename must change http_get_* -> http_post_*.
     m.http.method = "POST";
     m.http.url = "{{baseUrl}}/users";
     m.http.body.mode = "json";
     m.http.body.json = "{\"a\":1}";
     std::string relAfterSave = store.saveRequest(rel, m);
-    CHECK(!fs::exists(fs::path(root) / rel), "đổi method -> tên file cũ không còn");
-    CHECK(fs::exists(fs::path(root) / relAfterSave), "tên file mới tồn tại sau save");
+    CHECK(!fs::exists(fs::path(root) / rel), "change method -> old filename gone");
+    CHECK(fs::exists(fs::path(root) / relAfterSave), "new filename exists after save");
     {
         std::string fn = fs::path(relAfterSave).filename().string();
-        CHECK(fn.find("_http_post_") != std::string::npos, "tên file phản ánh method mới (http_post)");
+        CHECK(fn.find("_http_post_") != std::string::npos, "filename reflects new method (http_post)");
         core::ParsedRequestName pr = core::parseRequestFilename(fn);
-        CHECK(pr.ok && core::isValidFileId(pr.id), "tên file mới có id hợp lệ ở đầu");
+        CHECK(pr.ok && core::isValidFileId(pr.id), "new filename has valid id at front");
     }
     rel = relAfterSave;
     RequestModel m2 = store.loadRequest(rel);
@@ -188,61 +188,61 @@ static void test_collection_store(const std::string& root) {
     CHECK_EQ(m2.http.url, std::string("{{baseUrl}}/users"), "url round-trip");
     CHECK_EQ(m2.http.body.json, std::string("{\"a\":1}"), "body json round-trip");
 
-    // folder + request lồng.
+    // folder + nested request.
     std::string folder = store.createFolder("", "Folder A");
-    CHECK(fs::is_directory(fs::path(root) / folder), "folder tạo được");
+    CHECK(fs::is_directory(fs::path(root) / folder), "folder created");
     std::string nested = store.createRequest(folder, RequestType::Grpc, "Get User");
     RequestModel gm = store.loadRequest(nested);
     CHECK(gm.type == RequestType::Grpc, "nested = grpc");
 
     // tree.
     TreeNode tree = store.scanTree();
-    CHECK(tree.isFolder, "root là folder");
+    CHECK(tree.isFolder, "root is a folder");
     bool foundFolder = false;
     for (const auto& c : tree.children) if (c.isFolder && c.name == "folder-a") foundFolder = true;
-    CHECK(foundFolder, "tree có folder con");
+    CHECK(foundFolder, "tree has child folder");
 
-    // scanLevel: lazy 1 cấp — folder con KHÔNG nạp sẵn children; request leaf name đã chuẩn hoá.
+    // scanLevel: lazy 1 level — child folders do NOT preload children; request leaf name normalized.
     std::vector<TreeNode> rootLevel = store.scanLevel("");
     bool folderLazy = false, reqLabelOk = false;
     for (const auto& c : rootLevel) {
         if (c.isFolder && c.name == "folder-a") {
-            folderLazy = c.children.empty();    // §3: folder fold, con rỗng tới khi expand
+            folderLazy = c.children.empty();    // §3: folder folded, children empty until expand
         } else if (!c.isFolder) {
-            // rel hiện là http_post_get-users -> label "Get users", badge "POST".
+            // rel is now http_post_get-users -> label "Get users", badge "POST".
             if (c.name == "Get users") { reqLabelOk = (c.methodOrType == "POST"); }
         }
     }
-    CHECK(folderLazy, "scanLevel: folder con chưa nạp (lazy)");
-    CHECK(reqLabelOk, "scanLevel: leaf name = de-slug, badge = method từ tên file");
+    CHECK(folderLazy, "scanLevel: child folder not loaded (lazy)");
+    CHECK(reqLabelOk, "scanLevel: leaf name = de-slug, badge = method from filename");
 
-    // scanLevel trong folder: grpc leaf, name de-slug, KHÔNG kèm prefix.
+    // scanLevel inside folder: grpc leaf, de-slug name, NO prefix.
     std::vector<TreeNode> inFolder = store.scanLevel(folder);
     bool grpcLeafOk = false;
     for (const auto& c : inFolder)
         if (!c.isFolder && c.requestType == RequestType::Grpc && c.name == "Get user") grpcLeafOk = true;
-    CHECK(grpcLeafOk, "scanLevel folder: grpc leaf name = 'Get user' (không prefix grpc_)");
+    CHECK(grpcLeafOk, "scanLevel folder: grpc leaf name = 'Get user' (no grpc_ prefix)");
 
-    // move (drag-drop): chuyển request vào folder.
+    // move (drag-drop): move request into folder.
     std::string toMove = store.createRequest("", RequestType::Http, "Movable");
     std::string moved = store.move(toMove, folder);
-    CHECK(!fs::exists(fs::path(root) / toMove), "file cũ không còn sau move");
-    CHECK(fs::exists(fs::path(root) / moved), "file mới tồn tại trong folder");
-    CHECK(moved.rfind("folder-a/", 0) == 0, "move đặt file vào folder đích");
+    CHECK(!fs::exists(fs::path(root) / toMove), "old file gone after move");
+    CHECK(fs::exists(fs::path(root) / moved), "new file exists in folder");
+    CHECK(moved.rfind("folder-a/", 0) == 0, "move places file into target folder");
 
     // duplicate + rename + remove.
     std::string dup = store.duplicate(rel);
-    CHECK(fs::exists(fs::path(root) / dup), "duplicate tạo file");
+    CHECK(fs::exists(fs::path(root) / dup), "duplicate creates file");
     std::string renamed = store.rename(dup, "Renamed Req");
-    CHECK(fs::exists(fs::path(root) / renamed), "rename tạo file mới");
+    CHECK(fs::exists(fs::path(root) / renamed), "rename creates new file");
     store.remove(renamed);
-    CHECK(!fs::exists(fs::path(root) / renamed), "remove xoá file");
+    CHECK(!fs::exists(fs::path(root) / renamed), "remove deletes file");
 
     // gitignore auto.
     store.ensureGitignore();
     std::string gi;
     fs::path gip = fs::path(root) / ".gitignore";
-    CHECK(fs::exists(gip), ".gitignore tạo được");
+    CHECK(fs::exists(gip), ".gitignore created");
 }
 
 // ---------------- SessionStore ----------------
@@ -250,14 +250,14 @@ static void test_session_store(const std::string& root) {
     std::printf("[session_store]\n");
     {
         SessionStore s(root);
-        CHECK_EQ(s.getActiveEnv(), std::string("Global"), "active env mặc định Global");
+        CHECK_EQ(s.getActiveEnv(), std::string("Global"), "active env defaults to Global");
         s.saveLastOpened("folderA/get.json");
         s.setActiveEnv("Dev");
     }
     {
-        SessionStore s2(root); // đọc lại từ đĩa
-        CHECK_EQ(s2.loadLastOpened(), std::string("folderA/get.json"), "lastOpened bền vững");
-        CHECK_EQ(s2.getActiveEnv(), std::string("Dev"), "activeEnv bền vững");
+        SessionStore s2(root); // reload from disk
+        CHECK_EQ(s2.loadLastOpened(), std::string("folderA/get.json"), "lastOpened persists");
+        CHECK_EQ(s2.getActiveEnv(), std::string("Dev"), "activeEnv persists");
     }
 }
 
@@ -275,44 +275,44 @@ static void test_env_and_secret(const std::string& root) {
     auto names = env.list();
     bool hasDev = false;
     for (auto& n : names) if (n == "Dev") hasDev = true;
-    CHECK(hasDev, "list() có Dev");
+    CHECK(hasDev, "list() has Dev");
 
     Environment loaded = env.load("Dev");
-    CHECK_EQ(loaded.keys.size(), size_t(2), "2 key");
-    // Value plaintext nằm thẳng trong file env (không còn SecretStore).
+    CHECK_EQ(loaded.keys.size(), size_t(2), "2 keys");
+    // Plaintext value lives directly in the env file (no more SecretStore).
     std::string tokVal;
     for (auto& k : loaded.keys) if (k.key == "token") tokVal = k.value;
-    CHECK_EQ(tokVal, std::string("s3cr3t"), "value đọc thẳng từ file env");
+    CHECK_EQ(tokVal, std::string("s3cr3t"), "value read directly from env file");
 
     std::string envFileTxt;
     fs::path ef = fs::path(root) / "environments" / "Dev.json";
     std::FILE* f = std::fopen(ef.string().c_str(), "rb");
     if (f) { char buf[4096]; size_t n = std::fread(buf, 1, sizeof(buf), f); envFileTxt.assign(buf, n); std::fclose(f); }
-    CHECK(envFileTxt.find("s3cr3t") != std::string::npos, "value ghi plaintext vào file env");
-    CHECK(!fs::exists(fs::path(root) / ".secrets"), "không tạo .secrets/");
+    CHECK(envFileTxt.find("s3cr3t") != std::string::npos, "value written plaintext to env file");
+    CHECK(!fs::exists(fs::path(root) / ".secrets"), "no .secrets/ created");
 
-    // renameEnv: đổi tên file, nội dung giữ nguyên.
-    CHECK(env.renameEnv("Dev", "Dev2"), "renameEnv thành công");
-    CHECK(!fs::exists(ef), "file env cũ biến mất");
-    CHECK_EQ(env.load("Dev2").keys.size(), size_t(2), "env mới giữ key");
-    CHECK(!env.renameEnv("Dev2", ""), "renameEnv rỗng bị chặn");
+    // renameEnv: rename file, content preserved.
+    CHECK(env.renameEnv("Dev", "Dev2"), "renameEnv succeeds");
+    CHECK(!fs::exists(ef), "old env file gone");
+    CHECK_EQ(env.load("Dev2").keys.size(), size_t(2), "new env keeps keys");
+    CHECK(!env.renameEnv("Dev2", ""), "empty renameEnv rejected");
 
-    // renameAlias: đổi key trên mọi env.
+    // renameAlias: rename key across all envs.
     Environment stg; stg.name = "Stg"; stg.keys.push_back({"baseUrl", "http://stg", true});
     env.save(stg);
-    CHECK(env.renameAlias("baseUrl", "apiUrl"), "renameAlias thành công");
+    CHECK(env.renameAlias("baseUrl", "apiUrl"), "renameAlias succeeds");
     bool found = false;
     for (auto& k : env.load("Dev2").keys) if (k.key == "apiUrl") found = true;
-    CHECK(found, "alias đổi trên Dev2");
+    CHECK(found, "alias renamed on Dev2");
     found = false;
     for (auto& k : env.load("Stg").keys) if (k.key == "apiUrl") found = true;
-    CHECK(found, "alias đổi đồng thời trên Stg");
+    CHECK(found, "alias renamed on Stg simultaneously");
 }
 
 // ---------------- Migration secret -> plaintext (idempotent) ----------------
 static void test_secret_migration(const std::string& root) {
     std::printf("[secret migration]\n");
-    // Dựng trạng thái CŨ: file env thiếu value + .secrets/secrets.json giữ value.
+    // Build OLD state: env file missing value + .secrets/secrets.json holds value.
     fs::create_directories(fs::path(root) / "environments");
     fs::create_directories(fs::path(root) / ".secrets");
     {
@@ -329,19 +329,19 @@ static void test_secret_migration(const std::string& root) {
     env.migrateLegacySecrets();
     std::string tokVal;
     for (auto& k : env.load("Dev").keys) if (k.key == "token") tokVal = k.value;
-    CHECK_EQ(tokVal, std::string("s3cr3t"), "value secret gộp ngược vào env");
-    CHECK(!fs::exists(fs::path(root) / ".secrets"), ".secrets/ bị xoá sau migrate");
-    // Idempotent: chạy lại không throw, không đổi gì.
+    CHECK_EQ(tokVal, std::string("s3cr3t"), "secret value merged back into env");
+    CHECK(!fs::exists(fs::path(root) / ".secrets"), ".secrets/ deleted after migrate");
+    // Idempotent: re-run does not throw, changes nothing.
     env.migrateLegacySecrets();
     tokVal.clear();
     for (auto& k : env.load("Dev").keys) if (k.key == "token") tokVal = k.value;
-    CHECK_EQ(tokVal, std::string("s3cr3t"), "migrate lần 2 no-op");
+    CHECK_EQ(tokVal, std::string("s3cr3t"), "migrate 2nd time no-op");
 }
 
 // ---------------- Engine resolve + validate ----------------
 static void test_engine(const std::string& root) {
     std::printf("[engine]\n");
-    // chuẩn bị env Global + active.
+    // prepare env Global + active.
     EnvironmentStore env(root);
     Environment g; g.name = "Global"; g.keys.push_back({"baseUrl", "http://global", true});
     env.save(g);
@@ -352,25 +352,25 @@ static void test_engine(const std::string& root) {
     engine.session().setActiveEnv("Stage");
 
     CHECK_EQ(engine.resolvePreview("{{baseUrl}}/x"), std::string("http://stage/x"),
-             "active env override Global");
+             "active env overrides Global");
     engine.session().setActiveEnv("Global");
     CHECK_EQ(engine.resolvePreview("{{baseUrl}}/x"), std::string("http://global/x"),
-             "fallback về Global");
+             "fallback to Global");
     CHECK_EQ(engine.resolvePreview("{{missing}}"), std::string("{{missing}}"),
-             "thiếu biến giữ literal");
+             "missing var keeps literal");
 
     auto vok = engine.validateJson("{\"a\": 1}");
-    CHECK(vok.ok, "JSON hợp lệ");
+    CHECK(vok.ok, "valid JSON");
     auto vbad = engine.validateJson("{\"a\": }");
-    CHECK(!vbad.ok, "JSON sai bị bắt");
-    CHECK(vbad.line >= 1, "có vị trí lỗi");
+    CHECK(!vbad.ok, "invalid JSON caught");
+    CHECK(vbad.line >= 1, "has error position");
 
-    // resolveRequest áp env + app-global timeout.
+    // resolveRequest applies env + app-global timeout.
     AppConfig ac; ac.defaultTimeoutMs = 12345; engine.appConfig().save(ac);
     RequestModel m; m.type = RequestType::Http; m.http.url = "{{baseUrl}}/u";
     auto rr = engine.resolveRequest(m);
-    CHECK_EQ(rr.model.http.url, std::string("http://global/u"), "resolveRequest resolve url");
-    CHECK_EQ(rr.model.http.settings.timeoutMs, 12345, "timeout lấy từ app-global khi chưa set");
+    CHECK_EQ(rr.model.http.url, std::string("http://global/u"), "resolveRequest resolves url");
+    CHECK_EQ(rr.model.http.settings.timeoutMs, 12345, "timeout from app-global when unset");
 }
 
 // ---------------- ResponseCache (RESPONSE_CACHE.md §10) ----------------
@@ -386,9 +386,9 @@ static ResponseRecord mkRec(size_t bodyLen, int status) {
 static void test_response_cache(const std::string& root) {
     std::printf("[response_cache]\n");
     CacheConfig cfg;
-    cfg.ramEffBytes = 4 * 1024;      // RAM cap nhỏ để kiểm LRU
+    cfg.ramEffBytes = 4 * 1024;      // small RAM cap to test LRU
     cfg.diskEffBytes = 1024 * 1024;
-    cfg.thresholdBytes = 1024;       // < 1KB -> ưu tiên RAM
+    cfg.thresholdBytes = 1024;       // < 1KB -> prefer RAM
     cfg.enabled = true;
     cfg.persist = true;
     std::string sdir = (fs::path(root) / ".session_cache_test").string();
@@ -397,36 +397,36 @@ static void test_response_cache(const std::string& root) {
 
     // small (< threshold) -> RAM + write-through disk.
     cache->put("a", mkRec(100, 200));
-    CHECK(cache->l1UsedBytes() > 0, "response nhỏ vào RAM");
-    CHECK(cache->l2UsedBytes() > 0, "response nhỏ write-through disk");
+    CHECK(cache->l1UsedBytes() > 0, "small response goes to RAM");
+    CHECK(cache->l2UsedBytes() > 0, "small response write-through disk");
     auto ga = cache->get("a");
-    CHECK(ga && ga->response.statusCode == 200, "get a trúng L1");
+    CHECK(ga && ga->response.statusCode == 200, "get a hits L1");
 
-    // large (>= threshold) -> disk only, KHÔNG vào RAM.
+    // large (>= threshold) -> disk only, NOT in RAM.
     std::uint64_t l1Before = cache->l1UsedBytes();
     cache->put("big", mkRec(4000, 200));
-    CHECK_EQ(cache->l1UsedBytes(), l1Before, "response lớn KHÔNG vào RAM");
+    CHECK_EQ(cache->l1UsedBytes(), l1Before, "large response NOT in RAM");
     auto gb = cache->get("big");
-    CHECK(gb && gb->response.body.size() == 4000, "get big trúng (từ disk)");
+    CHECK(gb && gb->response.body.size() == 4000, "get big hits (from disk)");
 
-    // LRU bound RAM: nhồi nhiều record nhỏ -> không vượt cap.
+    // LRU-bound RAM: stuff many small records -> does not exceed cap.
     for (int i = 0; i < 50; i++) cache->put("k" + std::to_string(i), mkRec(200, 200));
-    CHECK(cache->l1UsedBytes() <= cfg.ramEffBytes, "RAM cache không vượt cap (LRU evict)");
+    CHECK(cache->l1UsedBytes() <= cfg.ramEffBytes, "RAM cache does not exceed cap (LRU evict)");
 
-    // remove -> miss cả 2 tầng.
+    // remove -> miss in both tiers.
     cache->remove("big");
     CHECK(!cache->get("big"), "remove -> miss");
 
-    // restart: L1 trống, đọc lại từ disk; disk-hit nhỏ -> promote lên L1.
+    // restart: L1 empty, reload from disk; small disk-hit -> promote to L1.
     cache->put("small2", mkRec(50, 201));
     cache.reset();
     auto cache2 = ResponseCache::create(cfg, sdir);
-    CHECK_EQ(cache2->l1UsedBytes(), (std::uint64_t)0, "restart: L1 trống");
+    CHECK_EQ(cache2->l1UsedBytes(), (std::uint64_t)0, "restart: L1 empty");
     auto gs = cache2->get("small2");
-    CHECK(gs && gs->response.statusCode == 201, "restart: đọc small2 từ disk");
-    CHECK(cache2->l1UsedBytes() > 0, "disk-hit nhỏ -> promote lên RAM");
+    CHECK(gs && gs->response.statusCode == 201, "restart: read small2 from disk");
+    CHECK(cache2->l1UsedBytes() > 0, "small disk-hit -> promote to RAM");
 
-    // Driver giả: chứng minh trừu tượng hoá — facade chạy với ICacheDriver bất kỳ, không sửa ResponseCache.
+    // Fake driver: proves the abstraction — facade runs with any ICacheDriver, no ResponseCache changes.
     struct NullDriver : ICacheDriver {
         std::optional<ResponseRecord> get(const std::string&) override { return std::nullopt; }
         bool put(const std::string&, const ResponseRecord&, std::uint64_t) override { return false; }
@@ -438,27 +438,27 @@ static void test_response_cache(const std::string& root) {
     };
     ResponseCache nullCache(std::make_unique<NullDriver>(), std::make_unique<NullDriver>(), 1024);
     nullCache.put("x", mkRec(10, 200));
-    CHECK(!nullCache.get("x"), "NullCacheDriver cắm được vào facade (không đụng ResponseCache)");
+    CHECK(!nullCache.get("x"), "NullCacheDriver plugs into facade (without touching ResponseCache)");
 
     fs::remove_all(sdir);
 }
 
-// ENV trần/sàn kẹp user; user config được đọc đúng (RESPONSE_CACHE.md §1.2 + nghiệm thu §10).
+// ENV ceiling/floor clamps user; user config is read correctly (RESPONSE_CACHE.md §1.2 + acceptance §10).
 static void test_cache_config_clamp(const std::string& root) {
     std::printf("[cache_config]\n");
 
-    // (1) Qua getenv (ops): user > max -> kẹp về max.
+    // (1) Via getenv (ops): user > max -> clamp to max.
     {
         std::string cfgPath = (fs::path(root) / "appcfg_cache.json").string();
         AppConfig ac;
-        ac.ramCacheSizeMb = 256;     // user > env max -> phải kẹp
+        ac.ramCacheSizeMb = 256;     // user > env max -> must clamp
         ac.diskCacheSizeMb = 2048;
         AppConfigStore(cfgPath).save(ac);
-        // đọc lại từ file -> đảm bảo key snake_case round-trip + user value được nạp.
+        // reload from file -> ensure snake_case keys round-trip + user value loaded.
         AppConfig reread = AppConfigStore(cfgPath).load();
-        CHECK_EQ(reread.ramCacheSizeMb, 256, "ram_cache_size (user) round-trip qua codec");
-        CHECK_EQ(reread.diskCacheSizeMb, 2048, "disk_cache_size (user) round-trip qua codec");
-        CHECK(reread.cacheResponses && reread.cachePersist, "cache on/persist mặc định true (không phơi user)");
+        CHECK_EQ(reread.ramCacheSizeMb, 256, "ram_cache_size (user) round-trips through codec");
+        CHECK_EQ(reread.diskCacheSizeMb, 2048, "disk_cache_size (user) round-trips through codec");
+        CHECK(reread.cacheResponses && reread.cachePersist, "cache on/persist default true (not exposed to user)");
 
         setenv("DEED_RAM_CACHE_SIZE_MAX", "128", 1);
         setenv("DEED_DISK_CACHE_SIZE_MAX", "1024", 1);
@@ -468,8 +468,8 @@ static void test_cache_config_clamp(const std::string& root) {
         ecfg.appConfigPath = cfgPath;
         Engine eng(ecfg);
         const CacheConfig& cc = eng.cacheConfig();
-        CHECK_EQ(cc.ramEffBytes, (std::uint64_t)128 * 1024 * 1024, "ram kẹp về env max 128MB");
-        CHECK_EQ(cc.diskEffBytes, (std::uint64_t)1024 * 1024 * 1024, "disk kẹp về env max 1024MB");
+        CHECK_EQ(cc.ramEffBytes, (std::uint64_t)128 * 1024 * 1024, "ram clamped to env max 128MB");
+        CHECK_EQ(cc.diskEffBytes, (std::uint64_t)1024 * 1024 * 1024, "disk clamped to env max 1024MB");
         CHECK_EQ(cc.thresholdBytes, (std::uint64_t)256 * 1024, "threshold = 256KB");
 
         ApiResponse resp; resp.statusCode = 204; resp.body = "ok";
@@ -484,12 +484,12 @@ static void test_cache_config_clamp(const std::string& root) {
         unsetenv("DEED_RAM_CACHE_THRESHOLD_KB");
     }
 
-    // (2) Qua CacheLimits (.env do UI nạp): sàn MIN nâng user thấp; user trong [min,max] giữ nguyên.
+    // (2) Via CacheLimits (.env loaded by UI): MIN floor raises low user; user in [min,max] unchanged.
     {
         std::string cfgPath = (fs::path(root) / "appcfg_cache2.json").string();
         AppConfig ac;
-        ac.ramCacheSizeMb = 4;       // < min -> phải nâng lên min
-        ac.diskCacheSizeMb = 300;    // trong [min,max] -> giữ nguyên
+        ac.ramCacheSizeMb = 4;       // < min -> must raise to min
+        ac.diskCacheSizeMb = 300;    // in [min,max] -> unchanged
         AppConfigStore(cfgPath).save(ac);
 
         EngineConfig ecfg;
@@ -500,13 +500,13 @@ static void test_cache_config_clamp(const std::string& root) {
         ecfg.cacheLimits.thresholdKb = 128;
         Engine eng(ecfg);
         const CacheConfig& cc = eng.cacheConfig();
-        CHECK_EQ(cc.ramEffBytes, (std::uint64_t)16 * 1024 * 1024, "ram nâng lên sàn min 16MB");
-        CHECK_EQ(cc.diskEffBytes, (std::uint64_t)300 * 1024 * 1024, "disk (user) trong [min,max] giữ 300MB");
-        CHECK_EQ(cc.thresholdBytes, (std::uint64_t)128 * 1024, "threshold từ .env = 128KB");
+        CHECK_EQ(cc.ramEffBytes, (std::uint64_t)16 * 1024 * 1024, "ram raised to min floor 16MB");
+        CHECK_EQ(cc.diskEffBytes, (std::uint64_t)300 * 1024 * 1024, "disk (user) in [min,max] keeps 300MB");
+        CHECK_EQ(cc.thresholdBytes, (std::uint64_t)128 * 1024, "threshold from .env = 128KB");
     }
 }
 
-// App-config defaults từ .env (EngineConfig.appDefaults) khi config.json thiếu key.
+// App-config defaults from .env (EngineConfig.appDefaults) when config.json is missing a key.
 static void test_app_config_defaults(const std::string& root) {
     std::printf("[app_config_defaults]\n");
     std::string cfgPath = (fs::path(root) / "appcfg_defaults.json").string();
@@ -525,25 +525,25 @@ static void test_app_config_defaults(const std::string& root) {
     ec.cacheLimits.diskMinMb = 1; ec.cacheLimits.diskMaxMb = 1000;
     Engine eng(ec);
 
-    // Chưa có config.json -> load trả defaults (.env).
+    // No config.json yet -> load returns defaults (.env).
     AppConfig c = eng.appConfig().load();
-    CHECK_EQ(c.defaultTimeoutMs, 12345, "default_timeout_ms từ .env khi chưa có config");
-    CHECK(!c.verifyTls, "verify_tls default từ .env");
-    CHECK_EQ(c.fontName, std::string("Courier"), "font_name default từ .env");
-    CHECK_EQ(c.fontSize, 17, "font_size default từ .env");
-    CHECK_EQ(c.ramCacheSizeMb, 33, "ram_cache_size default từ .env");
-    CHECK_EQ(c.diskCacheSizeMb, 77, "disk_cache_size default từ .env");
+    CHECK_EQ(c.defaultTimeoutMs, 12345, "default_timeout_ms from .env when no config");
+    CHECK(!c.verifyTls, "verify_tls default from .env");
+    CHECK_EQ(c.fontName, std::string("Courier"), "font_name default from .env");
+    CHECK_EQ(c.fontSize, 17, "font_size default from .env");
+    CHECK_EQ(c.ramCacheSizeMb, 33, "ram_cache_size default from .env");
+    CHECK_EQ(c.diskCacheSizeMb, 77, "disk_cache_size default from .env");
     CHECK_EQ(eng.cacheConfig().ramEffBytes, (std::uint64_t)33 * 1024 * 1024,
-             "cache dùng ram_cache_size default từ .env");
+             "cache uses ram_cache_size default from .env");
 
-    // config.json chỉ có 1 key -> các key thiếu rơi về defaults (.env).
+    // config.json has only 1 key -> missing keys fall back to defaults (.env).
     { std::ofstream o(cfgPath); o << "{\"font_size\": 20}"; }
     AppConfigStore st(cfgPath);
     st.setDefaults(ec.appDefaults);
     AppConfig pc = st.load();
-    CHECK_EQ(pc.fontSize, 20, "key có trong file -> dùng giá trị file");
-    CHECK_EQ(pc.defaultTimeoutMs, 12345, "key thiếu -> rơi về default .env");
-    CHECK_EQ(pc.ramCacheSizeMb, 33, "key thiếu -> ram default .env");
+    CHECK_EQ(pc.fontSize, 20, "key present in file -> use file value");
+    CHECK_EQ(pc.defaultTimeoutMs, 12345, "missing key -> falls back to .env default");
+    CHECK_EQ(pc.ramCacheSizeMb, 33, "missing key -> ram default .env");
     fs::remove(cfgPath);
 }
 
@@ -552,7 +552,7 @@ static void test_importers() {
     std::printf("[importers]\n");
     CurlImporter curl;
     CHECK(curl.canHandle("curl http://x"), "canHandle curl");
-    CHECK(!curl.canHandle("wget http://x"), "không nhận wget");
+    CHECK(!curl.canHandle("wget http://x"), "does not accept wget");
 
     auto r = curl.parse("curl -X POST 'http://api.test/users?q=1' "
                         "-H 'Content-Type: application/json' "
@@ -560,17 +560,17 @@ static void test_importers() {
                         "-d '{\"name\":\"Alice\"}'");
     CHECK(r.ok, "parse curl ok");
     CHECK_EQ(r.model.http.method, std::string("POST"), "method POST");
-    CHECK_EQ(r.model.http.url, std::string("http://api.test/users?q=1"), "url giữ nguyên");
-    CHECK_EQ(r.model.http.body.mode, std::string("json"), "body json từ content-type");
+    CHECK_EQ(r.model.http.url, std::string("http://api.test/users?q=1"), "url preserved");
+    CHECK_EQ(r.model.http.body.mode, std::string("json"), "body json from content-type");
     CHECK_EQ(r.model.http.body.json, std::string("{\"name\":\"Alice\"}"), "body content");
     CHECK_EQ(r.model.http.headers.size(), size_t(1), "1 header (Authorization -> Auth)");
     CHECK_EQ(r.model.http.auth.type, std::string("bearer"), "Authorization Bearer -> bearer auth");
-    CHECK_EQ(r.model.http.auth.bearerToken, std::string("abc"), "bearer token vào nút Auth");
+    CHECK_EQ(r.model.http.auth.bearerToken, std::string("abc"), "bearer token into Auth tab");
 
     auto rb = curl.parse("curl -u user:pass http://api.test/secure");
     CHECK_EQ(rb.model.http.auth.type, std::string("basic"), "-u -> basic auth");
     CHECK_EQ(rb.model.http.auth.basicUsername, std::string("user"), "basic user");
-    CHECK_EQ(rb.model.http.method, std::string("GET"), "không body -> GET");
+    CHECK_EQ(rb.model.http.method, std::string("GET"), "no body -> GET");
 
     GrpcImporter g;
     CHECK(g.canHandle("grpcurl -plaintext localhost:50051 pkg.Svc/M"), "canHandle grpcurl");
@@ -584,18 +584,18 @@ static void test_importers() {
     CHECK_EQ(gr.model.grpc.metadata.size(), size_t(1), "1 metadata");
 
     auto gr2 = g.parse("grpcs://localhost:50051/pkg.Service/Method");
-    CHECK(gr2.ok, "parse chuỗi gọn ok");
+    CHECK(gr2.ok, "parse compact string ok");
     CHECK_EQ(gr2.model.grpc.tls.enabled, true, "grpcs -> tls on");
-    CHECK_EQ(gr2.model.grpc.service, std::string("pkg.Service"), "service từ chuỗi gọn");
+    CHECK_EQ(gr2.model.grpc.service, std::string("pkg.Service"), "service from compact string");
 }
 
 static void test_field_codec() {
     std::printf("[field_codec]\n");
     std::string body = "{\"a\":1}";
-    CHECK(fieldcodec::formatJson(body, true).find('\n') != std::string::npos, "pretty có xuống dòng");
-    CHECK_EQ(fieldcodec::formatJson(body, false), std::string("{\"a\":1}"), "compact bỏ khoảng trắng");
+    CHECK(fieldcodec::formatJson(body, true).find('\n') != std::string::npos, "pretty has newlines");
+    CHECK_EQ(fieldcodec::formatJson(body, false), std::string("{\"a\":1}"), "compact drops whitespace");
     std::string enc = fieldcodec::jsonEncodeString(body);
-    CHECK(enc.front() == '"' && enc.back() == '"', "encode -> string literal có nháy");
+    CHECK(enc.front() == '"' && enc.back() == '"', "encode -> string literal has quotes");
     CHECK_EQ(fieldcodec::jsonDecodeString(enc), body, "decode(encode(x)) == x");
 }
 
@@ -611,18 +611,18 @@ static void test_curl_export() {
     m.http.body.mode = "json";
     m.http.body.json = "{\"a\":1}";
     std::string c = toCurl(m);
-    CHECK(c.find("curl -X POST") != std::string::npos, "có method");
-    CHECK(c.find("api.test/users") != std::string::npos, "có url");
-    CHECK(c.find("--data") != std::string::npos, "có body");
-    CHECK(c.find("X-Token: abc123") != std::string::npos, "có header X-Token");
-    CHECK(c.find("q=hello") != std::string::npos, "có param q");
+    CHECK(c.find("curl -X POST") != std::string::npos, "has method");
+    CHECK(c.find("api.test/users") != std::string::npos, "has url");
+    CHECK(c.find("--data") != std::string::npos, "has body");
+    CHECK(c.find("X-Token: abc123") != std::string::npos, "has X-Token header");
+    CHECK(c.find("q=hello") != std::string::npos, "has param q");
 
     GrpcRequest& g = m.grpc;
     m.type = RequestType::Grpc;
     g.target = "localhost:50051"; g.service = "pkg.Svc"; g.method = "M"; g.message = "{\"id\":\"1\"}";
     std::string gc = toCurl(m);
     CHECK(gc.find("grpcurl") != std::string::npos, "grpc -> grpcurl");
-    CHECK(gc.find("pkg.Svc/M") != std::string::npos, "có service/method");
+    CHECK(gc.find("pkg.Svc/M") != std::string::npos, "has service/method");
 }
 
 int main() {

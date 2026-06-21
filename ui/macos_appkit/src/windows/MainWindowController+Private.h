@@ -1,13 +1,14 @@
-// MainWindowController+Private.h — class extension dùng CHUNG cho mọi file cài đặt của
-// MainWindowController (file chính + các category Tree/Editor/Send/Config/Stress).
+// MainWindowController+Private.h — class extension SHARED by every file implementing
+// MainWindowController (the main file + the Tree/Editor/Send/Config/Stress categories).
 //
-// Vì sao cần: MainWindowController quá dài nên tách thành nhiều category ở file .mm riêng.
-// Category KHÔNG khai báo được ivar; ngược lại ivar khai báo trong @implementation chỉ thấy
-// trong CHÍNH file đó. Giải pháp chuẩn (runtime 64-bit macOS): khai báo TẤT CẢ ivar trong
-// MỘT class extension đặt ở header này, mọi file cài đặt #import -> đều truy cập được ivar.
+// Why needed: MainWindowController is too long, so it's split into several categories in
+// separate .mm files. Categories CANNOT declare ivars; conversely ivars declared in an
+// @implementation are visible only in THAT file. Standard fix (64-bit macOS runtime):
+// declare ALL ivars in ONE class extension in this header; every implementing file #imports it
+// and gets access to the ivars.
 //
-// Header này cũng gom các import + helper N()/S() dùng chung -> mỗi category chỉ cần
-// #import file này (cộng vài header riêng nếu cần).
+// This header also gathers the shared imports + N()/S() helpers -> each category just needs to
+// #import this file (plus a few of its own headers if needed).
 #pragma once
 
 #import "windows/MainWindowController.h"
@@ -45,13 +46,13 @@
 #include "core/persistence/request_naming.hpp"
 #include "core/types.hpp"
 
-// Cầu nối std::string <-> NSString dùng khắp nơi.
+// std::string <-> NSString bridge used everywhere.
 static inline NSString *N(const std::string &s) { return [NSString stringWithUTF8String:s.c_str()]; }
 static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) : std::string(); }
 
-// Conformance protocol gắn vào ĐÚNG category cài đặt -> không có cảnh báo
-// -Wprotocol / -Wobjc-protocol-method-implementation, mà mọi call site #import header này
-// đều thấy self conform (vd dựng UiDelegateBridge cần <CoreResponseSink>).
+// Conformance protocols attached to the category that implements them -> no
+// -Wprotocol / -Wobjc-protocol-method-implementation warnings, while every call site that
+// #imports this header sees self conform (e.g. building UiDelegateBridge needs <CoreResponseSink>).
 @interface MainWindowController (Tree) <NSOutlineViewDataSource, NSOutlineViewDelegate>
 @end
 @interface MainWindowController (Editor) <NSTextFieldDelegate, NSTextViewDelegate>
@@ -67,18 +68,18 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     core::RequestModel _model;
     std::string _root;
     std::string _currentRel;
-    std::string _currentId;   // id request đang mở (định danh ổn định)
+    std::string _currentId;   // id of open request (stable identifier)
     uint64_t _currentHandle;
     BOOL _hasRequest;
-    std::vector<core::GrpcMethodInfo> _grpcMethods; // song song với item của _servicePopup
-    uint64_t _grpcMethodsReqSeq;  // chống race: chỉ áp kết quả listGrpcMethods mới nhất
-    uint64_t _loadReqSeq;         // token: chỉ áp model của lần loadRequestAtRel MỚI NHẤT (nạp async)
+    std::vector<core::GrpcMethodInfo> _grpcMethods; // parallel to _servicePopup items
+    uint64_t _grpcMethodsReqSeq;  // race guard: apply only the latest listGrpcMethods result
+    uint64_t _loadReqSeq;         // token: apply only the LATEST loadRequestAtRel model (async load)
 
     // Chrome + containers
     NSWindow *_window;
     OS9TitleBar *_titleBar;
-    NSView *_mainPane;     // màn chính
-    NSView *_configPane;   // màn cấu hình (ENV + Setting)
+    NSView *_mainPane;     // main screen
+    NSView *_configPane;   // config screen (ENV + Setting)
     BOOL _configMode;
 
     // (1)(2) tree
@@ -87,35 +88,35 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     NSScrollView *_treeScroll;
     DeedOutlineView *_tree;
     NSMutableArray<TreeItem *> *_roots;
-    NSMutableSet<NSString *> *_expandedFolders; // relPath các folder đang mở (giữ qua reload)
-    BOOL _revealingSelection;                    // đang chọn do reveal -> bỏ qua auto-load
+    NSMutableSet<NSString *> *_expandedFolders; // relPaths of expanded folders (kept across reload)
+    BOOL _revealingSelection;                    // selecting due to reveal -> skip auto-load
 
     // (3) request editor
     OS9SerratedInset *_reqInset;
-    SciTextView *_reqText;   // editor request (Scintilla)
+    SciTextView *_reqText;   // request editor (Scintilla)
     NSMutableArray<NSString *> *_reqBuffers;
     NSMutableArray<OS9BevelButton *> *_reqTabButtons;
     NSArray<NSString *> *_reqTabTitles;
     NSInteger _activeReqTab;
-    // VIỆC 1: nhớ tab theo TỪNG pane bằng KHOÁ ngữ nghĩa (title), KHÔNG theo index, KHÔNG
-    // nằm trong RequestModel -> giữ qua chuyển request. nil/không-khớp -> fallback tab đầu.
+    // TASK 1: remember active tab PER pane via a semantic KEY (title), NOT by index, NOT
+    // stored in RequestModel -> persists across request switches. nil/no-match -> fall back to first tab.
     NSString *_leftPaneActiveTabKey;
 
     // (4) response
     OS9SerratedInset *_respInset;
-    SciTextView *_respText;  // editor response (Scintilla, read-only)
+    SciTextView *_respText;  // response editor (Scintilla, read-only)
     NSMutableArray<NSString *> *_respBuffers;
     NSMutableArray<OS9BevelButton *> *_respTabButtons;
     NSArray<NSString *> *_respTabTitles;
     NSInteger _activeRespTab;
-    NSString *_rightPaneActiveTabKey;   // khoá tab pane phải (nhớ riêng pane này)
+    NSString *_rightPaneActiveTabKey;   // active tab key for right pane (remembered separately)
     OS9BevelButton *_prettyButton;
     NSInteger _prettyMode; // 0=Pretty 1=Raw 2=Encode 3=Decode
-    OS9BevelButton *_curlButton;      // copy request hiện tại as cURL
+    OS9BevelButton *_curlButton;      // copy current request as cURL
     core::ApiResponse _lastResp;
     BOOL _hasResp;
 
-    // status line (trên panes, dưới tab buttons)
+    // status line (above panes, below tab buttons)
     OS9SerratedInset *_statusBar;
     NSTextField *_statusLabel;
 
@@ -124,40 +125,40 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     OS9BevelButton *_envButton;
     OS9BevelButton *_sendButton;
     OS9BevelButton *_cancelButton;
-    OS9PopupButton *_protoPopup;     // gRPC: chọn nguồn proto (Reflection | .proto)
-    OS9PopupButton *_servicePopup;   // gRPC: chọn service/RPC (trước nút Send)
+    OS9PopupButton *_protoPopup;     // gRPC: pick proto source (Reflection | .proto)
+    OS9PopupButton *_servicePopup;   // gRPC: pick service/RPC (before the Send button)
     OS9PopupButton *_methodPopup;
-    OS9SerratedInset *_urlInset; // khung input răng cưa retro bọc ô URL
+    OS9SerratedInset *_urlInset; // retro serrated input frame wrapping the URL field
     NSTextField *_urlField;
 
-    // dividers + bề rộng pane
+    // dividers + pane widths
     OS9Divider *_divTree;
     OS9Divider *_divResp;
     CGFloat _treeW;
     CGFloat _reqW;
-    NSRect _preZoomFrame; // lưu frame trước khi phóng to (để thu nhỏ lại)
+    NSRect _preZoomFrame; // frame saved before zooming (to restore on un-zoom)
 
-    // toast (stack góc phải-dưới, đẩy lên)
+    // toast (stack at bottom-right, pushed upward)
     NSMutableArray<OS9Toast *> *_toasts;
 
-    // config screen (2 màn riêng: Environments / Settings) — tiêu đề hiển thị ở title bar
+    // config screen (2 separate screens: Environments / Settings) — title shown in the title bar
     OS9BevelButton *_backButton;
     NSInteger _configKind; // 0 = Environments, 1 = Settings
     EnvWindowController *_envVC;
-    OS9SerratedInset *_settingInset;   // viền răng cưa bao editor Settings (giống các pane khác)
-    SciTextView *_settingEditor;   // editor JSON cho Settings (Scintilla — lexer JSON + theme Platinum)
+    OS9SerratedInset *_settingInset;   // serrated border around the Settings editor (like the other panes)
+    SciTextView *_settingEditor;   // JSON editor for Settings (Scintilla — JSON lexer + Platinum theme)
 
     BOOL _sending;
-    NSTimer *_spinTimer;   // animate icon loading trong nút Send
+    NSTimer *_spinTimer;   // animate loading icon in the Send button
     CGFloat _spinPhase;
-    NSUInteger _urlPrevLen; // độ dài URL lần trước -> nhận biết "dán" (tăng đột biến)
-    NSTextView *_fieldEditor; // field editor dùng chung, tắt hết auto-features
-    NSString *_bodyMode;    // mode body hiện tại: json | binary(file) | form-urlencoded(form)
+    NSUInteger _urlPrevLen; // previous URL length -> detect "paste" (sudden jump)
+    NSTextView *_fieldEditor; // shared field editor, all auto-features disabled
+    NSString *_bodyMode;    // current body mode: json | binary(file) | form-urlencoded(form)
 }
 @end
 
-// Khai báo MỌI method nội bộ để các category gọi chéo file được (ARC cần thấy selector).
-// Sinh tự động từ các định nghĩa trong MainWindowController*.mm.
+// Declare ALL internal methods so categories can call across files (ARC must see the selectors).
+// Auto-generated from the definitions in MainWindowController*.mm.
 @interface MainWindowController (Internal)
 - (void)showWindow;
 - (void)restoreLastCollection;
@@ -170,7 +171,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)buildEditors;
 - (NSString *)prettyTitle;
 - (NSString *)applyView:(const std::string &)body;
-- (NSString *)applyView:(const std::string &)body mode:(int)mode;   // U2: không đọc ivar -> chạy nền được
+- (NSString *)applyView:(const std::string &)body mode:(int)mode;   // U2: reads no ivars -> safe off main thread
 - (void)buildStatusBar;
 - (void)buildToolbar;
 - (void)buildDividers;
@@ -188,13 +189,13 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)loadChildrenOf:(TreeItem *)folder;
 - (void)reloadTree;
 - (void)restoreExpansion:(NSArray<TreeItem *> *)items;
-// Cập nhật tăng dần (§T1): chỉ quét lại cấp `parentRel` ("" = gốc), giữ nguyên các TreeItem
-// (và con đã nạp) của nhánh khác -> không re-scan toàn bộ folder đang mở.
+// Incremental update (§T1): re-scan only level `parentRel` ("" = root), keeping the TreeItems
+// (and already-loaded children) of other branches -> avoids re-scanning every open folder.
 - (void)refreshTreeLevel:(NSString *)parentRel;
-- (void)reselectTreeByRel:(NSString *)rel;   // chọn lại node theo relPath sau cập nhật (không auto-load)
+- (void)reselectTreeByRel:(NSString *)rel;   // reselect node by relPath after update (no auto-load)
 - (TreeItem *)loadedFolderItemForRel:(NSString *)rel;
 - (void)mergeScanLevel:(const std::string &)rel into:(NSMutableArray<TreeItem *> *)items;
-// §T3: đổi prefix relPath trong _expandedFolders khi rename/move folder để giữ trạng thái mở.
+// §T3: remap relPath prefix in _expandedFolders on folder rename/move to keep expansion state.
 - (void)remapExpandedFoldersFrom:(NSString *)oldRel to:(NSString *)newRel;
 - (void)treeClicked:(id)sender;
 - (void)treeDoubleClicked:(id)sender;
@@ -213,7 +214,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (BOOL)outlineView:(NSOutlineView *)ov acceptDrop:(id<NSDraggingInfo>)info item:(id)item childIndex:(NSInteger)idx;
 - (void)cancelInFlightForSwitch;
 - (void)loadRequestAtRel:(NSString *)rel;
-- (void)applyLoadedModel:(const core::RequestModel &)model rel:(NSString *)rel;  // áp model đã nạp (trên main)
+- (void)applyLoadedModel:(const core::RequestModel &)model rel:(NSString *)rel;  // apply loaded model (on main)
 - (void)showCachedResponseForId:(const std::string &)reqId;
 - (void)populateEditorsFromModel;
 - (NSInteger)tabIndexForKey:(NSString *)key inTitles:(NSArray<NSString *> *)titles;
@@ -263,7 +264,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)startSendSpinner;
 - (void)stopSendSpinner;
 - (void)rebuildResponseBuffers;
-- (void)rebuildResponseBuffersAsync;   // U2: format response ngoài main thread
+- (void)rebuildResponseBuffersAsync;   // U2: format response off the main thread
 - (NSArray<NSString *> *)computeResponseBuffersFor:(const core::ApiResponse &)r
                                               type:(core::RequestType)type
                                         prettyMode:(int)prettyMode;

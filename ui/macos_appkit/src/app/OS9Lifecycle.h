@@ -1,24 +1,24 @@
-// OS9Lifecycle — hợp đồng teardown first-responder / input-context (docs/CRASH_FIX_LIFECYCLE.md §2).
+// OS9Lifecycle — first-responder / input-context teardown contract (docs/CRASH_FIX_LIFECYCLE.md §2).
 //
-// Crash gốc: một text view/field còn là first responder bị xoá nội dung/huỷ hoặc window
-// chứa nó bị đóng MÀ KHÔNG deactivate NSTextInputContext trước -> vòng sự kiện kế tiếp
-// -[NSApplication updateWindows] kích hoạt lại input context đã free -> EXC_BAD_ACCESS
-// (nặng hơn khi gõ IME tiếng Việt vì đường IMK/TSM bám lâu hơn).
+// Root crash: a text view/field still acting as first responder gets its content cleared/destroyed,
+// or the window holding it is closed, WITHOUT first deactivating NSTextInputContext -> the next
+// event loop's -[NSApplication updateWindows] re-activates the freed input context -> EXC_BAD_ACCESS
+// (worse with Vietnamese IME input since the IMK/TSM path lingers longer).
 //
-// Quy tắc bất biến: TRƯỚC khi huỷ/đổi/xoá text view/field, hoặc đóng window chứa text field
-// -> gọi OS9SafeEndEditing trong khi object còn SỐNG để commit + nhả input context sạch.
+// Invariant: BEFORE destroying/changing/clearing a text view/field, or closing a window holding a
+// text field -> call OS9SafeEndEditing while the object is still ALIVE to commit + release the input context cleanly.
 #import <Cocoa/Cocoa.h>
 
-// Goi TRUOC khi go/replace text view, hoac truoc khi dong window co text field.
-// dyingViewOrNil == nil  -> resign first responder vô điều kiện (đóng window / xoá nhiều view).
-// dyingViewOrNil != nil  -> chỉ resign nếu first responder LÀ view đó (hoặc con của nó).
+// Call BEFORE clearing/replacing a text view, or before closing a window with a text field.
+// dyingViewOrNil == nil  -> resign first responder unconditionally (closing window / removing many views).
+// dyingViewOrNil != nil  -> resign only if the first responder IS that view (or a descendant of it).
 static inline void OS9SafeEndEditing(NSWindow *w, NSView *dyingViewOrNil) {
     if (!w) return;
-    [w endEditingFor:nil];                 // commit + nhả field editor (NSTextField)
+    [w endEditingFor:nil];                 // commit + release field editor (NSTextField)
     id fr = w.firstResponder;
     BOOL frIsDying = (dyingViewOrNil && (fr == dyingViewOrNil ||
                        ([fr isKindOfClass:NSView.class] && [(NSView *)fr isDescendantOf:dyingViewOrNil])));
     if (dyingViewOrNil == nil || frIsDying) {
-        [w makeFirstResponder:nil];        // deactivate NSTextInputContext của view sắp chết
+        [w makeFirstResponder:nil];        // deactivate the dying view's NSTextInputContext
     }
 }

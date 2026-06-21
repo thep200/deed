@@ -1,7 +1,7 @@
-// JsonEditorBehavior — các hành vi soạn JSON cho Scintilla (docs/EDITOR_BEHAVIORS.md).
-// Chỉ dùng cho ô SOẠN (editable); response read-only không cần.
-// Gom logic auto-close / auto-indent / skip-over / brace-match vào một lớp,
-// tách khỏi phần dựng UI. SciTextView route SCN_CHARADDED/SCN_UPDATEUI vào đây.
+// JsonEditorBehavior — JSON editing behaviors for Scintilla (docs/EDITOR_BEHAVIORS.md).
+// Only for EDITABLE fields; read-only responses don't need it.
+// Gathers auto-close / auto-indent / skip-over / brace-match logic into one class,
+// separate from UI construction. SciTextView routes SCN_CHARADDED/SCN_UPDATEUI here.
 #import <Cocoa/Cocoa.h>
 
 @class ScintillaView;
@@ -9,11 +9,11 @@
 @interface JsonEditorBehavior : NSObject
 - (instancetype)initWithScintillaView:(ScintillaView *)sci;
 
-@property(nonatomic) BOOL autoClose;    // tự đóng cặp () [] {} "" + skip-over (mặc định YES)
-@property(nonatomic) BOOL autoIndent;   // tự thụt dòng khi Enter (mặc định YES)
-@property(nonatomic) BOOL braceMatch;   // tô sáng cặp ngoặc khớp (mặc định YES)
+@property(nonatomic) BOOL autoClose;    // auto-close pairs () [] {} "" + skip-over (default YES)
+@property(nonatomic) BOOL autoIndent;   // auto-indent on Enter (default YES)
+@property(nonatomic) BOOL braceMatch;   // highlight matching brace pair (default YES)
 
-- (void)handleCharAdded:(unsigned)ch;   // gọi từ SCN_CHARADDED
-- (void)updateBraceMatch;               // gọi từ SCN_UPDATEUI
-- (void)applyHighlightStyles;           // màu brace-light/bad (gọi sau khi set theme)
+- (void)handleCharAdded:(unsigned)ch;   // called from SCN_CHARADDED
+- (void)updateBraceMatch;               // called from SCN_UPDATEUI
+- (void)applyHighlightStyles;           // brace-light/bad colors (call after setting theme)
 @end

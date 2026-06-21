@@ -14,7 +14,7 @@
         _autoClose = YES;
         _autoIndent = YES;
         _braceMatch = YES;
-        // Thụt bằng SPACE (JSON pretty), 2 khoảng / cấp.
+        // Indent with SPACES (JSON pretty), 2 spaces per level.
         [self msg:SCI_SETUSETABS w:0 l:0];
         [self msg:SCI_SETINDENT w:2 l:0];
     }
@@ -28,7 +28,7 @@
 #pragma mark - (f) brace-match
 
 - (void)applyHighlightStyles {
-    // Cặp khớp: đậm + nền vàng nhạt; cặp hỏng: chữ đỏ.
+    // Matched pair: bold + pale yellow background; broken pair: red text.
     [self msg:SCI_STYLESETBOLD w:STYLE_BRACELIGHT l:1];
     [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_BRACELIGHT
                      value:[NSColor colorWithCalibratedRed:0.0 green:0.0 blue:0.55 alpha:1]];
@@ -46,7 +46,7 @@ static BOOL IsBrace(char c) {
 - (void)updateBraceMatch {
     if (!_braceMatch) return;
     sptr_t pos = [self pos];
-    // Xét ngoặc ngay TẠI caret rồi đến ngay TRƯỚC caret (như đa số editor).
+    // Check the brace AT the caret, then just BEFORE the caret (like most editors).
     sptr_t cands[2] = { pos, pos - 1 };
     for (int i = 0; i < 2; i++) {
         sptr_t p = cands[i];
@@ -54,9 +54,9 @@ static BOOL IsBrace(char c) {
         if (!IsBrace([self charAt:p])) continue;
         sptr_t m = [self msg:SCI_BRACEMATCH w:(uptr_t)p l:0];
         if (m != -1) { [self msg:SCI_BRACEHIGHLIGHT w:(uptr_t)p l:m]; return; }
-        [self msg:SCI_BRACEBADLIGHT w:(uptr_t)p l:0]; return;   // có ngoặc nhưng không khớp
+        [self msg:SCI_BRACEBADLIGHT w:(uptr_t)p l:0]; return;   // brace present but unmatched
     }
-    [self msg:SCI_BRACEHIGHLIGHT w:(uptr_t)-1 l:(sptr_t)-1];     // không có ngoặc -> xoá sáng
+    [self msg:SCI_BRACEHIGHLIGHT w:(uptr_t)-1 l:(sptr_t)-1];     // no brace -> clear highlight
 }
 
 #pragma mark - (b)+(c) char added: auto-close / skip-over / auto-indent
@@ -65,7 +65,7 @@ static BOOL IsBrace(char c) {
     if (ch == '\n' || ch == '\r') { if (_autoIndent) [self autoIndentNewLine]; return; }
     if (!_autoClose) return;
 
-    // (c) skip-over: gõ closer mà bên phải đã sẵn closer đó -> nhảy qua, không để dư.
+    // (c) skip-over: typing a closer when that closer is already to the right -> jump over it, no duplicate.
     if (ch==')' || ch==']' || ch=='}' || ch=='"') {
         if ([self skipOverCloser:(char)ch]) return;
     }
@@ -79,26 +79,26 @@ static BOOL IsBrace(char c) {
         default: return;
     }
     sptr_t pos = [self pos];
-    [self msg:SCI_BEGINUNDOACTION w:0 l:0];     // Ctrl+Z xoá cả cặp một lần
+    [self msg:SCI_BEGINUNDOACTION w:0 l:0];     // Ctrl+Z removes the whole pair at once
     [self msg:SCI_INSERTTEXT w:(uptr_t)pos l:(sptr_t)close];
-    [self msg:SCI_SETSEL w:(uptr_t)pos l:pos];  // caret nằm giữa cặp
+    [self msg:SCI_SETSEL w:(uptr_t)pos l:pos];  // caret sits between the pair
     [self msg:SCI_ENDUNDOACTION w:0 l:0];
 }
 
-// Ký tự vừa gõ (closer) đã được chèn ở pos-1; nếu ngay sau caret cũng là closer đó
-// (vd closer auto-close trước đó) -> xoá cái vừa gõ, đẩy caret qua closer có sẵn.
+// The just-typed character (closer) was inserted at pos-1; if right after the caret is that same
+// closer (e.g. one previously auto-closed) -> delete the just-typed one, push the caret past the existing closer.
 - (BOOL)skipOverCloser:(char)c {
     sptr_t pos = [self pos];
     if ([self charAt:pos] != c) return NO;
     [self msg:SCI_BEGINUNDOACTION w:0 l:0];
-    [self msg:SCI_DELETERANGE w:(uptr_t)(pos - 1) l:1];  // bỏ closer vừa gõ
-    [self msg:SCI_SETSEL w:(uptr_t)pos l:pos];           // caret sau closer có sẵn
+    [self msg:SCI_DELETERANGE w:(uptr_t)(pos - 1) l:1];  // drop the just-typed closer
+    [self msg:SCI_SETSEL w:(uptr_t)pos l:pos];           // caret after the existing closer
     [self msg:SCI_ENDUNDOACTION w:0 l:0];
     return YES;
 }
 
-// Heuristic nhẹ (thay cho string-awareness đầy đủ): chỉ auto-close " khi bên phải
-// là ranh giới hợp lý (rỗng/space/, } ] :) -> tránh đóng " giữa từ đang gõ dở.
+// Light heuristic (instead of full string-awareness): only auto-close " when the right side
+// is a reasonable boundary (empty/space/, } ] :) -> avoid closing " in the middle of a word being typed.
 - (BOOL)shouldCloseQuote {
     char next = [self charAt:[self pos]];
     return next==0 || next==' ' || next=='\t' || next=='\n' || next=='\r' ||
@@ -107,7 +107,7 @@ static BOOL IsBrace(char c) {
 
 #pragma mark - (b) auto-indent
 
-// Ký tự cuối (bỏ khoảng trắng) của 1 dòng — để biết dòng trước kết thúc bằng { hay [.
+// Last non-whitespace character of a line — to know whether the previous line ends with { or [.
 - (char)lastNonSpaceOfLine:(sptr_t)line {
     sptr_t start = [self msg:SCI_POSITIONFROMLINE w:(uptr_t)line l:0];
     sptr_t end   = [self msg:SCI_GETLINEENDPOSITION w:(uptr_t)line l:0];
@@ -126,14 +126,14 @@ static BOOL IsBrace(char c) {
     sptr_t unit = [self msg:SCI_GETINDENT w:0 l:0]; if (unit <= 0) unit = 2;
     sptr_t prevIndent = [self msg:SCI_GETLINEINDENTATION w:(uptr_t)(line - 1) l:0];
 
-    char opener = [self lastNonSpaceOfLine:line - 1];   // dòng vừa xuống dòng từ đó
-    char closer = [self charAt:pos];                    // ký tự ngay sau caret
+    char opener = [self lastNonSpaceOfLine:line - 1];   // the line we just broke from
+    char closer = [self charAt:pos];                    // character right after the caret
     BOOL openPair = (opener=='{' || opener=='[');
     BOOL matchedPair = (opener=='{' && closer=='}') || (opener=='[' && closer==']');
 
     [self msg:SCI_BEGINUNDOACTION w:0 l:0];
     if (matchedPair) {
-        // Enter giữa {|} -> tạo dòng rỗng thụt sâu, đẩy } xuống dòng riêng cùng cấp mở.
+        // Enter between {|} -> create an empty deeper-indented line, push } onto its own line at the opener's level.
         [self msg:SCI_SETLINEINDENTATION w:(uptr_t)line l:prevIndent + unit];
         sptr_t ip = [self msg:SCI_GETLINEINDENTPOSITION w:(uptr_t)line l:0];
         [self msg:SCI_INSERTTEXT w:(uptr_t)ip l:(sptr_t)"\n"];

@@ -24,7 +24,7 @@ std::string lower(std::string s) {
     return s;
 }
 
-// Tách "key: value" của -H.
+// Split "key: value" from -H.
 KeyValue parseHeader(const std::string& raw) {
     KeyValue kv;
     kv.enabled = true;
@@ -40,7 +40,7 @@ bool isJsonLike(const std::string& s) {
     return !t.empty() && (t.front() == '{' || t.front() == '[');
 }
 
-// Decode base64 (bỏ qua ký tự lạ/whitespace; dừng ở '='). Dùng để tách user:pass của Basic.
+// Decode base64 (skip unknown chars/whitespace; stop at '='). Used to split Basic user:pass.
 std::string base64Decode(const std::string& in) {
     static const std::string chars =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -58,8 +58,8 @@ std::string base64Decode(const std::string& in) {
     return out;
 }
 
-// Đưa giá trị header Authorization vào nút Auth của pane (thay vì để ở danh sách headers).
-// Bearer -> bearer token; Basic -> giải mã base64 thành user:pass; scheme khác -> apikey header.
+// Route the Authorization header value into the pane's Auth tab (instead of the headers list).
+// Bearer -> bearer token; Basic -> base64-decode to user:pass; other scheme -> apikey header.
 void applyAuthHeader(HttpRequest& h, const std::string& rawValue) {
     std::string v = trim(rawValue);
     size_t sp = v.find(' ');
@@ -75,7 +75,7 @@ void applyAuthHeader(HttpRequest& h, const std::string& rawValue) {
         h.auth.basicUsername = (c == std::string::npos) ? decoded : decoded.substr(0, c);
         h.auth.basicPassword = (c == std::string::npos) ? "" : decoded.substr(c + 1);
     } else {
-        h.auth.type = "apikey";          // scheme lạ/không có -> giữ nguyên trong nút Auth
+        h.auth.type = "apikey";          // unknown/missing scheme -> keep as-is in Auth tab
         h.auth.apikeyKey = "Authorization";
         h.auth.apikeyValue = v;
         h.auth.apikeyIn = "header";
@@ -117,7 +117,7 @@ ImportResult CurlImporter::parse(const std::string& input) const {
         const std::string& tk = tokens[i];
         std::string flag = tk;
         std::string inlineVal;
-        // hỗ trợ --flag=value
+        // support --flag=value
         if (tk.rfind("--", 0) == 0) {
             size_t eq = tk.find('=');
             if (eq != std::string::npos) { flag = tk.substr(0, eq); inlineVal = tk.substr(eq + 1); }
@@ -130,7 +130,7 @@ ImportResult CurlImporter::parse(const std::string& input) const {
             KeyValue kv = parseHeader(val(i));
             std::string lk = lower(kv.key);
             if (lk == "content-type") contentType = lower(kv.value);
-            if (lk == "authorization") { applyAuthHeader(h, kv.value); continue; }  // -> nút Auth
+            if (lk == "authorization") { applyAuthHeader(h, kv.value); continue; }  // -> Auth tab
             h.headers.push_back(kv);
         } else if (flag == "-u" || flag == "--user") {
             std::string up = val(i);
@@ -185,18 +185,18 @@ ImportResult CurlImporter::parse(const std::string& input) const {
                    flag == "-i" || flag == "--include" || flag == "-v" || flag == "--verbose" ||
                    flag == "-#" || flag == "--progress-bar" ||
                    flag == "-o" || flag == "--output" || flag == "-O" || flag == "--remote-name") {
-            if (flag == "-o" || flag == "--output") (void)val(i); // nuốt giá trị output, bỏ qua
-            // bỏ qua: flag output/log, không ảnh hưởng request model
+            if (flag == "-o" || flag == "--output") (void)val(i); // consume output value, ignore
+            // ignore: output/log flags, no effect on request model
         } else if (!tk.empty() && tk[0] == '-') {
-            res.unknown.push_back(tk); // cờ lạ -> gom
+            res.unknown.push_back(tk); // unknown flag -> collect
         } else {
-            // bare token = URL (lấy cái đầu)
+            // bare token = URL (take the first)
             if (h.url.empty()) h.url = tk;
             else res.unknown.push_back(tk);
         }
     }
 
-    // Gộp data.
+    // Merge data.
     if (!dataParts.empty()) {
         std::string joined;
         for (size_t i = 0; i < dataParts.size(); ++i) {
@@ -204,7 +204,7 @@ ImportResult CurlImporter::parse(const std::string& input) const {
             joined += dataParts[i];
         }
         if (getStyle) {
-            // -G: data thành query string -> params (tách k=v theo &)
+            // -G: data becomes query string -> params (split k=v by &)
             size_t pos = 0;
             while (pos < joined.size()) {
                 size_t amp = joined.find('&', pos);
@@ -245,7 +245,7 @@ ImportResult CurlImporter::parse(const std::string& input) const {
         for (auto& kv : urlEncodeParts) h.body.formUrlEncoded.push_back(kv);
     }
 
-    // Suy method nếu không khai báo: có body -> POST, ngược lại GET.
+    // Infer method if not declared: body -> POST, otherwise GET.
     if (!explicitMethod) {
         bool hasBody = h.body.mode != "none";
         h.method = hasBody ? "POST" : "GET";
@@ -256,7 +256,7 @@ ImportResult CurlImporter::parse(const std::string& input) const {
         return res;
     }
 
-    // Query sau '?' -> tách vào params (decode), url còn lại là raw.
+    // Query after '?' -> split into params (decoded), remaining url is raw.
     urlutil::splitUrlQuery(h.url, h.params);
 
     res.ok = true;

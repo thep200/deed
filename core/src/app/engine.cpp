@@ -31,7 +31,7 @@ namespace core {
 
 namespace {
 
-// Resolve {{var}} cho 1 mảng KeyValue (value).
+// Resolve {{var}} for a KeyValue array (value field).
 void resolveKv(std::vector<KeyValue>& kvs, const std::map<std::string, std::string>& vars) {
     for (auto& kv : kvs) kv.value = VariableResolver::resolve(kv.value, vars).text;
 }
@@ -40,7 +40,7 @@ std::string resolveStr(const std::string& s, const std::map<std::string, std::st
     return VariableResolver::resolve(s, vars).text;
 }
 
-// Đọc biến môi trường số (>0) hoặc default. ENV layer = trần cứng (RESPONSE_CACHE §1).
+// Read a numeric env var (>0) or fall back to default. ENV layer = hard ceiling (RESPONSE_CACHE §1).
 std::uint64_t envU64(const char* key, std::uint64_t def) {
     const char* v = std::getenv(key);
     if (!v || !*v) return def;
@@ -48,13 +48,13 @@ std::uint64_t envU64(const char* key, std::uint64_t def) {
     catch (...) { return def; }
 }
 
-// Lấy trần/sàn từ CacheLimits (.env do UI nạp) nếu set; ngược lại fallback getenv rồi default.
+// Take ceiling/floor from CacheLimits (.env loaded by UI) if set; otherwise fall back to getenv then default.
 std::uint64_t limitOr(int fromEnvFile, const char* envKey, std::uint64_t def) {
     if (fromEnvFile > 0) return static_cast<std::uint64_t>(fromEnvFile);
     return envU64(envKey, def);
 }
 
-// effective = clamp(user, min, max); user ngoài [min,max] -> kẹp + log cảnh báo (RESPONSE_CACHE §1.2).
+// effective = clamp(user, min, max); user outside [min,max] -> clamp + warning log (RESPONSE_CACHE §1.2).
 CacheConfig buildCacheConfig(const AppConfig& app, const CacheLimits& lim) {
     std::uint64_t ramMaxMb = limitOr(lim.ramMaxMb, "DEED_RAM_CACHE_SIZE_MAX", 256);
     std::uint64_t ramMinMb = limitOr(lim.ramMinMb, "DEED_RAM_CACHE_SIZE_MIN", 0);
@@ -62,18 +62,18 @@ CacheConfig buildCacheConfig(const AppConfig& app, const CacheLimits& lim) {
     std::uint64_t diskMinMb = limitOr(lim.diskMinMb, "DEED_DISK_CACHE_SIZE_MIN", 0);
     std::uint64_t thrKb = limitOr(lim.thresholdKb, "DEED_RAM_CACHE_THRESHOLD_KB", 256);
 
-    // clamp(user, min, max) + log khi bị kẹp. min > max (misconfig) -> ưu tiên max làm trần.
+    // clamp(user, min, max) + log when clamped. min > max (misconfig) -> prefer max as ceiling.
     auto clampMb = [](const char* what, std::uint64_t user, std::uint64_t mn, std::uint64_t mx) {
         if (mn > mx) mn = mx;
         std::uint64_t v = user;
-        if (v > mx) { v = mx; std::fprintf(stderr, "[cache] %s=%lluMB > max %lluMB -> kẹp về %lluMB\n",
+        if (v > mx) { v = mx; std::fprintf(stderr, "[cache] %s=%lluMB > max %lluMB -> clamped to %lluMB\n",
                                            what, (unsigned long long)user, (unsigned long long)mx, (unsigned long long)mx); }
-        if (v < mn) { std::fprintf(stderr, "[cache] %s=%lluMB < min %lluMB -> nâng lên %lluMB\n",
+        if (v < mn) { std::fprintf(stderr, "[cache] %s=%lluMB < min %lluMB -> raised to %lluMB\n",
                                    what, (unsigned long long)v, (unsigned long long)mn, (unsigned long long)mn); v = mn; }
         return v;
     };
 
-    // Đọc MỨC từ CẤU HÌNH NGƯỜI DÙNG (AppConfig) — đây là layer user (Settings).
+    // Read the LEVEL from the USER CONFIG (AppConfig) — this is the user layer (Settings).
     std::uint64_t ramUserMb = app.ramCacheSizeMb > 0 ? static_cast<std::uint64_t>(app.ramCacheSizeMb) : 0;
     std::uint64_t diskUserMb = app.diskCacheSizeMb > 0 ? static_cast<std::uint64_t>(app.diskCacheSizeMb) : 0;
 
@@ -81,8 +81,8 @@ CacheConfig buildCacheConfig(const AppConfig& app, const CacheLimits& lim) {
     c.ramEffBytes = clampMb("ram_cache_size", ramUserMb, ramMinMb, ramMaxMb) * 1024ull * 1024ull;
     c.diskEffBytes = clampMb("disk_cache_size", diskUserMb, diskMinMb, diskMaxMb) * 1024ull * 1024ull;
     c.thresholdBytes = thrKb * 1024ull;
-    c.enabled = app.cacheResponses;   // mặc định true (không phơi trong Settings)
-    c.persist = app.cachePersist;     // mặc định true
+    c.enabled = app.cacheResponses;   // default true (not exposed in Settings)
+    c.persist = app.cachePersist;     // default true
     return c;
 }
 
@@ -91,7 +91,7 @@ std::int64_t nowEpochMs() {
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
-// Dấu vết request lúc gửi (đổi -> badge "response cũ"). Hash nhẹ của resolvedRequestDump.
+// Request fingerprint at send time (change -> "stale response" badge). Light hash of resolvedRequestDump.
 std::string revisionOf(const std::string& resolvedDump) {
     if (resolvedDump.empty()) return "";
     return std::to_string(std::hash<std::string>{}(resolvedDump));
@@ -108,14 +108,14 @@ struct Engine::Impl {
           environments(collectionRoot),
           appConfig(cfg.appConfigPath.empty() ? AppConfigStore()
                                               : AppConfigStore(cfg.appConfigPath)) {
-        appConfig.setDefaults(cfg.appDefaults);   // defaults .env cho key thiếu trong config.json
-        environments.migrateLegacySecrets();      // SPEC §T5: gộp .secrets/ -> plaintext (một lần)
+        appConfig.setDefaults(cfg.appDefaults);   // .env defaults for keys missing in config.json
+        environments.migrateLegacySecrets();      // SPEC §T5: merge .secrets/ -> plaintext (one-time)
         registry.registerSender(RequestType::Http, std::make_unique<HttpSender>());
         registry.registerSender(RequestType::Grpc, std::make_unique<GrpcSender>());
         rebuildCache();
     }
 
-    // (Re)build response cache từ AppConfig hiện tại + thư mục .session của collection.
+    // (Re)build response cache from current AppConfig + the collection's .session dir.
     void rebuildCache() {
         std::lock_guard<std::mutex> lk(cacheMu);
         cacheCfg = buildCacheConfig(appConfig.load(), cacheLimits);
@@ -123,29 +123,29 @@ struct Engine::Impl {
             std::string sessionDir = fsutil::join(collectionRoot, ".session");
             cache = ResponseCache::create(cacheCfg, sessionDir);
         } else {
-            cache.reset();   // tắt cache -> không giữ gì
+            cache.reset();   // cache off -> hold nothing
         }
     }
 
     std::string collectionRoot;
-    CacheLimits cacheLimits;                  // trần/sàn cache từ .env (qua EngineConfig)
+    CacheLimits cacheLimits;                  // cache ceiling/floor from .env (via EngineConfig)
     CollectionStore collection;
     SessionStore session;
     EnvironmentStore environments;
     AppConfigStore appConfig;
 
-    std::mutex cacheMu;                       // bảo vệ rebuild/đổi con trỏ cache (chỉ giữ khi copy con trỏ)
+    std::mutex cacheMu;                       // guards rebuild/swap of cache pointer (held only while copying the pointer)
     CacheConfig cacheCfg;
-    // shared_ptr: worker copy con trỏ ra NGOÀI lock rồi thao tác (I/O đĩa) -> cacheMu không bị
-    // giữ suốt I/O; rebuild đổi con trỏ vẫn an toàn vì bản cũ sống tới khi worker xong (§1.3).
-    std::shared_ptr<ResponseCache> cache;     // null khi tắt cache
+    // shared_ptr: worker copies the pointer OUTSIDE the lock then does its work (disk I/O) -> cacheMu is not
+    // held across I/O; swapping the pointer on rebuild stays safe since the old instance lives until the worker is done (§1.3).
+    std::shared_ptr<ResponseCache> cache;     // null when cache is off
 
     SenderRegistry registry;
 
-    // Cache merged-vars (Global + env active) -> không đọc/parse env từ đĩa MỖI lần resolve/send.
-    // Khoá theo (activeEnv, env-epoch): đổi env active hoặc sửa bất kỳ env nào -> epoch/khoá đổi
-    // -> tự dựng lại (không bao giờ dùng vars cũ). activeVars có thể chạy main (send) lẫn nền
-    // (listGrpcMethods qua reflection) -> bảo vệ bằng varsMu.
+    // Cache merged-vars (Global + active env) -> avoid reading/parsing env from disk on EVERY resolve/send.
+    // Keyed by (activeEnv, env-epoch): switching the active env or editing any env -> epoch/key changes
+    // -> auto-rebuild (never reuse stale vars). activeVars may run on main (send) and background
+    // (listGrpcMethods via reflection) -> guarded by varsMu.
     std::mutex varsMu;
     std::map<std::string, std::string> varsCache;
     std::string varsCacheEnv;
@@ -154,17 +154,17 @@ struct Engine::Impl {
 
     std::atomic<RequestHandle> nextHandle{1};
 
-    // Inflight registry tách thành object có shared_ptr: worker giữ tham chiếu riêng,
-    // KHÔNG deref this->impl_ (libc++ null-hoá unique_ptr trước khi chạy ~Impl, mà ~Impl
-    // lại block ở pool.join() -> worker đọc impl_ null -> crash). Giữ qua shared_ptr là an toàn.
+    // Inflight registry split into a shared_ptr object: worker keeps its own reference and
+    // does NOT deref this->impl_ (libc++ nulls the unique_ptr before running ~Impl, while ~Impl
+    // blocks on pool.join() -> worker reads null impl_ -> crash). Holding via shared_ptr is safe.
     struct InflightReg {
         std::mutex mu;
         std::map<RequestHandle, std::shared_ptr<CancelToken>> map;
     };
     std::shared_ptr<InflightReg> inflight = std::make_shared<InflightReg>();
 
-    // pool KHAI BÁO CUỐI -> destructor chạy ĐẦU (reverse order): join hết worker
-    // trước khi registry/inflight bị huỷ, đảm bảo sender còn sống suốt lúc gửi.
+    // pool DECLARED LAST -> destructor runs FIRST (reverse order): join all workers
+    // before registry/inflight are destroyed, ensuring senders stay alive throughout sending.
     ThreadPool pool;
 };
 
@@ -178,9 +178,9 @@ void Engine::openCollection(const std::string& root) {
     impl_->collection.setRoot(root);
     impl_->session.setRoot(root);
     impl_->environments.setRoot(root);
-    impl_->environments.migrateLegacySecrets(); // collection mới có thể còn .secrets/ cũ
+    impl_->environments.migrateLegacySecrets(); // new collection may still have an old .secrets/
     impl_->collection.ensureGitignore();
-    impl_->rebuildCache();        // disk cache dir đổi theo collection -> dựng lại
+    impl_->rebuildCache();        // disk cache dir changes with collection -> rebuild
 }
 
 CollectionStore& Engine::collection() { return impl_->collection; }
@@ -191,21 +191,21 @@ AppConfigStore& Engine::appConfig() { return impl_->appConfig; }
 std::map<std::string, std::string> Engine::activeVars() const {
     std::string active = impl_->session.getActiveEnv();
     std::uint64_t epoch = impl_->environments.epoch();
-    {   // Cache hit: (env active + epoch) không đổi -> trả bản copy, KHÔNG đọc đĩa.
+    {   // Cache hit: (active env + epoch) unchanged -> return a copy, NO disk read.
         std::lock_guard<std::mutex> lk(impl_->varsMu);
         if (impl_->varsCacheValid && impl_->varsCacheEnv == active && impl_->varsCacheEpoch == epoch)
             return impl_->varsCache;
     }
-    // Miss: dựng lại NGOÀI lock (đọc + parse env từ đĩa).
+    // Miss: rebuild OUTSIDE the lock (read + parse env from disk).
     std::map<std::string, std::string> vars;
     auto merge = [&](const std::string& name) {
         try {
             Environment e = impl_->environments.load(name);
             for (const auto& k : e.keys)
                 if (k.enabled) vars[k.key] = k.value;
-        } catch (...) { /* env không tồn tại -> bỏ qua */ }
+        } catch (...) { /* env does not exist -> skip */ }
     };
-    merge("Global");                         // nền
+    merge("Global");                         // base
     if (!active.empty() && active != "Global") merge(active); // override
     {
         std::lock_guard<std::mutex> lk(impl_->varsMu);
@@ -228,10 +228,10 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
         auto& s = rr.model.http.settings;
         if (!s.timeoutMsSet) { s.timeoutMs = app.defaultTimeoutMs; }
         if (!s.verifyTlsSet) { s.verifyTls = app.verifyTls; }
-        // followRedirects: giữ mặc định true nếu chưa set.
+        // followRedirects: keep default true if unset.
     }
 
-    // --- Resolve {{var}} mọi trường chuỗi ---
+    // --- Resolve {{var}} in all string fields ---
     if (rr.model.type == RequestType::Http) {
         auto& h = rr.model.http;
         h.url = resolveStr(h.url, vars);
@@ -259,7 +259,7 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
 
 std::vector<GrpcMethodInfo> Engine::listGrpcMethods(const GrpcRequest& grpc,
                                                     std::string& error) const {
-    // Resolve {{var}} cho target để reflection trỏ đúng host:port.
+    // Resolve {{var}} for target so reflection points to the right host:port.
     GrpcRequest g = grpc;
     g.target = resolveStr(g.target, activeVars());
 
@@ -274,13 +274,13 @@ std::vector<GrpcMethodInfo> Engine::listGrpcMethods(const GrpcRequest& grpc,
 RequestHandle Engine::send(const RequestModel& model, IUiDelegate* delegate) {
     RequestHandle handle = impl_->nextHandle.fetch_add(1);
     auto cancel = std::make_shared<CancelToken>();
-    auto inflight = impl_->inflight; // shared_ptr — worker giữ tham chiếu riêng
+    auto inflight = impl_->inflight; // shared_ptr — worker keeps its own reference
     {
         std::lock_guard<std::mutex> lk(inflight->mu);
         inflight->map[handle] = cancel;
     }
 
-    // Resolve + tra sender NGAY trên thread gọi (Engine còn sống) -> worker không deref impl_.
+    // Resolve + look up sender NOW on the calling thread (Engine still alive) -> worker won't deref impl_.
     IRequestSender* sender = impl_->registry.get(model.type);
     std::shared_ptr<ResolvedRequest> rr;
     std::shared_ptr<ApiError> immediateError;
@@ -295,7 +295,7 @@ RequestHandle Engine::send(const RequestModel& model, IUiDelegate* delegate) {
         }
     }
 
-    // Worker chỉ chạm biến capture (sender còn sống nhờ pool destroyed-first; inflight là shared_ptr).
+    // Worker only touches captured vars (sender stays alive via pool-destroyed-first; inflight is a shared_ptr).
     impl_->pool.submit([handle, delegate, cancel, inflight, sender, rr, immediateError]() {
         if (delegate) {
             if (immediateError) {
@@ -322,8 +322,8 @@ void Engine::cancel(RequestHandle handle) {
 }
 
 // --- Response cache ---
-// Mẫu chung: copy shared_ptr cache RA NGOÀI lock (giữ cacheMu chỉ trong ngoặc), rồi thao tác I/O
-// trên bản copy. Bản cache cũ sống tới khi mọi shared_ptr thả -> rebuild song song an toàn (§1.3).
+// Common pattern: copy the cache shared_ptr OUTSIDE the lock (hold cacheMu only in the braces), then do I/O
+// on the copy. The old cache instance lives until all shared_ptrs are released -> concurrent rebuild is safe (§1.3).
 void Engine::putResponse(const std::string& id, const ApiResponse& resp) {
     if (id.empty()) return;
     std::shared_ptr<ResponseCache> c;
@@ -371,21 +371,21 @@ void Engine::reloadCacheConfig() {
         bool wasPersist = impl_->cacheCfg.persist;
         bool wasEnabled = impl_->cacheCfg.enabled;
         fresh = buildCacheConfig(impl_->appConfig.load(), impl_->cacheLimits);
-        // Đổi cap/threshold tại chỗ nếu cấu trúc tầng không đổi (giữ L1) -> evict ngay.
+        // Change cap/threshold in place if tier structure is unchanged (keep L1) -> evict immediately.
         if (impl_->cache && fresh.enabled == wasEnabled && fresh.persist == wasPersist) {
             impl_->cacheCfg = fresh;
-            c = impl_->cache;            // copy con trỏ; gọi onConfigChanged NGOÀI lock (evict đĩa)
+            c = impl_->cache;            // copy the pointer; call onConfigChanged OUTSIDE the lock (disk evict)
         }
     }
     if (c) { c->onConfigChanged(fresh); return; }
-    // Bật/tắt cache hoặc đổi persist (gắn/tháo L2) -> dựng lại.
+    // Toggle cache or change persist (attach/detach L2) -> rebuild.
     impl_->rebuildCache();
 }
 
 const CacheConfig& Engine::cacheConfig() const { return impl_->cacheCfg; }
 ResponseCache* Engine::responseCache() { return impl_->cache.get(); }
 
-// Import: importers thuần (stateless) -> chỉ uỷ thác. KHÔNG ghi file (UI tạo qua CollectionStore).
+// Import: pure (stateless) importers -> just delegate. Does NOT write files (UI creates via CollectionStore).
 bool Engine::looksLikeCurl(const std::string& text) const { return CurlImporter{}.canHandle(text); }
 bool Engine::looksLikeGrpcurl(const std::string& text) const { return GrpcImporter{}.canHandle(text); }
 ImportResult Engine::importFromCurl(const std::string& text) const { return CurlImporter{}.parse(text); }
@@ -396,7 +396,7 @@ ValidationResult Engine::validateJson(const std::string& text) const {
         auto _ = nlohmann::json::parse(text);
         return ValidationResult{true, 0, 0, ""};
     } catch (const nlohmann::json::parse_error& e) {
-        // e.byte -> line/col bằng cách đếm '\n' trước offset.
+        // e.byte -> line/col by counting '\n' before the offset.
         int line = 1, col = 1;
         size_t limit = e.byte > 0 ? e.byte - 1 : 0;
         for (size_t i = 0; i < limit && i < text.size(); ++i) {

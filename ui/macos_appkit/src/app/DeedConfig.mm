@@ -1,5 +1,5 @@
 #import "app/DeedConfig.h"
-#import "app/DeedConfigData.h" // kDeedEnvData — nội dung .env nhúng lúc build (TỰ SINH)
+#import "app/DeedConfigData.h" // kDeedEnvData — .env content embedded at build time (GENERATED)
 
 @implementation DeedConfig {
     NSMutableDictionary<NSString *, NSString *> *_kv;
@@ -15,8 +15,8 @@
 - (instancetype)initLoad {
     if ((self = [super init])) {
         _kv = [NSMutableDictionary dictionary];
-        // Cấu hình là compile-time constant: parse chuỗi đã nhúng vào binary lúc build,
-        // không đọc file .env khi chạy.
+        // Config is a compile-time constant: parse the string embedded into the binary at
+        // build time; do not read a .env file at runtime.
         [self parseContent:[NSString stringWithUTF8String:kDeedEnvData]];
     }
     return self;
@@ -30,16 +30,16 @@
         if (eq.location == NSNotFound) continue;
         NSString *k = [[line substringToIndex:eq.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         NSString *v = [[line substringFromIndex:eq.location + 1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        // Bỏ inline comment "value # ghi chú": cắt từ dấu # ĐẦU TIÊN có KHOẢNG TRẮNG đứng trước
-        // (chuẩn dotenv). Giữ được value chứa '#' liền kề (vd màu #DDDDDD đứng một mình).
-        // KHÔNG strip -> "classic # ..." không khớp "classic" -> rơi nhầm về kiểu mặc định.
+        // Strip inline comment "value # note": cut at the FIRST # preceded by WHITESPACE
+        // (dotenv convention). Preserves values with an adjacent '#' (e.g. color #DDDDDD alone).
+        // Without stripping -> "classic # ..." won't match "classic" -> falls back to the default wrongly.
         NSRange c1 = [v rangeOfString:@" #"], c2 = [v rangeOfString:@"\t#"];
         NSUInteger cut = NSNotFound;
         if (c1.location != NSNotFound) cut = c1.location;
         if (c2.location != NSNotFound && (cut == NSNotFound || c2.location < cut)) cut = c2.location;
         if (cut != NSNotFound)
             v = [[v substringToIndex:cut] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        // bỏ nháy bao quanh nếu có
+        // strip surrounding quotes if present
         if (v.length >= 2 && ([v hasPrefix:@"\""] || [v hasPrefix:@"'"]))
             v = [v substringWithRange:NSMakeRange(1, v.length - 2)];
         if (k.length) _kv[k] = v;

@@ -1,7 +1,7 @@
 #import "windows/MainWindowController+Private.h"
 
-// Cột nền: KEY nội bộ "Global" (giữ ngữ nghĩa resolve {{var}}) nhưng HIỂN THỊ "Local"
-// (SPEC §T4). Map qua lại ở lớp UI.
+// Base column: internal KEY "Global" (keeps {{var}} resolve semantics) but DISPLAYED as "Local"
+// (SPEC §T4). Mapped both ways at the UI layer.
 static NSString *const kBaseEnvKey = @"Global";
 static NSString *EnvDisplay(NSString *key) {
     return [key isEqualToString:kBaseEnvKey] ? StrEnvLocal : key;
@@ -16,7 +16,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
 
 - (void)envClicked:(id)sender {
     if (!_engine) { [self toastWarn:StrToastOpenFolderFirst]; return; }
-    NSMutableArray<NSString *> *items = [@[ StrEnvLocal ] mutableCopy];   // base hiển thị "Local"
+    NSMutableArray<NSString *> *items = [@[ StrEnvLocal ] mutableCopy];   // base displayed as "Local"
     for (const auto &name : _engine->environments().list())
         if (name != kBaseEnvKey.UTF8String) [items addObject:N(name)];
     [items addObject:StrEnvManage];
@@ -41,12 +41,12 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
 
 #pragma mark Config screen (ENV + Setting)
 
-// Setting button -> màn Settings; ENV "Manage…" -> màn Environments (2 màn riêng).
+// Setting button -> Settings screen; ENV "Manage…" -> Environments screen (2 separate screens).
 - (void)settingClicked:(id)sender { [self enterConfig:1]; }
 
 - (void)enterConfig:(NSInteger)kind {
     if (!_engine) { [self toastWarn:StrToastOpenFolderFirst]; return; }
-    // §2.1: nhả input context của pane chính (URL/editor) trước khi ẩn nó đi.
+    // §2.1: release the main pane's input context (URL/editor) before hiding it.
     OS9SafeEndEditing(_window, nil);
     [self autosaveCurrent];
     _configKind = kind;
@@ -74,10 +74,10 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
 }
 
 - (void)exitConfig:(id)sender {
-    // §2.1: commit + nhả input context của ô đang sửa (settings editor / env cell) TRƯỚC khi
-    // ẩn config pane — nếu không, view bị ẩn vẫn treo input context -> crash ở updateWindows.
+    // §2.1: commit + release the editing field's input context (settings editor / env cell) BEFORE
+    // hiding the config pane — otherwise the hidden view still holds the input context -> crash in updateWindows.
     OS9SafeEndEditing(_window, nil);
-    // Auto-save khi back, theo đúng màn đang mở.
+    // Auto-save on back, for whichever screen is open.
     if (_engine) {
         if (_configKind == 0) {
             [_envVC save];
@@ -93,7 +93,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
                 if (dict[@"ram_cache_size"]) c.ramCacheSizeMb = [dict[@"ram_cache_size"] intValue];
                 if (dict[@"disk_cache_size"]) c.diskCacheSizeMb = [dict[@"disk_cache_size"] intValue];
                 _engine->appConfig().save(c);
-                _engine->reloadCacheConfig();   // áp cap/threshold mới -> evict ngay nếu nhỏ đi (§1.2)
+                _engine->reloadCacheConfig();   // apply new cap/threshold -> evict immediately if smaller (§1.2)
                 [self applyConfiguredFontAndRefresh];
             } else {
                 [self toastWarn:StrToastInvalidSettings];
@@ -104,14 +104,14 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     _configPane.hidden = YES;
     _mainPane.hidden = NO;
     [self refreshEnvButton];
-    [self updateTitle];   // title bar -> tên request hiện tại
+    [self updateTitle];   // title bar -> current request name
     [self relayout];
     [self toastOk:StrToastSaved];
 }
 
 #pragma mark Proto source (gRPC)
 
-// Dropdown nguồn proto: index 0 = Reflection, 1 = .proto (mở file panel).
+// Proto source dropdown: index 0 = Reflection, 1 = .proto (opens file panel).
 - (void)protoModeChanged:(id)sender {
     if (_model.type != core::RequestType::Grpc) return;
     if (_protoPopup.selectedIndex == 1) {
@@ -124,7 +124,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
             ps.importPaths.push_back(p.URL.URLByDeletingLastPathComponent.path.UTF8String);
             _model.grpc.protoSource = ps;
         } else {
-            // Huỷ chọn file -> trở về trạng thái trước (reflection).
+            // Cancel file selection -> revert to previous state (reflection).
             _protoPopup.selectedIndex = 0;
             [_protoPopup setNeedsDisplay:YES];
             _model.grpc.protoSource = core::ProtoSource{};
@@ -139,7 +139,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
 
 #pragma mark RPC picker (gRPC)
 
-// Hiện RPC đã lưu trong model lên nút (KHÔNG gọi mạng). Fetch thật khi bấm vào dropdown.
+// Show the RPC saved in the model on the button (NO network call). Real fetch happens on dropdown click.
 - (void)showSavedGrpcMethodLabel {
     _grpcMethods.clear();
     const core::GrpcRequest &g = _model.grpc;
@@ -155,16 +155,16 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     [_servicePopup setNeedsDisplay:YES];
 }
 
-// Nạp nền (KHÔNG bung menu): dùng khi đổi nguồn proto / commit URL.
+// Background load (does NOT open menu): used when changing proto source / committing URL.
 - (void)reloadGrpcMethods { [self fetchGrpcMethodsThenOpen:NO]; }
 
-// Nạp danh sách service/RPC theo nguồn proto hiện tại (reflection: query host; .proto: parse).
-// openWhenDone = YES: bung menu ngay sau khi nạp xong (dùng khi bấm vào dropdown chọn RPC).
-// Chạy nền vì reflection có IO mạng; chỉ áp kết quả của lần gọi mới nhất.
+// Load the service/RPC list from the current proto source (reflection: query host; .proto: parse).
+// openWhenDone = YES: open the menu right after loading (used when clicking the dropdown to pick an RPC).
+// Runs in background because reflection does network IO; only applies the result of the latest call.
 - (void)fetchGrpcMethodsThenOpen:(BOOL)openWhenDone {
     if (_model.type != core::RequestType::Grpc || !_engine) return;
-    _model.grpc.target = _urlField.stringValue.UTF8String; // target = ô URL (host:port)
-    // Reflection cần host; .proto thì parse file nên không bắt buộc host.
+    _model.grpc.target = _urlField.stringValue.UTF8String; // target = URL field (host:port)
+    // Reflection needs a host; .proto parses a file so a host is not required.
     BOOL needsHost = (_model.grpc.protoSource.mode == "reflection");
     if (needsHost && _model.grpc.target.empty()) {
         _grpcMethods.clear();
@@ -189,7 +189,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
         NSString *errStr = err.empty() ? nil : N(err);
         dispatch_async(dispatch_get_main_queue(), ^{
             MainWindowController *s = ws;
-            if (!s || seq != s->_grpcMethodsReqSeq) return; // đã có yêu cầu mới hơn
+            if (!s || seq != s->_grpcMethodsReqSeq) return; // a newer request already exists
             [s applyGrpcMethods:methods error:errStr openMenu:openWhenDone];
         });
     });
@@ -216,11 +216,11 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     _servicePopup.itemTitles = titles;
     _servicePopup.selectedIndex = sel;
     [_servicePopup setNeedsDisplay:YES];
-    [self applySelectedGrpcMethod:sel]; // đồng bộ model với lựa chọn hiển thị
+    [self applySelectedGrpcMethod:sel]; // sync model with displayed selection
     if (openMenu) [_servicePopup openMenu];
 }
 
-// Người dùng chọn RPC -> ghi service/method/methodType vào model (autosave tự lưu).
+// User picks an RPC -> write service/method/methodType into the model (autosave persists it).
 - (void)serviceMethodChanged:(id)sender {
     [self applySelectedGrpcMethod:_servicePopup.selectedIndex];
 }
@@ -231,7 +231,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     _model.grpc.service = m.service;
     _model.grpc.method = m.method;
     _model.grpc.methodType = m.methodType;
-    // Hover nút hiện tên RPC đầy đủ (nút có thể đã cắt "…").
+    // Hovering the button shows the full RPC name (the button may have truncated it with "…").
     _servicePopup.toolTip = [NSString stringWithFormat:@"%s/%s", m.service.c_str(), m.method.c_str()];
 }
 

@@ -35,9 +35,9 @@ void writeFileAtomic(const std::string& path, const std::string& content) {
         if (!out) throw std::runtime_error("failed to write temp file: " + tmp.string());
     }
     std::error_code ec;
-    fs::rename(tmp, target, ec); // atomic trên cùng filesystem
+    fs::rename(tmp, target, ec); // atomic on the same filesystem
     if (ec) {
-        // fallback: copy đè rồi xoá tạm
+        // fallback: copy over then remove temp
         fs::copy_file(tmp, target, fs::copy_options::overwrite_existing, ec);
         fs::remove(tmp);
         if (ec) throw std::runtime_error("atomic rename failed: " + ec.message());
@@ -58,7 +58,7 @@ std::string slugify(const std::string& name) {
                 prevDash = true;
             }
         }
-        // ký tự khác -> bỏ
+        // other chars -> drop
     }
     while (!out.empty() && out.back() == '-') out.pop_back();
     if (out.empty()) out = "untitled";

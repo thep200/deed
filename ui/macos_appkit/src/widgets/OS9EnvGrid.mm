@@ -7,13 +7,13 @@
 // ---- Geometry ----
 static const CGFloat kHeaderH  = 22;
 static const CGFloat kRowH     = 24;
-static const CGFloat kAliasW0  = 170;   // bề rộng cột Alias mặc định
-static const CGFloat kColW0    = 150;   // bề rộng cột env mặc định
-static const CGFloat kAddEnvW  = 30;    // cột "+" thêm env ở ngoài cùng phải header
-static const CGFloat kAddRowH  = 24;    // hàng "+ alias" cuối bảng
-static const CGFloat kGlyph    = 13;    // hot-zone glyph ×
-static const CGFloat kMinColW  = 60;    // bề rộng cột tối thiểu khi kéo
-static const CGFloat kGrabW    = 5;     // vùng bắt để kéo dãn cột (mỗi bên divider)
+static const CGFloat kAliasW0  = 170;   // default Alias column width
+static const CGFloat kColW0    = 150;   // default env column width
+static const CGFloat kAddEnvW  = 30;    // "+" add-env column at far right of header
+static const CGFloat kAddRowH  = 24;    // "+ alias" row at bottom of table
+static const CGFloat kGlyph    = 13;    // × glyph hot-zone
+static const CGFloat kMinColW  = 60;    // minimum column width when dragging
+static const CGFloat kGrabW    = 5;     // grab zone for column resize (each side of divider)
 
 typedef NS_ENUM(NSInteger, EnvZone) {
     EnvZoneNone = 0,
@@ -61,12 +61,12 @@ static NSDictionary *TextAttrs(NSColor *fg) {
     return @{ NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : fg };
 }
 
-// Cắt chuỗi cho vừa maxW, thêm "…" (drawInRect KHÔNG tự truncate -> phải tự làm).
+// Truncate string to fit maxW, appending "…" (drawInRect does NOT truncate -> do it ourselves).
 static NSString *Ellipsize(NSString *s, CGFloat maxW, NSDictionary *attrs) {
     if (maxW <= 0) return @"";
     if ([s sizeWithAttributes:attrs].width <= maxW) return s;
     NSString *e = @"…";
-    NSUInteger lo = 0, hi = s.length;          // tìm số ký tự lớn nhất mà "<prefix>…" vẫn vừa
+    NSUInteger lo = 0, hi = s.length;          // find the largest char count where "<prefix>…" still fits
     while (hi > lo) {
         NSUInteger mid = (lo + hi + 1) / 2;
         NSString *cand = [[s substringToIndex:mid] stringByAppendingString:e];
@@ -75,7 +75,7 @@ static NSString *Ellipsize(NSString *s, CGFloat maxW, NSDictionary *attrs) {
     return [[s substringToIndex:lo] stringByAppendingString:e];
 }
 
-// Vẽ 1 dòng text trong cell: CLIP + ellipsize + canh giữa theo chiều dọc.
+// Draw 1 line of text in a cell: CLIP + ellipsize + vertically centered.
 static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     if (!s.length) return;
     NSDictionary *attrs = TextAttrs(fg);
@@ -107,13 +107,13 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 - (void)setHoverRowFromBodyEvent:(NSEvent *)e;
 - (void)headerMouseMoved:(NSEvent *)e;
 - (void)headerMouseExited;
-- (void)invalidateBodyRow:(NSInteger)row;   // invalidate ĐÚNG 1 hàng body (hover/selection)
+- (void)invalidateBodyRow:(NSInteger)row;   // invalidate EXACTLY 1 body row (hover/selection)
 @end
 
 @implementation OS9EnvGridBody
 - (BOOL)isFlipped { return YES; }
-- (BOOL)isOpaque { return YES; }   // tự phủ trắng toàn bộ -> không ghosting khi resize/scroll
-- (BOOL)acceptsFirstMouse:(NSEvent *)e { return YES; }   // click đầu vẫn nhận (double-click ổn)
+- (BOOL)isOpaque { return YES; }   // fully paints white -> no ghosting on resize/scroll
+- (BOOL)acceptsFirstMouse:(NSEvent *)e { return YES; }   // first click still registers (double-click works)
 - (void)drawRect:(NSRect)r { [self.owner drawBodyIn:self dirty:r]; }
 - (void)mouseDown:(NSEvent *)e { [self.owner bodyMouseDown:e]; }
 - (void)mouseMoved:(NSEvent *)e { [self.owner setHoverRowFromBodyEvent:e]; }
@@ -154,10 +154,10 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     OS9EnvGridBody *_body;
 
     CGFloat _aliasW;
-    NSMutableArray<NSNumber *> *_colW;   // bề rộng mỗi cột env (song song _envNames)
-    BOOL _autoFitCols;                   // YES: căn đều cột env theo bề rộng khả dụng
+    NSMutableArray<NSNumber *> *_colW;   // width of each env column (parallel to _envNames)
+    BOOL _autoFitCols;                   // YES: distribute env columns evenly over available width
     NSInteger _hoverRow;
-    NSInteger _hoverEnvCol;              // cột env đang hover ở header (-1 = không) -> hiện × xoá
+    NSInteger _hoverEnvCol;              // env column hovered in header (-1 = none) -> shows × delete
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -204,7 +204,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 - (BOOL)isFlipped { return YES; }
 - (BOOL)isOpaque { return YES; }
 
-// Viền răng cưa đen bao quanh bảng (giống OS9SerratedInset của các pane khác).
+// Black serrated border around the table (like OS9SerratedInset on other panes).
 - (void)drawRect:(NSRect)dirty {
     [[OS9Theme face] set];
     NSRectFill(self.bounds);
@@ -221,7 +221,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 #pragma mark geometry (per-column widths)
 
 - (CGFloat)envWidth:(NSInteger)e { return (e < (NSInteger)_colW.count) ? _colW[e].doubleValue : kColW0; }
-- (CGFloat)envContentX:(NSInteger)e {   // x đầu cột env index e (content coords)
+- (CGFloat)envContentX:(NSInteger)e {   // x at start of env column index e (content coords)
     CGFloat x = _aliasW;
     for (NSInteger i = 0; i < e; i++) x += [self envWidth:i];
     return x;
@@ -237,7 +237,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 - (CGFloat)bodyHeight { return _aliases.count * kRowH + kAddRowH; }
 - (CGFloat)scrollX { return _scroll.contentView.bounds.origin.x; }
 
-// Căn đều bề rộng cột env để LẤP ĐẦY phần khả dụng (dư px dồn vào cột cuối).
+// Distribute env column widths evenly to FILL the available space (leftover px go to last column).
 - (void)applyEvenColumnsForWidth:(CGFloat)W {
     NSInteger n = _envNames.count;
     if (n == 0) return;
@@ -246,14 +246,14 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     if (each < kMinColW) each = kMinColW;
     for (NSInteger i = 0; i < n; i++) {
         CGFloat w = each;
-        if (i == n - 1) { CGFloat rem = avail - each * (n - 1); if (rem > w) w = rem; }  // cột cuối ăn phần dư
+        if (i == n - 1) { CGFloat rem = avail - each * (n - 1); if (rem > w) w = rem; }  // last column takes the remainder
         _colW[i] = @(w);
     }
 }
 
 - (void)layout {
     [super layout];
-    const CGFloat B = 2;   // chừa chỗ cho viền răng cưa
+    const CGFloat B = 2;   // leave room for the serrated border
     CGFloat W = self.bounds.size.width, H = self.bounds.size.height;
     CGFloat innerW = W - 2 * B;
     if (_autoFitCols) [self applyEvenColumnsForWidth:innerW];
@@ -274,7 +274,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 - (void)setEnvNames:(NSArray<NSString *> *)e {
     NSInteger oldCount = _colW.count;
     _envNames = [e copy];
-    // Số cột đổi (thêm/xoá env) -> căn đều lại; chỉ value/rename (cùng số cột) -> giữ bề rộng manual.
+    // Column count changed (add/delete env) -> redistribute evenly; value/rename only (same count) -> keep manual widths.
     if ((NSInteger)_envNames.count != oldCount) _autoFitCols = YES;
     while ((NSInteger)_colW.count < (NSInteger)_envNames.count) [_colW addObject:@(kColW0)];
     while ((NSInteger)_colW.count > (NSInteger)_envNames.count) [_colW removeLastObject];
@@ -285,17 +285,17 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     if (_selectedRow == r) return;
     NSInteger old = _selectedRow;
     _selectedRow = r;
-    [self invalidateBodyRow:old];   // chỉ vẽ lại hàng cũ + hàng mới (không cả bảng)
+    [self invalidateBodyRow:old];   // redraw only old + new row (not the whole table)
     [self invalidateBodyRow:r];
 }
 
-// Invalidate ĐÚNG rect của 1 hàng body -> drawBodyIn chỉ re-query cell của hàng đó.
+// Invalidate the EXACT rect of 1 body row -> drawBodyIn re-queries only that row's cells.
 - (void)invalidateBodyRow:(NSInteger)row {
     if (row < 0 || row >= (NSInteger)_aliases.count) return;
     [_body setNeedsDisplayInRect:NSMakeRect(0, row * kRowH, _body.bounds.size.width, kRowH)];
 }
 
-- (NSString *)displayForEnv:(NSInteger)e {   // e = index 0-based trong _envNames
+- (NSString *)displayForEnv:(NSInteger)e {   // e = 0-based index into _envNames
     if (e == 0) return _baseDisplayName ?: StrEnvLocal;
     return _envNames[e];
 }
@@ -316,7 +316,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     NSRectFill(NSMakeRect(0, y - 1, w, 1));
     [NSGraphicsContext restoreGraphicsState];
 }
-- (NSRect)closeBoxInRect:(NSRect)r {   // × ở góc phải header env
+- (NSRect)closeBoxInRect:(NSRect)r {   // × at right corner of env header
     return NSMakeRect(NSMaxX(r) - kGlyph - 4, (kHeaderH - kGlyph) / 2, kGlyph, kGlyph);
 }
 - (NSRect)closeBoxInAliasRowAtY:(CGFloat)y {
@@ -330,7 +330,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     [[OS9Theme buttonFace] set];
     NSRectFill(b);
 
-    CGFloat dx = -[self scrollX];   // header cuộn ngang đồng bộ body; sticky theo chiều DỌC.
+    CGFloat dx = -[self scrollX];   // header scrolls horizontally in sync with body; sticky VERTICALLY.
     NSColor *fg = [OS9Theme frame];
 
     DrawCellText(StrGridAlias, NSMakeRect(dx, 0, _aliasW, kHeaderH), fg);
@@ -340,9 +340,9 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         NSRect r = [self envRectAtIndex:e height:kHeaderH];
         r.origin.x += dx;
         [self drawVDivAt:NSMaxX(r) height:kHeaderH];
-        BOOL showX = (e != 0 && e == _hoverEnvCol);   // × chỉ hiện khi hover cột đó (giống alias)
+        BOOL showX = (e != 0 && e == _hoverEnvCol);   // × shows only when hovering that column (like alias)
         NSRect txt = r;
-        if (showX) txt.size.width -= (kGlyph + 6);     // chừa chỗ × khi hover
+        if (showX) txt.size.width -= (kGlyph + 6);     // leave room for × on hover
         DrawCellText([self displayForEnv:e], txt, fg);
         if (showX) DrawClose([self closeBoxInRect:r], [OS9Theme shadow]);
     }
@@ -363,7 +363,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     NSInteger nCols = _envNames.count;
     CGFloat cw = [self contentWidth];
 
-    // Nền zebra/selection + lưới: NSRectFill rẻ, để AppKit clip theo dirty (vẽ ngoài dirty bị bỏ).
+    // Zebra/selection background + grid: NSRectFill is cheap, let AppKit clip to dirty (draws outside dirty are dropped).
     for (NSInteger row = 0; row < nRows; row++) {
         NSRect rr = NSMakeRect(0, row * kRowH, cw, kRowH);
         if (row == _selectedRow) { [[OS9Theme accent] set]; NSRectFill(rr); }
@@ -372,11 +372,11 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     [[OS9Theme face] set];
     NSRectFill(NSMakeRect(0, nRows * kRowH, cw, kAddRowH));
 
-    // lưới dọc.
+    // vertical grid.
     [self drawVDivAt:_aliasW height:[self bodyHeight]];
     for (NSInteger e = 0; e < nCols; e++)
         [self drawVDivAt:[self envContentX:e] + [self envWidth:e] height:[self bodyHeight]];
-    // lưới ngang.
+    // horizontal grid.
     for (NSInteger row = 1; row <= nRows; row++) {
         [NSGraphicsContext saveGraphicsState];
         [[NSGraphicsContext currentContext] setShouldAntialias:NO];
@@ -385,9 +385,9 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         [NSGraphicsContext restoreGraphicsState];
     }
 
-    // Text + truy vấn delegate cho từng cell là phần ĐẮT (Ellipsize binary-search + valueForAlias).
-    // Chỉ chạy cho hàng GIAO với dirty rect -> hover/selection (invalidate 1 hàng) không re-query
-    // toàn bộ rows×cols. Full redraw (layout/reload) -> dirty = bounds -> mọi hàng vẫn vẽ.
+    // Text + per-cell delegate query is the EXPENSIVE part (Ellipsize binary-search + valueForAlias).
+    // Run only for rows INTERSECTING the dirty rect -> hover/selection (1-row invalidate) doesn't re-query
+    // all rows×cols. Full redraw (layout/reload) -> dirty = bounds -> all rows still drawn.
     NSInteger firstRow = MAX((NSInteger)0, (NSInteger)floor(NSMinY(dirty) / kRowH));
     NSInteger lastRow  = MIN(nRows - 1, (NSInteger)floor((NSMaxY(dirty) - 1) / kRowH));
     for (NSInteger row = firstRow; row <= lastRow; row++) {
@@ -395,7 +395,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         NSColor *fg = sel ? [NSColor whiteColor] : [OS9Theme frame];
         CGFloat y = row * kRowH;
         NSRect aliasCell = NSMakeRect(0, y, _aliasW, kRowH);
-        if (row == _hoverRow || sel) aliasCell.size.width -= (kGlyph + 6);  // chừa × xoá alias
+        if (row == _hoverRow || sel) aliasCell.size.width -= (kGlyph + 6);  // leave room for × delete alias
         DrawCellText(_aliases[row], aliasCell, fg);
         if (row == _hoverRow || sel)
             DrawClose([self closeBoxInAliasRowAtY:y], sel ? [NSColor whiteColor] : [OS9Theme shadow]);
@@ -405,7 +405,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         }
     }
 
-    // Hàng "+ alias" chỉ vẽ khi dirty chạm tới (không đổi khi hover/selection -> bỏ qua redraw 1 hàng).
+    // "+ alias" row drawn only when dirty reaches it (unchanged by hover/selection -> skipped on 1-row redraw).
     if (NSIntersectsRect(dirty, NSMakeRect(0, nRows * kRowH, cw, kAddRowH))) {
         DrawPlus(NSMakeRect(8, nRows * kRowH + (kAddRowH - kGlyph) / 2, kGlyph, kGlyph), [OS9Theme shadow]);
         DrawCellText(StrGridAddAlias, NSMakeRect(kGlyph + 14, nRows * kRowH, _aliasW, kAddRowH), [OS9Theme shadow]);
@@ -432,7 +432,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     return h;
 }
 
-- (EnvHit)hitHeader:(NSPoint)p {   // p trong content coords
+- (EnvHit)hitHeader:(NSPoint)p {   // p in content coords
     EnvHit h = {EnvZoneNone, -1, -1};
     if (p.x < _aliasW) return h;
     CGFloat addX = [self envContentX:_envNames.count];
@@ -442,13 +442,13 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         if (p.x < NSMinX(r) || p.x >= NSMaxX(r)) continue;
         h.col = e;
         if (e != 0 && NSPointInRect(p, [self closeBoxInRect:r])) { h.zone = EnvZoneDeleteEnv; return h; }
-        if (e != 0) h.zone = EnvZoneHeaderName;   // cột base không rename
+        if (e != 0) h.zone = EnvZoneHeaderName;   // base column not renamable
         break;
     }
     return h;
 }
 
-// Divider nào (để kéo dãn) gần content-x? trả -2 = cột Alias; e>=0 = cột env e; -1 = không.
+// Which resize divider is near content-x? returns -2 = Alias column; e>=0 = env column e; -1 = none.
 - (NSInteger)resizeTargetForContentX:(CGFloat)x {
     if (fabs(x - _aliasW) <= kGrabW) return -2;
     for (NSInteger e = 0; e < (NSInteger)_envNames.count; e++) {
@@ -482,7 +482,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 - (void)headerMouseDown:(NSEvent *)e {
     NSPoint raw = [_header convertPoint:e.locationInWindow fromView:nil];
     CGFloat cx = raw.x + [self scrollX];   // content coords
-    // Ưu tiên: kéo dãn cột nếu bấm trúng divider.
+    // Priority: resize column if a divider was hit.
     NSInteger rt = [self resizeTargetForContentX:cx];
     if (rt != -1) { [self runResizeDrag:rt]; return; }
 
@@ -502,7 +502,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     CGFloat cx = raw.x + [self scrollX];
     if ([self resizeTargetForContentX:cx] != -1) [[NSCursor resizeLeftRightCursor] set];
     else [[NSCursor arrowCursor] set];
-    // cột env đang hover -> hiện × (bỏ qua cột base index 0).
+    // hovered env column -> show × (skip base column index 0).
     NSInteger hov = -1;
     for (NSInteger en = 1; en < (NSInteger)_envNames.count; en++) {
         NSRect r = [self envRectAtIndex:en height:kHeaderH];
@@ -515,9 +515,9 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     if (_hoverEnvCol != -1) { _hoverEnvCol = -1; [_header setNeedsDisplay:YES]; }
 }
 
-// Vòng lặp kéo dãn cột (giống OS9Divider): cập nhật bề rộng tới khi nhả chuột.
+// Column resize drag loop (like OS9Divider): update width until mouse-up.
 - (void)runResizeDrag:(NSInteger)target {
-    _autoFitCols = NO;   // user nắm quyền chỉnh bề rộng -> ngừng auto-fit (tới khi thêm/xoá env)
+    _autoFitCols = NO;   // user controls width -> stop auto-fit (until env added/removed)
     NSWindow *win = self.window;
     CGFloat orig = (target == -2) ? _aliasW : [self envWidth:target];
     NSPoint p0 = [_header convertPoint:[win mouseLocationOutsideOfEventStream] fromView:nil];
@@ -531,7 +531,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         if (target == -2) _aliasW = w;
         else if (target < (NSInteger)_colW.count) _colW[target] = @(w);
         [self layout];
-        [_body displayIfNeeded];     // vòng lặp modal: vẽ ngay, tránh ghosting text cũ
+        [_body displayIfNeeded];     // modal loop: draw immediately, avoid ghosting of old text
         [_header displayIfNeeded];
         if (ev.type == NSEventTypeLeftMouseUp) break;
     }
@@ -549,9 +549,9 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     if (old != _hoverRow) { [self invalidateBodyRow:old]; [self invalidateBodyRow:_hoverRow]; }
 }
 
-#pragma mark editing (OS9Dialog prompt — đáng tin trong config pane nhúng)
+#pragma mark editing (OS9Dialog prompt — reliable in embedded config pane)
 
-- (void)commitEditing { /* edit dạng modal: không có gì treo */ }
+- (void)commitEditing { /* modal edit: nothing pending */ }
 
 static NSString *Trim(NSString *s) {
     return [s stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
@@ -564,7 +564,7 @@ static NSString *Trim(NSString *s) {
                              validate:v parent:self.window];
 }
 
-// --- Sửa value (cho phép rỗng) ---
+// --- Edit value (empty allowed) ---
 - (void)promptEditValueAtRow:(NSInteger)row col:(NSInteger)col {
     NSString *alias = _aliases[row], *env = _envNames[col];
     NSString *cur = [self.delegate envGrid:self valueForAlias:alias env:env] ?: @"";
@@ -573,7 +573,7 @@ static NSString *Trim(NSString *s) {
     if (nv != nil) [self.delegate envGrid:self setValue:nv forAlias:alias env:env];
 }
 
-// --- Rename alias (chặn rỗng + trùng) ---
+// --- Rename alias (block empty + duplicate) ---
 - (void)promptRenameAliasAtRow:(NSInteger)row {
     NSString *old = _aliases[row];
     __weak OS9EnvGrid *ws = self;
@@ -587,9 +587,9 @@ static NSString *Trim(NSString *s) {
     if (nn && t.length && ![t isEqualToString:old]) [self.delegate envGrid:self renameAlias:old to:t];
 }
 
-// --- Rename env (chặn rỗng + trùng + không cho trùng nhãn base) ---
+// --- Rename env (block empty + duplicate + must not match base label) ---
 - (void)promptRenameEnvAtCol:(NSInteger)col {
-    if (col == 0) return;   // cột base không đổi tên
+    if (col == 0) return;   // base column is not renamable
     NSString *old = _envNames[col];
     NSString *nn = [self promptTitle:StrDlgRenameEnv default:old
                             validate:[self envNameValidatorExcluding:old]];
@@ -597,7 +597,7 @@ static NSString *Trim(NSString *s) {
     if (nn && t.length && ![t isEqualToString:old]) [self.delegate envGrid:self renameEnv:old to:t];
 }
 
-// --- Thêm env (prompt tên + chặn rỗng/trùng -> không tạo nếu sai) ---
+// --- Add env (prompt name + block empty/duplicate -> don't create if invalid) ---
 - (void)promptAddEnv {
     NSString *nn = [self promptTitle:StrDlgNewEnv default:@""
                             validate:[self envNameValidatorExcluding:nil]];
@@ -605,7 +605,7 @@ static NSString *Trim(NSString *s) {
     if (nn && t.length) [self.delegate envGrid:self addEnvNamed:t];
 }
 
-// --- Thêm alias (prompt tên + chặn rỗng/trùng) ---
+// --- Add alias (prompt name + block empty/duplicate) ---
 - (void)promptAddAlias {
     __weak OS9EnvGrid *ws = self;
     NSString *nn = [self promptTitle:StrDlgNewAlias default:@"" validate:^NSString *(NSString *s) {
@@ -618,8 +618,8 @@ static NSString *Trim(NSString *s) {
     if (nn && t.length) [self.delegate envGrid:self addAliasNamed:t];
 }
 
-// Validator tên env dùng chung cho add/rename: non-empty, không trùng env khác,
-// không trùng KEY base ("Global") lẫn NHÃN base ("Local").
+// Shared env-name validator for add/rename: non-empty, no duplicate of another env,
+// no clash with base KEY ("Global") or base LABEL ("Local").
 - (NSString * (^)(NSString *))envNameValidatorExcluding:(NSString *)exclude {
     __weak OS9EnvGrid *ws = self;
     return ^NSString *(NSString *s) {

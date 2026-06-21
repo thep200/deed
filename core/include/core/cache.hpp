@@ -1,7 +1,7 @@
-// core/cache.hpp — Response cache hai tầng (RAM L1 -> Disk L2). RESPONSE_CACHE.md.
-// Khoá theo request `id` ổn định; mỗi id chỉ giữ 1 response mới nhất. RAM bị chặn cứng
-// theo CacheConfig (kẹp từ env+user, build ở Engine). Driver trừu tượng qua ICacheDriver
-// -> thêm backend (sqlite/mmap…) chỉ cần implement interface, KHÔNG đụng facade/Engine.
+// core/cache.hpp — Two-tier response cache (RAM L1 -> Disk L2). RESPONSE_CACHE.md.
+// Keyed by stable request `id`; each id keeps only the latest response. RAM is hard-capped
+// per CacheConfig (clamped from env+user, built in Engine). Driver abstracted via ICacheDriver
+// -> adding a backend (sqlite/mmap…) only needs an interface impl, NOT touching facade/Engine.
 #pragma once
 
 #include <cstdint>
@@ -13,74 +13,74 @@
 
 namespace core {
 
-// Cấu hình HIỆU LỰC (đã kẹp env/user) phơi cho cache. Code cache KHÔNG tự đọc env/AppConfig.
+// EFFECTIVE config (already clamped env/user) exposed to cache. Cache code does NOT read env/AppConfig.
 struct CacheConfig {
-    std::uint64_t ramEffBytes = 64ull * 1024 * 1024;   // mức RAM hiệu lực
-    std::uint64_t diskEffBytes = 256ull * 1024 * 1024; // mức disk hiệu lực
-    std::uint64_t thresholdBytes = 256ull * 1024;      // response < ngưỡng -> ưu tiên RAM
-    bool enabled = true;   // tắt -> không cache gì
-    bool persist = true;   // tắt -> chỉ RAM (không gắn L2 disk)
+    std::uint64_t ramEffBytes = 64ull * 1024 * 1024;   // effective RAM limit
+    std::uint64_t diskEffBytes = 256ull * 1024 * 1024; // effective disk limit
+    std::uint64_t thresholdBytes = 256ull * 1024;      // response < threshold -> prefer RAM
+    bool enabled = true;   // off -> cache nothing
+    bool persist = true;   // off -> RAM only (no L2 disk attached)
 };
 
-// Bản ghi response mới nhất của 1 request.
+// Latest response record for one request.
 struct ResponseRecord {
-    bool isError = false;                      // true -> lưu lỗi (mạng/timeout/cancel) để hiện lại
-    ErrorKind errorKind = ErrorKind::Unknown;  // hợp lệ khi isError
+    bool isError = false;                      // true -> store error (network/timeout/cancel) to replay
+    ErrorKind errorKind = ErrorKind::Unknown;  // valid when isError
     std::string errorMessage;
-    ApiResponse response;                      // hợp lệ khi !isError
-    std::int64_t receivedAt = 0;               // epoch ms (LRU disk)
-    std::string requestRevision;               // dấu vết request lúc gửi (đổi -> badge "response cũ")
-    std::uint64_t bytes = 0;                   // size ước lượng để hạch toán cap (tính nếu = 0)
+    ApiResponse response;                      // valid when !isError
+    std::int64_t receivedAt = 0;               // epoch ms (disk LRU)
+    std::string requestRevision;               // request fingerprint at send time (changed -> "stale response" badge)
+    std::uint64_t bytes = 0;                   // estimated size for cap accounting (computed if = 0)
 };
 
-// Ước lượng tổng bytes của 1 record (body + headers + meta) để hạch toán cap.
+// Estimate total bytes of one record (body + headers + meta) for cap accounting.
 std::uint64_t estimateBytes(const ResponseRecord& r);
 
-// --- Driver trừu tượng (RESPONSE_CACHE.md §3). Thread-safe nội bộ (mutex riêng). ---
+// --- Abstract driver (RESPONSE_CACHE.md §3). Thread-safe internally (own mutex). ---
 class ICacheDriver {
 public:
     virtual ~ICacheDriver() = default;
     virtual std::optional<ResponseRecord> get(const std::string& id) = 0;
-    // false = từ chối (vd record đơn lẻ > cap -> không cache tầng này).
+    // false = rejected (e.g. single record > cap -> not cached at this tier).
     virtual bool put(const std::string& id, const ResponseRecord& r, std::uint64_t bytes) = 0;
-    // Overload rvalue: driver GIỮ bản sao (vd RAM) có thể move thay vì copy -> tránh copy body lớn.
-    // Mặc định ủy quyền cho bản const& (driver không giữ bản sao, vd disk, không cần override).
+    // rvalue overload: a driver that KEEPS a copy (e.g. RAM) can move instead of copy -> avoid copying large body.
+    // Default delegates to the const& version (driver keeps no copy, e.g. disk, no need to override).
     virtual bool put(const std::string& id, ResponseRecord&& r, std::uint64_t bytes) {
         return put(id, static_cast<const ResponseRecord&>(r), bytes);
     }
     virtual void remove(const std::string& id) = 0;
     virtual void clear() = 0;
-    virtual void setCapBytes(std::uint64_t cap) = 0;   // đổi cap runtime -> evict nếu cần
+    virtual void setCapBytes(std::uint64_t cap) = 0;   // change cap at runtime -> evict if needed
     virtual std::uint64_t usedBytes() const = 0;
-    virtual const char* name() const = 0;              // "ram" | "disk" | tương lai…
+    virtual const char* name() const = 0;              // "ram" | "disk" | future…
 };
 
-// --- Facade L1(RAM) -> L2(Disk). Tìm RAM trước; ghi write-through + ưu tiên RAM khi nhỏ. ---
+// --- Facade L1(RAM) -> L2(Disk). Look up RAM first; write-through + prefer RAM when small. ---
 class ResponseCache {
 public:
-    // l2 = nullptr nếu persist tắt (chỉ RAM). Nhận sở hữu driver -> cho phép inject driver giả (test/§10).
+    // l2 = nullptr if persist off (RAM only). Takes ownership of drivers -> allows injecting fake drivers (test/§10).
     ResponseCache(std::unique_ptr<ICacheDriver> l1,
                   std::unique_ptr<ICacheDriver> l2,
                   std::uint64_t ramThresholdBytes);
     ~ResponseCache();
 
-    // Dựng cache mặc định từ CacheConfig: RAM L1 + (persist ? Disk L2 : none).
-    // sessionDir = thư mục .session của collection (disk lưu ở sessionDir/responses/).
+    // Build a default cache from CacheConfig: RAM L1 + (persist ? Disk L2 : none).
+    // sessionDir = collection's .session dir (disk stores under sessionDir/responses/).
     static std::unique_ptr<ResponseCache> create(const CacheConfig& cfg, const std::string& sessionDir);
 
-    std::optional<ResponseRecord> get(const std::string& id);   // RAM trước -> disk -> promote
-    void put(const std::string& id, ResponseRecord r);          // write-through + ưu tiên RAM
-    void remove(const std::string& id);                         // xoá cả 2 tầng
+    std::optional<ResponseRecord> get(const std::string& id);   // RAM first -> disk -> promote
+    void put(const std::string& id, ResponseRecord r);          // write-through + prefer RAM
+    void remove(const std::string& id);                         // remove from both tiers
     void clear();
     void onConfigChanged(const CacheConfig& c);                 // reload cap + threshold -> evict
 
-    // Quan sát (test/diagnostic).
+    // Observability (test/diagnostic).
     std::uint64_t l1UsedBytes() const;
     std::uint64_t l2UsedBytes() const;
 
 private:
     std::unique_ptr<ICacheDriver> l1_;
-    std::unique_ptr<ICacheDriver> l2_;   // có thể null (persist off)
+    std::unique_ptr<ICacheDriver> l2_;   // may be null (persist off)
     std::uint64_t ramThresholdBytes_;
 };
 

@@ -1,12 +1,12 @@
-# macos_appkit — adapter macOS (Objective-C++ + AppKit), link "core". README §3, UI spec.
-# Chỉ build trên macOS.
+# macos_appkit — macOS adapter (Objective-C++ + AppKit), links "core". README §3, UI spec.
+# Build only on macOS.
 if(NOT APPLE)
-  message(STATUS "Bỏ qua ui/macos_appkit: chỉ build trên macOS")
+  message(STATUS "Skipping ui/macos_appkit: macOS-only build")
   return()
 endif()
 
-# Nhúng .env (ở gốc repo) thành compile-time constant: sinh header chứa nội dung .env,
-# app đọc từ binary nên KHÔNG cần file .env khi chạy. Sửa .env -> tự reconfigure.
+# Embed .env (at repo root) as a compile-time constant: generate a header holding the .env content,
+# the app reads it from the binary so NO .env file is needed at runtime. Editing .env -> auto reconfigure.
 set(DEED_ENV_SRC ${CMAKE_SOURCE_DIR}/.env)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${DEED_ENV_SRC})
 file(READ ${DEED_ENV_SRC} DEED_ENV_CONTENT)
@@ -15,7 +15,7 @@ configure_file(
   ${CMAKE_CURRENT_BINARY_DIR}/generated/app/DeedConfigData.h
   @ONLY)
 
-# Icon app: nhúng logo/deed.icns (nền trong suốt) vào Contents/Resources.
+# App icon: embed logo/deed.icns (transparent background) into Contents/Resources.
 set(DEED_APP_ICON ${CMAKE_SOURCE_DIR}/logo/deed.icns)
 set_source_files_properties(${DEED_APP_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 
@@ -53,7 +53,7 @@ add_executable(deed MACOSX_BUNDLE
   src/windows/EnvWindowController.mm
 )
 
-# --- Debug tools (StressRunner — STRESS_TEST.md §5/§9). KHÔNG ship release. ---
+# --- Debug tools (StressRunner — STRESS_TEST.md §5/§9). Do NOT ship in release. ---
 option(DEED_DEBUG_TOOLS "Compile in-app debug tools (StressRunner)" OFF)
 if(DEED_DEBUG_TOOLS)
   target_sources(deed PRIVATE
@@ -62,18 +62,18 @@ if(DEED_DEBUG_TOOLS)
   target_compile_definitions(deed PRIVATE DEED_DEBUG_TOOLS=1)
 endif()
 
-# Import có tiền tố thư mục (vd "widgets/OS9Button.h", "theme/OS9Theme.h").
-# generated/ chứa DeedConfigData.h (nhúng .env) -> import "app/DeedConfigData.h".
+# Imports use a directory prefix (e.g. "widgets/OS9Button.h", "theme/OS9Theme.h").
+# generated/ holds DeedConfigData.h (embedded .env) -> import "app/DeedConfigData.h".
 target_include_directories(deed PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 target_link_libraries(deed PRIVATE core scintilla "-framework Cocoa" "-framework QuartzCore")
 
-# ARC cho Objective-C++ (quản lý retain/release + __weak trong CoreBridge).
+# ARC for Objective-C++ (manages retain/release + __weak in CoreBridge).
 target_compile_options(deed PRIVATE -fobjc-arc -fobjc-weak)
 
 set_target_properties(deed PROPERTIES
-  OUTPUT_NAME "deed"     # -> deed.app + Contents/MacOS/deed (khớp CFBundleExecutable)
+  OUTPUT_NAME "deed"     # -> deed.app + Contents/MacOS/deed (matches CFBundleExecutable)
   MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/resources/Info.plist
 )

@@ -4,13 +4,13 @@
 
 namespace core { class Engine; }
 
-// Ma trận ENV (hàng=alias, cột=env; cột 0 = base hiển thị "Local"). SPEC §T1–T5.
-// Tự vẽ bằng OS9EnvGrid (không NSTableView). Action inline trong bảng (không còn
-// dải nút bottom). Nhúng vào màn Config: vend ra một NSView.
+// ENV matrix (row=alias, col=env; col 0 = base shown as "Local"). SPEC §T1–T5.
+// Self-drawn via OS9EnvGrid (no NSTableView). Inline actions in the table (no
+// bottom button strip). Embedded in the Config screen: vends an NSView.
 @interface EnvWindowController : NSObject <OS9EnvGridDelegate>
 - (instancetype)initWithEngine:(core::Engine *)engine;
-- (NSView *)view;     // build (lazy) + trả container để nhúng
-- (void)reload;       // nạp lại từ store
-- (void)save;         // ghi các env đã sửa (atomic, plaintext)
-- (void)layout;       // sắp xếp lại subview theo bounds hiện tại của view
+- (NSView *)view;     // build (lazy) + return container to embed
+- (void)reload;       // reload from store
+- (void)save;         // write edited envs (atomic, plaintext)
+- (void)layout;       // re-layout subviews to view's current bounds
 @end

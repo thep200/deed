@@ -1,8 +1,8 @@
 #import "windows/MainWindowController+Private.h"
 
-// File này giữ phần lõi: dựng UI (build*), layout, render theo type, window & toast.
-// Các nhóm còn lại tách sang category: +Tree / +Editor / +Send / +Config / +Stress.
-// ivar + import dùng chung nằm ở MainWindowController+Private.h.
+// This file holds the core: UI building (build*), layout, per-type render, window & toast.
+// The remaining groups are split into categories: +Tree / +Editor / +Send / +Config / +Stress.
+// Shared ivars + imports live in MainWindowController+Private.h.
 
 @implementation MainWindowController
 
@@ -10,17 +10,17 @@
 
 - (void)showWindow {
     DeedConfig *cfg = [DeedConfig shared];
-    // Font hiển thị lấy từ Settings (app-support) — set TRƯỚC khi dựng widget.
+    // Display font comes from Settings (app-support) — set BEFORE building widgets.
     { core::AppConfigStore a; a.setDefaults([self appDefaultsFromEnv]); core::AppConfig c = a.load();
       [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize]; }
-    // Kiểu nút: new (btn-new.svg) mặc định, hoặc classic (button.svg) qua .env.
+    // Button style: new (btn-new.svg) by default, or classic (button.svg) via .env.
     [OS9Theme setButtonStyleName:[cfg stringFor:@"BUTTON_STYLE" def:@"new"]];
     NSRect frame = NSMakeRect(0, 0, [cfg floatFor:@"WINDOW_WIDTH" def:1040], [cfg floatFor:@"WINDOW_HEIGHT" def:680]);
-    // Góc cửa sổ: SQUARE_CORNERS=1 (mặc định) -> borderless góc VUÔNG kiểu OS9.
-    // =0 -> titled window hệ thống (góc bo tròn). Tiêu đề/nút luôn tự vẽ ở OS9TitleBar.
+    // Window corners: SQUARE_CORNERS=1 (default) -> borderless SQUARE corners, OS9 style.
+    // =0 -> system titled window (rounded corners). Title/buttons are always drawn by OS9TitleBar.
     BOOL square = [cfg boolFor:@"SQUARE_CORNERS" def:YES];
     if (square) {
-        // + Miniaturizable: cho phép thu vào Dock (genie) mà vẫn borderless -> góc VUÔNG.
+        // + Miniaturizable: allow minimizing into the Dock (genie) while staying borderless -> SQUARE corners.
         _window = [[OS9Window alloc] initWithContentRect:frame
                                                styleMask:(NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable |
                                                           NSWindowStyleMaskMiniaturizable)
@@ -40,17 +40,17 @@
         [_window standardWindowButton:NSWindowZoomButton].hidden = YES;
     }
     _window.movableByWindowBackground = NO;
-    _window.releasedWhenClosed = NO;   // §4: controller sở hữu _window (ARC); không để close tự release
+    _window.releasedWhenClosed = NO;   // §4: controller owns _window (ARC); don't let close auto-release it
     _window.delegate = self;
     _window.minSize = NSMakeSize([cfg floatFor:@"WINDOW_MIN_WIDTH" def:820], [cfg floatFor:@"WINDOW_MIN_HEIGHT" def:520]);
-    // App platinum sáng -> ép Aqua để text/field không bị trắng theo Dark Mode hệ thống.
+    // Bright platinum app -> force Aqua so text/fields aren't washed white by system Dark Mode.
     _window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
 
     OS9BackgroundView *content = [[OS9BackgroundView alloc] initWithFrame:frame];
     _window.contentView = content;
 
     _treeW = [cfg floatFor:@"SIDEBAR_WIDTH" def:230];
-    _reqW = 0; // tính ở relayout lần đầu
+    _reqW = 0; // computed on first relayout
 
     [self buildChrome];
     _mainPane = [[OS9BackgroundView alloc] initWithFrame:NSZeroRect];
@@ -77,10 +77,10 @@
     [self restoreLastCollection];
 }
 
-// Mở lại thư mục collection gần nhất (lưu ở app-support). Bỏ qua nếu chạy chế độ test.
+// Reopen the most recent collection folder (saved in app-support). Skipped in test mode.
 - (void)restoreLastCollection {
-    if (getenv("APICLIENT_OPEN")) return; // affordance test sẽ tự mở folder khác
-    core::AppConfigStore appCfg;           // mặc định: ~/Library/Application Support/deed/config.json
+    if (getenv("APICLIENT_OPEN")) return; // test affordance opens its own folder
+    core::AppConfigStore appCfg;           // default: ~/Library/Application Support/deed/config.json
     appCfg.setDefaults([self appDefaultsFromEnv]);
     std::string last = appCfg.load().lastCollectionRoot;
     if (last.empty()) return;
@@ -98,14 +98,14 @@
     _titleBar.zoomTarget = self;
     _titleBar.zoomAction = @selector(zoomToggle:);
     _titleBar.collapseTarget = self;
-    _titleBar.collapseAction = @selector(collapseToggle:);   // windowshade (borderless không minimize được)
+    _titleBar.collapseAction = @selector(collapseToggle:);   // windowshade (borderless can't minimize)
     [_window.contentView addSubview:_titleBar];
 }
 
 - (void)buildToast { _toasts = [NSMutableArray array]; }
 
-// Tắt toàn bộ tính năng nhập tự động của macOS trên một NSTextView (kể cả field editor).
-// Mục đích: KHÔNG để hệ thống bật autofill/spell/completion -> không spawn tiến trình con hỗ trợ.
+// Disable all macOS auto-input features on an NSTextView (including the field editor).
+// Goal: prevent system autofill/spell/completion -> no helper subprocesses spawned.
 - (void)disableAutoFeatures:(NSTextView *)tv {
     tv.continuousSpellCheckingEnabled = NO;
     tv.grammarCheckingEnabled = NO;
@@ -119,8 +119,8 @@
         tv.automaticTextCompletionEnabled = NO;   // macOS 10.12.2+
 }
 
-// NSTextField dùng FIELD EDITOR dùng chung của window. Trả về field editor đã tắt
-// hết auto-features -> áp cho MỌI ô text (URL, env, settings) trong window.
+// NSTextFields use the window's SHARED field editor. Returns a field editor with all
+// auto-features disabled -> applies to EVERY text field (URL, env, settings) in the window.
 - (id)windowWillReturnFieldEditor:(NSWindow *)sender toObject:(id)client {
     if (!_fieldEditor) {
         _fieldEditor = [[NSTextView alloc] initWithFrame:NSZeroRect];
@@ -131,8 +131,8 @@
 }
 
 - (void)styleScroller:(NSScrollView *)sc {
-    // OVERLAY: ẩn, chỉ hiện khi có event scroll rồi tự ẩn. OS9Scroller luôn vẽ thumb
-    // ĐỦ BỀ RỘNG (không phụ thuộc hover) nên không bị "mảnh -> phình khi hover".
+    // OVERLAY: hidden, shown only on scroll events then auto-hides. OS9Scroller always draws a
+    // FULL-WIDTH thumb (not hover-dependent), so it never goes "thin -> swells on hover".
     sc.scrollerStyle = NSScrollerStyleOverlay;
     sc.autohidesScrollers = YES;
     sc.scrollerKnobStyle = NSScrollerKnobStyleDefault;
@@ -144,13 +144,13 @@
 
 - (void)buildTree {
     _openButton = [[OS9BevelButton alloc] initWithTitle:StrOpenFolder target:self action:@selector(openFolder:)];
-    [_mainPane addSubview:_openButton];   // nhãn path căn giữa (mặc định)
+    [_mainPane addSubview:_openButton];   // centered path label (default)
 
     _treeInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     [_mainPane addSubview:_treeInset];
     _treeScroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     _treeScroll.hasVerticalScroller = YES;
-    _treeScroll.borderType = NSNoBorder;        // viền răng cưa do OS9SerratedInset vẽ
+    _treeScroll.borderType = NSNoBorder;        // serrated border drawn by OS9SerratedInset
     [self styleScroller:_treeScroll];
     _treeScroll.backgroundColor = [NSColor whiteColor];
 
@@ -160,19 +160,19 @@
     [_tree addTableColumn:col];
     _tree.outlineTableColumn = col;
     _tree.headerView = nil;
-    _tree.rowHeight = 20;                  // đủ chỗ icon 16 + đường kẻ ngăn hàng (SPEC §2)
-    _tree.indentationPerLevel = 14;        // mỗi cấp thụt 1 gutter -> tam giác con dưới nhãn cha
-    _tree.allowsMultipleSelection = YES;   // chọn nhiều để xoá cùng lúc
-    // VIỆC 3: TẮT highlight xanh mặc định -> tự vẽ nền XÁM nhẹ (row view bên dưới).
+    _tree.rowHeight = 20;                  // room for 16px icon + row separator line (SPEC §2)
+    _tree.indentationPerLevel = 14;        // one gutter indent per level -> child triangle under parent label
+    _tree.allowsMultipleSelection = YES;   // multi-select to delete at once
+    // TASK 3: DISABLE default blue highlight -> draw a light GRAY background ourselves (row view below).
     _tree.selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone;
     _tree.dataSource = self;
     _tree.delegate = self;
     _tree.target = self;
     _tree.action = @selector(treeClicked:);          // click folder -> fold/unfold
-    _tree.doubleAction = @selector(treeDoubleClicked:); // dbl: vùng trống -> new HTTP; trên row -> rename
+    _tree.doubleAction = @selector(treeDoubleClicked:); // dbl: empty area -> new HTTP; on a row -> rename
     _expandedFolders = [NSMutableSet set];
     _tree.backgroundColor = [NSColor whiteColor];
-    [_tree registerForDraggedTypes:@[ kTreeDragType ]]; // kéo-thả di chuyển
+    [_tree registerForDraggedTypes:@[ kTreeDragType ]]; // drag-and-drop move
     __weak MainWindowController *weakSelf = self;
     _tree.menuProvider = ^NSMenu *(NSInteger row) { return [weakSelf contextMenuForRow:row]; };
     _treeScroll.documentView = _tree;
@@ -181,9 +181,9 @@
 }
 
 - (void)buildEditors {
-    // (3) request: editor Scintilla sửa được. KHÔNG cần stash mỗi phím:
-    // stashActiveReqBuffer đã chạy ở MỌI điểm đọc buffer (đổi tab / gửi / đổi mode)
-    // nên buffer tab hiện tại luôn được cập nhật trước khi dùng (tránh copy O(n)/phím).
+    // (3) request: editable Scintilla editor. No need to stash on every keystroke:
+    // stashActiveReqBuffer runs at EVERY buffer-read point (tab switch / send / mode change),
+    // so the current tab's buffer is always up to date before use (avoids O(n) copy per key).
     _reqInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     [_mainPane addSubview:_reqInset];
     _reqText = [[SciTextView alloc] initEditable:YES];
@@ -191,7 +191,7 @@
     _reqBuffers = [NSMutableArray array];
     _reqTabButtons = [NSMutableArray array];
 
-    // (4) response: editor Scintilla read-only.
+    // (4) response: read-only Scintilla editor.
     _respInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     [_mainPane addSubview:_respInset];
     _respText = [[SciTextView alloc] initEditable:NO];
@@ -200,16 +200,16 @@
     _respTabButtons = [NSMutableArray array];
     _prettyMode = 0;
 
-    // Pane trái: nút cURL (Format JSON chuyển sang menu chuột phải trong editor).
+    // Left pane: cURL button (Format JSON moved to the editor's right-click menu).
     _curlButton = [[OS9BevelButton alloc] initWithTitle:StrBtnCurl target:self action:@selector(copyAsCurl:)];
     _curlButton.toolTip = StrTipCurl;
     [_mainPane addSubview:_curlButton];
 }
 
-// Nhãn + biến đổi body theo chế độ hiện tại của nút pretty.
+// Label + body transform per the pretty button's current mode.
 - (NSString *)prettyTitle { return @[ StrViewPretty, StrViewRaw, StrViewEncode, StrViewDecode ][_prettyMode]; }
 - (NSString *)applyView:(const std::string &)body { return [self applyView:body mode:_prettyMode]; }
-// Biến đổi body theo `mode` rõ ràng (KHÔNG đọc ivar) -> an toàn gọi từ thread nền (U2).
+// Transform body per an explicit `mode` (reads NO ivars) -> safe to call from a background thread (U2).
 - (NSString *)applyView:(const std::string &)body mode:(int)mode {
     switch (mode) {
         case 1: return N(core::fieldcodec::formatJson(body, false));
@@ -223,31 +223,31 @@
     _statusBar = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     [_mainPane addSubview:_statusBar];
     _statusLabel = OS9CenteredLabel(@"");
-    _statusLabel.alignment = NSTextAlignmentCenter;   // căn giữa ngang + dọc
+    _statusLabel.alignment = NSTextAlignmentCenter;   // center horizontally + vertically
     [_mainPane addSubview:_statusLabel];
 }
 
 - (void)buildToolbar {
     _settingButton = [[OS9BevelButton alloc] initWithTitle:@"" target:self action:@selector(settingClicked:)];
-    _settingButton.icon = OS9GearImage(16);   // bánh răng cổ điển thay cho chữ "Setting" (căn giữa)
+    _settingButton.icon = OS9GearImage(16);   // classic gear instead of "Setting" text (centered)
     _settingButton.toolTip = StrTipSettings;
     _envButton = [[OS9BevelButton alloc] initWithTitle:StrEnvLocal target:self action:@selector(envClicked:)];
-    _envButton.dropdown = YES;   // hiển thị mũi tên dropdown như method
+    _envButton.dropdown = YES;   // show dropdown arrow like method
     _sendButton = [[OS9BevelButton alloc] initWithTitle:@"" target:self action:@selector(sendRequest:)];
     _sendButton.isDefault = YES;
-    _sendButton.icon = OS9SendImage(16);   // icon máy bay giấy thay cho label "Send"
+    _sendButton.icon = OS9SendImage(16);   // paper-plane icon instead of "Send" label
     _sendButton.toolTip = StrTipSend;
     _cancelButton = [[OS9BevelButton alloc] initWithTitle:StrCancel target:self action:@selector(cancelClicked:)];
 
-    // gRPC: nguồn proto = dropdown (Reflection | .proto). Chỉ 2 lựa chọn.
+    // gRPC: proto source = dropdown (Reflection | .proto). Only 2 choices.
     _protoPopup = [[OS9PopupButton alloc] initWithItems:@[ StrProtoReflection, StrProtoFile ]
                                                  target:self action:@selector(protoModeChanged:)];
     _protoPopup.toolTip = StrTipProtoSource;
 
-    // gRPC: chọn service/RPC mà server cung cấp (đặt trước nút Send).
+    // gRPC: pick the service/RPC the server provides (placed before the Send button).
     _servicePopup = [[OS9PopupButton alloc] initWithItems:@[ StrNoRpc ]
                                                    target:self action:@selector(serviceMethodChanged:)];
-    // Bấm vào -> chủ động check host lấy RPC rồi mới bung menu (reflection cần IO mạng).
+    // On click -> actively check the host for RPCs, then pop the menu (reflection needs network IO).
     __weak MainWindowController *wsForRpc = self;
     _servicePopup.onClick = ^{
         MainWindowController *s = wsForRpc; if (!s) return;
@@ -257,7 +257,7 @@
     _methodPopup = [[OS9PopupButton alloc] initWithItems:@[ StrMethodGet, StrMethodPost, StrMethodPut, StrMethodPatch, StrMethodDelete, StrMethodHead, StrMethodOptions ]
                                                   target:self action:@selector(methodChanged:)];
 
-    // Ô URL: KHÔNG bezel native -> bọc trong OS9SerratedInset (góc răng cưa retro).
+    // URL field: NO native bezel -> wrapped in OS9SerratedInset (retro serrated corners).
     _urlInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     _urlField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     _urlField.font = [OS9Theme monoFont];
@@ -266,14 +266,14 @@
     _urlField.action = @selector(urlCommitted:);
     _urlField.bezeled = NO;
     _urlField.bordered = NO;
-    _urlField.drawsBackground = NO;                  // nền trắng do OS9InsetView vẽ
-    _urlField.textColor = [NSColor blackColor];      // chữ đen trên nền trắng
+    _urlField.drawsBackground = NO;                  // white background drawn by OS9InsetView
+    _urlField.textColor = [NSColor blackColor];      // black text on white
     _urlField.focusRingType = NSFocusRingTypeNone;
-    _urlField.usesSingleLineMode = YES;              // không wrap xuống dòng
+    _urlField.usesSingleLineMode = YES;              // no line wrapping
     _urlField.cell.wraps = NO;
     _urlField.cell.scrollable = YES;
     _urlField.lineBreakMode = NSLineBreakByTruncatingTail;
-    _urlField.delegate = self;   // controlTextDidChange: -> phát hiện dán cURL/grpcurl
+    _urlField.delegate = self;   // controlTextDidChange: -> detect cURL/grpcurl paste
     [_urlInset addSubview:_urlField];
 
     for (NSView *v in @[ _settingButton, _envButton, _sendButton, _cancelButton, _protoPopup, _servicePopup, _methodPopup, _urlInset ])
@@ -299,13 +299,13 @@
 
 - (void)buildConfigPane {
     _backButton = [[OS9BevelButton alloc] initWithTitle:StrBtnBack target:self action:@selector(exitConfig:)];
-    [_configPane addSubview:_backButton];   // tiêu đề màn nằm trên title bar (xem updateTitle)
+    [_configPane addSubview:_backButton];   // screen title goes in the title bar (see updateTitle)
 
-    _envVC = [[EnvWindowController alloc] initWithEngine:nil]; // engine set khi mở
+    _envVC = [[EnvWindowController alloc] initWithEngine:nil]; // engine set on open
 
-    // Settings = JSON -> dùng SciTextView (Scintilla) như editor request: tô màu JSON,
-    // số dòng, theme Platinum, scrollbar OS9. Scintilla tự quản buffer (không spawn AppleSpell).
-    // Bọc trong OS9SerratedInset để có viền răng cưa giống màn Environments (OS9EnvGrid) + pane khác.
+    // Settings = JSON -> use SciTextView (Scintilla) like the request editor: JSON syntax coloring,
+    // line numbers, Platinum theme, OS9 scrollbar. Scintilla manages its own buffer (no AppleSpell spawn).
+    // Wrapped in OS9SerratedInset for the serrated border matching the Environments screen (OS9EnvGrid) + other panes.
     _settingInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     [_configPane addSubview:_settingInset];
     _settingEditor = [[SciTextView alloc] initEditable:YES];
@@ -317,7 +317,7 @@
 - (void)relayout {
     NSRect cb = [_window.contentView bounds];
     CGFloat W = cb.size.width, H = cb.size.height;
-    CGFloat titleH = 21;   // §2 spec: thanh title cao cố định 21px (gồm viền)
+    CGFloat titleH = 21;   // §2 spec: title bar fixed at 21px tall (incl. border)
     _titleBar.frame = NSMakeRect(0, 0, W, titleH);
     _mainPane.frame = NSMakeRect(0, titleH, W, H - titleH);
     _configPane.frame = NSMakeRect(0, titleH, W, H - titleH);
@@ -326,7 +326,7 @@
     DeedConfig *cfg = [DeedConfig shared];
     CGFloat MW = _mainPane.bounds.size.width, MH = _mainPane.bounds.size.height;
     CGFloat pad = [cfg floatFor:@"PADDING" def:8];
-    // Lề ngoài 2 bên = mép ngoài icon title -> pane/nút thẳng hàng với close/zoom/hide.
+    // Outer side margins = outer edge of title icons -> panes/buttons align with close/zoom/hide.
     CGFloat side = [OS9TitleBar iconSideInset];
     CGFloat tabH = [cfg floatFor:@"TAB_HEIGHT" def:22];
     CGFloat toolH = [cfg floatFor:@"TOOLBAR_HEIGHT" def:40];
@@ -336,15 +336,15 @@
 
     CGFloat top = pad;
     CGFloat statusY = top + tabH + 2;
-    CGFloat panesY = statusY + statusH + 2;            // sát status hơn -> pane cao lên trên
-    CGFloat panesBottom = MH - toolH - 2;              // sát toolbar hơn -> pane dài xuống dưới
+    CGFloat panesY = statusY + statusH + 2;            // closer to status -> pane extends higher
+    CGFloat panesBottom = MH - toolH - 2;              // closer to toolbar -> pane extends lower
 
-    // clamp bề rộng panes
+    // clamp pane widths
     CGFloat minTree = 140, minReq = 200, minResp = 220;
     CGFloat avail = MW - 2 * side - 2 * dw;
     if (_treeW < minTree) _treeW = minTree;
     if (_treeW > avail - minReq - minResp) _treeW = avail - minReq - minResp;
-    CGFloat remain = avail - _treeW; // cho req + resp
+    CGFloat remain = avail - _treeW; // for req + resp
     if (_reqW <= 0) _reqW = remain / 2;
     if (_reqW < minReq) _reqW = minReq;
     if (_reqW > remain - minResp) _reqW = remain - minResp;
@@ -356,23 +356,23 @@
     CGFloat divRespX = reqX + _reqW;
     CGFloat respX = divRespX + dw;
 
-    // (1) Open + (2) tree (CRUD qua chuột phải, không còn nút ⋯) — bọc viền răng cưa
+    // (1) Open + (2) tree (CRUD via right-click, no more ⋯ button) — wrapped in serrated border
     _openButton.frame = NSMakeRect(treeX, top, _treeW, tabH);
     _treeInset.frame = NSMakeRect(treeX, statusY, _treeW, panesBottom - statusY);
     _treeScroll.frame = NSInsetRect(_treeInset.bounds, 2, 2);
 
-    // dividers (cao suốt vùng panes)
+    // dividers (full height of panes region)
     _divTree.frame = NSMakeRect(divTreeX, statusY, dw, panesBottom - statusY);
     _divResp.frame = NSMakeRect(divRespX, panesY, dw, panesBottom - panesY);
 
-    // (3) NHÓM pane trái = tab request + cURL (cùng 1 hàng, dàn đều) + editor
+    // (3) LEFT pane GROUP = request tabs + cURL (same row, evenly spread) + editor
     NSMutableArray<OS9BevelButton *> *leftTabGroup = [_reqTabButtons mutableCopy];
     if (_curlButton) [leftTabGroup addObject:_curlButton];
     [self layoutTabButtons:leftTabGroup atX:reqX y:top width:_reqW height:tabH extra:0];
     _reqInset.frame = NSMakeRect(reqX, panesY, _reqW, panesBottom - panesY);
     _reqText.frame = NSInsetRect(_reqInset.bounds, 2, 2);
 
-    // (4) NHÓM pane phải = tab response + Pretty (cùng 1 hàng) + editor
+    // (4) RIGHT pane GROUP = response tabs + Pretty (same row) + editor
     NSMutableArray<OS9BevelButton *> *rightTabGroup = [_respTabButtons mutableCopy];
     if (_prettyButton) [rightTabGroup addObject:_prettyButton];
     [self layoutTabButtons:rightTabGroup atX:respX y:top width:respW height:tabH extra:0];
@@ -384,10 +384,10 @@
     _statusBar.frame = NSMakeRect(slX, statusY, slW, statusH);
     _statusLabel.frame = NSMakeRect(slX + 8, statusY + 1, slW - 16, statusH - 2);
 
-    // toolbar (1 dòng): Setting | ENV | Method/Proto | URL (giãn) | Cancel(khi gửi) | Send
+    // toolbar (1 row): Setting | ENV | Method/Proto | URL (stretches) | Cancel(when sending) | Send
     CGFloat ty = MH - toolH + (toolH - btnH) / 2;
     CGFloat x = side;
-    CGFloat wSetting = [cfg floatFor:@"BTN_SETTING_W" def:26];   // icon-only, gọn -> gear sát mép trái
+    CGFloat wSetting = [cfg floatFor:@"BTN_SETTING_W" def:26];   // icon-only, compact -> gear hugs left edge
     CGFloat wEnv = [cfg floatFor:@"BTN_ENV_W" def:120];
     CGFloat wMethod = [cfg floatFor:@"BTN_METHOD_W" def:92];
     CGFloat wProto = [cfg floatFor:@"BTN_PROTO_W" def:120];
@@ -406,15 +406,15 @@
 
     _cancelButton.hidden = !_sending;
     _servicePopup.hidden = !grpc;
-    // Nhóm phải: [servicePopup (gRPC)] [Cancel (khi gửi)] [Send].
+    // Right group: [servicePopup (gRPC)] [Cancel (when sending)] [Send].
     CGFloat rightGroup = wSend + 6 + (_sending ? wCancel + 6 : 0) + (grpc ? wService + 6 : 0);
     CGFloat urlW = (MW - side) - x - rightGroup;
     if (urlW < 140) urlW = 140;
     _urlInset.frame = NSMakeRect(x, ty, urlW, btnH);
-    // field nằm trong inset, chừa viền + canh giữa theo chiều dọc cho 1 dòng.
+    // field sits inside the inset, leaving room for the border + vertically centered for one line.
     CGFloat fh = ceil([[OS9Theme monoFont] ascender] - [[OS9Theme monoFont] descender]) + 2;
     _urlField.frame = NSMakeRect(4, floor((btnH - fh) / 2), urlW - 8, fh);
-    CGFloat rx = MW - side - wSend;           // mép phải nút Send
+    CGFloat rx = MW - side - wSend;           // right edge of the Send button
     _sendButton.frame = NSMakeRect(rx, ty, wSend, btnH);
     if (_sending) { rx -= 6 + wCancel; _cancelButton.frame = NSMakeRect(rx, ty, wCancel, btnH); }
     if (grpc) { rx -= 6 + wService; _servicePopup.frame = NSMakeRect(rx, ty, wService, btnH); }
@@ -432,7 +432,7 @@
 - (void)layoutConfig {
     CGFloat W = _configPane.bounds.size.width, H = _configPane.bounds.size.height;
     CGFloat pad = 12;
-    _backButton.frame = NSMakeRect(pad, pad, 90, 24);                 // ← Back (trên-trái); tiêu đề ở title bar
+    _backButton.frame = NSMakeRect(pad, pad, 90, 24);                 // ← Back (top-left); title in the title bar
 
     CGFloat top = pad + 34;
     NSRect body = NSMakeRect(pad, top, W - 2 * pad, H - top - pad);
@@ -440,16 +440,16 @@
         if (_envVC.view) { _envVC.view.frame = body; [_envVC layout]; }
     } else {                                                         // Settings
         _settingInset.frame = body;
-        _settingEditor.frame = NSInsetRect(_settingInset.bounds, 2, 2);   // chừa viền răng cưa
+        _settingEditor.frame = NSInsetRect(_settingInset.bounds, 2, 2);   // leave room for serrated border
     }
 }
 
-#pragma mark Conditional render theo type
+#pragma mark Conditional render by type
 
 - (void)setRequestType:(core::RequestType)t {
     _model.type = t;
     if (t == core::RequestType::Http) {
-        _reqTabTitles = @[ StrTabBody, StrTabQuery, StrTabHeaders, StrTabAuth ];  // "Query" (tránh nhầm với path params); Body ngoài cùng trái
+        _reqTabTitles = @[ StrTabBody, StrTabQuery, StrTabHeaders, StrTabAuth ];  // "Query" (avoid confusion with path params); Body leftmost
         _respTabTitles = @[ StrTabResponse, StrTabHeaders, StrTabRequest, StrTabCookie ];
     } else {
         _reqTabTitles = @[ StrTabMessage, StrTabMetadata, StrTabAuth ];
@@ -469,7 +469,7 @@
     for (NSString *t in _reqTabTitles) {
         OS9BevelButton *b;
         if ([t isEqualToString:StrTabBody]) {
-            // Body = dropdown chọn định dạng (json/file/form), label "Body (MODE)".
+            // Body = format-picker dropdown (json/file/form), label "Body (MODE)".
             b = [[OS9BevelButton alloc] initWithTitle:[self bodyButtonTitle]
                                                target:self action:@selector(bodyButtonClicked:)];
             b.dropdown = YES;
@@ -496,7 +496,7 @@
     _reqText.editable = has;
     _sendButton.enabledState = has && !_sending;
     if (!has) {
-        // §2.1: resign input context trước khi xoá nội dung editor/URL (tránh dangling context).
+        // §2.1: resign input context before clearing editor/URL contents (avoid dangling context).
         OS9SafeEndEditing(_window, _reqText);
         OS9SafeEndEditing(_window, _respText);
         _reqText.string = @""; _respText.string = @""; _urlField.stringValue = @""; _urlPrevLen = 0;
@@ -507,13 +507,13 @@
 
 #pragma mark Window / misc
 
-// performClose: vô hiệu với window borderless -> gọi windowShouldClose: (tự lưu) rồi close trực tiếp.
+// performClose: is a no-op on borderless windows -> call windowShouldClose: (autosaves) then close directly.
 - (void)closeWindow:(id)sender {
     if ([self windowShouldClose:_window]) {
-        // §2.4: dừng spinner timer tường minh (block tự huỷ qua weak self, nhưng dọn ngay cho sạch).
+        // §2.4: explicitly stop the spinner timer (the block self-cancels via weak self, but clean up now).
         [_spinTimer invalidate]; _spinTimer = nil;
-        // §2/§4: nhả input context của mọi text view/field TRƯỚC khi đóng -> updateWindows
-        // không kích hoạt lại context của view đang bị tháo.
+        // §2/§4: release the input context of every text view/field BEFORE closing -> updateWindows
+        // won't re-activate the context of a view being torn down.
         OS9SafeEndEditing(_window, nil);
         [_reqText teardown];
         [_respText teardown];
@@ -521,7 +521,7 @@
         [_window close];
     }
 }
-- (BOOL)windowShouldClose:(NSWindow *)sender { [self autosaveCurrent]; return YES; } // tự lưu, không hỏi
+- (BOOL)windowShouldClose:(NSWindow *)sender { [self autosaveCurrent]; return YES; } // autosave, no prompt
 - (void)windowDidResize:(NSNotification *)note { [self relayout]; }
 - (void)windowDidBecomeKey:(NSNotification *)note { [_titleBar setNeedsDisplay:YES]; }
 - (void)windowDidResignKey:(NSNotification *)note { [_titleBar setNeedsDisplay:YES]; }
@@ -543,25 +543,25 @@
     return [out componentsJoinedByString:@"/"];
 }
 
-#pragma mark Toast (retro phẳng, stack góc phải-trên, đẩy xuống)
+#pragma mark Toast (flat retro, stack top-right, pushed down)
 
-- (void)toast:(NSString *)msg     { [self showToast:msg kind:0]; } // info (xám)
-- (void)toastOk:(NSString *)msg   { [self showToast:msg kind:1]; } // success (xanh)
-- (void)toastWarn:(NSString *)msg { [self showToast:msg kind:2]; } // fail (đỏ)
+- (void)toast:(NSString *)msg     { [self showToast:msg kind:0]; } // info (gray)
+- (void)toastOk:(NSString *)msg   { [self showToast:msg kind:1]; } // success (green)
+- (void)toastWarn:(NSString *)msg { [self showToast:msg kind:2]; } // fail (red)
 
 - (void)showToast:(NSString *)msg kind:(NSInteger)kind {
     if (!_toasts) _toasts = [NSMutableArray array];
     NSView *cv = _window.contentView;
     OS9Toast *t = [[OS9Toast alloc] initWithMessage:msg kind:kind];
     NSSize sz = [OS9Toast sizeForMessage:msg];
-    // bắt đầu off-screen bên phải, ở slot trên cùng -> reflow sẽ trượt vào.
+    // start off-screen to the right, in the top slot -> reflow slides it in.
     t.frame = NSMakeRect(cv.bounds.size.width, 14, sz.width, sz.height);
     __weak MainWindowController *ws = self;
     __weak OS9Toast *wt = t;
     t.onClose = ^{ [ws dismissToast:wt]; };
     [cv addSubview:t positioned:NSWindowAbove relativeTo:nil];
     [_toasts addObject:t];
-    while (_toasts.count > 5) {                       // giới hạn stack
+    while (_toasts.count > 5) {                       // cap the stack
         OS9Toast *old = _toasts.firstObject;
         [_toasts removeObjectAtIndex:0]; [old removeFromSuperview];
     }
@@ -573,14 +573,14 @@
 - (void)dismissToast:(OS9Toast *)t {
     if (!t || ![_toasts containsObject:t]) return;
     [_toasts removeObject:t];
-    NSRect away = t.frame; away.origin.x = _window.contentView.bounds.size.width;  // trượt ra phải + mờ
+    NSRect away = t.frame; away.origin.x = _window.contentView.bounds.size.width;  // slide right + fade
     [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
         ctx.duration = 0.28; t.animator.frame = away; t.animator.alphaValue = 0.0;
     } completionHandler:^{ [t removeFromSuperview]; }];
-    [self reflowToasts];   // các toast còn lại trượt xuống lấp chỗ
+    [self reflowToasts];   // remaining toasts slide down to fill the gap
 }
 
-// Xếp toast từ góc phải-TRÊN xuống: mới nhất (cuối mảng) ở trên cùng (content flipped: y nhỏ = trên).
+// Stack toasts from the top-RIGHT downward: newest (end of array) on top (content flipped: small y = top).
 - (void)reflowToasts {
     NSView *cv = _window.contentView;
     CGFloat W = cv.bounds.size.width;

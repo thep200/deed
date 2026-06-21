@@ -1,10 +1,10 @@
 // ui/cli/stress_main.cpp — target `deed_stress` (STRESS_TEST.md §4).
-// Vòng lặp tất định (có seed) trộn các thao tác Core: collection CRUD, load/release,
-// import cURL/grpcurl (kể cả rác), resolve {{var}}, ResponseCache put/get/remove với kiểm
-// cap, ThreadPool flood. Mỗi vòng log RAM (phys_footprint) + dung lượng cache ra CSV.
+// Deterministic (seeded) loop mixing Core operations: collection CRUD, load/release,
+// import cURL/grpcurl (including garbage), resolve {{var}}, ResponseCache put/get/remove with cap
+// checks, ThreadPool flood. Each iteration logs RAM (phys_footprint) + cache size to CSV.
 //
-// Chạy dưới ASan / TSan / `leaks` (xem scripts/stress.sh) để bắt UAF / race / rò RAM.
-// CHỈ build khi -DDEED_BUILD_STRESS=ON (không ship release).
+// Run under ASan / TSan / `leaks` (see scripts/stress.sh) to catch UAF / race / RAM leak.
+// Built ONLY when -DDEED_BUILD_STRESS=ON (not shipped in release).
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -22,7 +22,7 @@
 #include "core/infra/mem_probe.hpp"
 #include "core/variables/variable_resolver.hpp"
 
-#include "infra/thread_pool.hpp"   // core/src nội bộ (header-only) — qua include dir của target
+#include "infra/thread_pool.hpp"   // core/src internal (header-only) — via the target's include dir
 
 using namespace core;
 namespace fs = std::filesystem;
@@ -32,8 +32,8 @@ namespace {
 struct Args {
     long long iters = 50000;
     unsigned seed = 42;
-    std::string log;       // CSV path (rỗng -> không log)
-    long long idleEvery = 500;  // K: cứ K vòng -> idle checkpoint
+    std::string log;       // CSV path (empty -> no logging)
+    long long idleEvery = 500;  // K: every K iterations -> idle checkpoint
 };
 
 Args parseArgs(int argc, char** argv) {
@@ -51,17 +51,17 @@ Args parseArgs(int argc, char** argv) {
     return a;
 }
 
-// Corpus import — gồm cả input HỢP LỆ lẫn RÁC (parser phải không crash/không rò trên rác).
+// Import corpus — includes both VALID inputs and GARBAGE (parser must not crash/leak on garbage).
 const std::vector<std::string>& curlCorpus() {
     static const std::vector<std::string> c = {
         "curl https://example.com/api",
         "curl -X POST https://api.test/v1/users -H 'Content-Type: application/json' -d '{\"a\":1}'",
         "curl -u user:pass -H 'X-Token: abc' https://h/g?x=1&y=2",
         "curl --data-binary @/tmp/x.bin -X PUT http://localhost:8000/up",
-        "curl",                                  // rác: thiếu url
-        "curl -X",                               // rác: cờ treo
-        "not a curl command at all {{{",         // rác hoàn toàn
-        "curl -H -H -H ---- '''' \"\"\"",        // rác: cờ hỏng
+        "curl",                                  // garbage: missing url
+        "curl -X",                               // garbage: dangling flag
+        "not a curl command at all {{{",         // pure garbage
+        "curl -H -H -H ---- '''' \"\"\"",        // garbage: malformed flags
     };
     return c;
 }
@@ -71,21 +71,21 @@ const std::vector<std::string>& grpcCorpus() {
         "grpcurl -d '{\"x\":1}' host:443 a.b.C/Do",
         "grpc://localhost:50051/pkg.Service/Method",
         "grpcs://h:443/a.B/C",
-        "grpcurl",                               // rác
-        "grpcurl -d",                            // rác: treo
-        "::::///garbage",                        // rác
+        "grpcurl",                               // garbage
+        "grpcurl -d",                            // garbage: dangling
+        "::::///garbage",                        // garbage
     };
     return c;
 }
 
-// Template resolve — biến tồn tại, biến rỗng, biến KHÔNG tồn tại (giữ literal).
+// Template resolve — existing var, empty var, NON-existent var (kept literal).
 const std::vector<std::string>& tplCorpus() {
     static const std::vector<std::string> c = {
         "{{baseUrl}}/users/{{id}}",
         "no vars here",
         "{{missing}} and {{baseUrl}}",
         "{{empty}}{{baseUrl}}{{missing}}",
-        "{{{{nested}}}} {{ spaced }}",           // biên: dấu ngoặc lồng / có space
+        "{{{{nested}}}} {{ spaced }}",           // edge: nested braces / with spaces
     };
     return c;
 }
@@ -113,7 +113,7 @@ ResponseRecord makeRecord(std::mt19937& rng, std::size_t bodyBytes) {
 int main(int argc, char** argv) {
     Args args = parseArgs(argc, argv);
 
-    // Temp collection riêng cho lần chạy (dọn ở cuối).
+    // Dedicated temp collection for this run (cleaned up at the end).
     fs::path root = fs::temp_directory_path() / ("deed_stress_" + std::to_string(args.seed));
     std::error_code ec;
     fs::remove_all(root, ec);
@@ -122,13 +122,13 @@ int main(int argc, char** argv) {
     std::unique_ptr<memprobe::StructuredLogger> logger;
     if (!args.log.empty()) {
         logger = std::make_unique<memprobe::StructuredLogger>(args.log);
-        if (!logger->ok()) std::cerr << "WARN: không mở được log " << args.log << "\n";
+        if (!logger->ok()) std::cerr << "WARN: could not open log " << args.log << "\n";
     }
 
     std::mt19937 rng(args.seed);
-    int failures = 0;  // vi phạm bất biến (cap) -> exit code != 0
+    int failures = 0;  // invariant (cap) violation -> exit code != 0
 
-    // Cache nhỏ để THỰC SỰ chạm eviction: RAM 4MB, disk 16MB, threshold 256KB.
+    // Small cache to ACTUALLY hit eviction: RAM 4MB, disk 16MB, threshold 256KB.
     CacheConfig cc;
     cc.ramEffBytes = 4ull * 1024 * 1024;
     cc.diskEffBytes = 16ull * 1024 * 1024;
@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
     fs::create_directories(sessionDir, ec);
     auto cache = ResponseCache::create(cc, sessionDir.string());
 
-    // ThreadPool dùng lại qua các vòng (tránh tạo/huỷ pool 50k lần).
+    // ThreadPool reused across iterations (avoid creating/destroying the pool 50k times).
     ThreadPool pool;
     std::atomic<std::uint64_t> poolCounter{0};
 
@@ -147,9 +147,9 @@ int main(int argc, char** argv) {
     CurlImporter curlImp;
     GrpcImporter grpcImp;
 
-    std::vector<std::string> rels;   // request đang tồn tại trên đĩa
-    std::vector<std::string> ids;    // id song song để dùng làm khoá cache
-    std::string openId;              // request "đang mở" (single-active)
+    std::vector<std::string> rels;   // requests currently on disk
+    std::vector<std::string> ids;    // parallel ids used as cache keys
+    std::string openId;              // the "open" request (single-active)
 
     auto logRow = [&](long long iter, const char* op, bool idle) {
         if (!logger) return;
@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
                     rels[i] = engine.collection().rename(rels[i], nn);
                     break;
                 }
-                case 2: {  // delete request (giải phóng)
+                case 2: {  // delete request (free it)
                     opName = "delete";
                     if (rels.empty()) break;
                     std::size_t i = rng() % rels.size();
@@ -209,15 +209,15 @@ int main(int argc, char** argv) {
                     ids.erase(ids.begin() + (long)i);
                     break;
                 }
-                case 3: {  // load + release (kiểm single-active: chỉ 1 model sống)
+                case 3: {  // load + release (check single-active: only 1 live model)
                     opName = "load";
                     if (rels.empty()) break;
                     std::size_t i = rng() % rels.size();
                     RequestModel m = engine.collection().loadRequest(rels[i]);
-                    openId = m.id;           // model cũ bị huỷ ngay khi ra scope -> single-active
+                    openId = m.id;           // old model destroyed on scope exit -> single-active
                     break;
                 }
-                case 4: {  // import cURL / grpcurl (kể cả rác)
+                case 4: {  // import cURL / grpcurl (including garbage)
                     opName = "import";
                     const auto& cs = curlCorpus();
                     const auto& gs = grpcCorpus();
@@ -233,12 +233,12 @@ int main(int argc, char** argv) {
                     (void)VariableResolver::resolve(ts[rng() % ts.size()], vars);
                     break;
                 }
-                case 6: {  // ResponseCache put/get/remove (nhỏ < threshold & lớn > threshold)
+                case 6: {  // ResponseCache put/get/remove (small < threshold & large > threshold)
                     opName = "cache";
                     if (!cache) break;
                     if (ids.empty()) break;
                     std::size_t i = rng() % ids.size();
-                    bool large = (rng() % 4 == 0);   // ~25% response lớn (vượt threshold)
+                    bool large = (rng() % 4 == 0);   // ~25% large responses (exceed threshold)
                     std::size_t sz = large ? (512ull * 1024 + rng() % (1024 * 1024))   // 0.5–1.5MB
                                            : (rng() % (200 * 1024));                    // < 200KB
                     cache->put(ids[i], makeRecord(rng, sz));
@@ -247,7 +247,7 @@ int main(int argc, char** argv) {
                     checkCaps(iter);
                     break;
                 }
-                case 7: {  // ThreadPool flood — nhiều task ngắn (kiểm không deadlock/không rò)
+                case 7: {  // ThreadPool flood — many short tasks (check no deadlock/no leak)
                     opName = "threadpool";
                     int batch = 200 + (int)(rng() % 800);
                     for (int k = 0; k < batch; ++k)
@@ -256,13 +256,13 @@ int main(int argc, char** argv) {
                 }
             }
         } catch (const std::exception& e) {
-            // Lỗi do dữ liệu (vd rename trùng) là chấp nhận được — KHÔNG được crash/rò.
-            // Sanitizer/leaks sẽ bắt vấn đề thật; ở đây chỉ ghi nhận.
+            // Data-driven errors (e.g. duplicate rename) are acceptable — MUST NOT crash/leak.
+            // Sanitizer/leaks will catch the real problems; here we just acknowledge it.
         }
 
         logRow(iter, opName, false);
 
-        // Idle checkpoint: "đóng" request đang mở -> trạng thái baseline để phân tích rò RAM.
+        // Idle checkpoint: "close" the open request -> baseline state for RAM-leak analysis.
         if (args.idleEvery > 0 && (iter % args.idleEvery) == (args.idleEvery - 1)) {
             openId.clear();
             logRow(iter, "idle", true);

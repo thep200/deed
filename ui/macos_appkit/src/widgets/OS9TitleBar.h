@@ -1,16 +1,16 @@
-// Title bar kẻ sọc + nút close, kéo cửa sổ được.
+// Pinstriped title bar + close button, window is draggable.
 #import <Cocoa/Cocoa.h>
 
 @interface OS9TitleBar : NSView
 @property(nonatomic, copy) NSString *title;
 @property(nonatomic, weak) id closeTarget;
 @property(nonatomic) SEL closeAction;
-@property(nonatomic, weak) id zoomTarget;     // nil -> performZoom mặc định
+@property(nonatomic, weak) id zoomTarget;     // nil -> default performZoom
 @property(nonatomic) SEL zoomAction;
-@property(nonatomic, weak) id collapseTarget; // nil -> miniaturize mặc định
+@property(nonatomic, weak) id collapseTarget; // nil -> default miniaturize
 @property(nonatomic) SEL collapseAction;
 
-// Lề ngoài của icon title (mép ngoài close/hide tới mép cửa sổ). Dùng để màn hình chính
-// canh mép ngoài pane/nút thẳng hàng với icon title ở cả 2 bên.
+// Outer inset of title icons (outer edge of close/hide to window edge). Used so the main screen
+// aligns the outer edge of panes/buttons with the title icons on both sides.
 + (CGFloat)iconSideInset;
 @end

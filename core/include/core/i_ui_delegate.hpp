@@ -1,6 +1,6 @@
-// core/i_ui_delegate.hpp — Port RA (Core → UI). README §2 / UI spec §2.2, §3.
-// Core gọi NGƯỢC lại từ THREAD NỀN; mỗi adapter tự marshal về UI thread.
-// Hợp đồng terminal: với mỗi handle tối đa MỘT trong {onResponse, onError}.
+// core/i_ui_delegate.hpp — OUTBOUND port (Core → UI). README §2 / UI spec §2.2, §3.
+// Core calls BACK from a BACKGROUND THREAD; each adapter marshals to the UI thread itself.
+// Terminal contract: at most ONE of {onResponse, onError} per handle.
 #pragma once
 
 #include "core/types.hpp"
@@ -11,13 +11,13 @@ class IUiDelegate {
 public:
     virtual ~IUiDelegate() = default;
 
-    // Optional cho POC — tiến triển upload/download.
+    // Optional for POC — upload/download progress.
     virtual void onProgress(RequestHandle, const Progress&) {}
 
-    // Terminal: hoàn tất thành công.
+    // Terminal: completed successfully.
     virtual void onResponse(RequestHandle, const ApiResponse&) = 0;
 
-    // Terminal: mạng/timeout/cancel/parse fail. kind == Cancelled sau khi cancel().
+    // Terminal: network/timeout/cancel/parse fail. kind == Cancelled after cancel().
     virtual void onError(RequestHandle, const ApiError&) = 0;
 };
 

@@ -1,8 +1,8 @@
-// grpc_descriptors.hpp — Dựng DescriptorPool dùng chung cho GrpcSender và Engine::listGrpcMethods.
-// Hỗ trợ 3 nguồn: protoFiles (.proto + import paths), descriptorSet (FileDescriptorSet),
-// reflection (gRPC ServerReflection). Giữ nguồn sống suốt vòng dùng qua DescriptorContext.
+// grpc_descriptors.hpp — Build a shared DescriptorPool for GrpcSender and Engine::listGrpcMethods.
+// Supports 3 sources: protoFiles (.proto + import paths), descriptorSet (FileDescriptorSet),
+// reflection (gRPC ServerReflection). Keeps the source alive across the pass via DescriptorContext.
 //
-// Header NỘI BỘ (core/src) — được phép leak kiểu protobuf/grpc; KHÔNG include từ core/include.
+// INTERNAL header (core/src) — may leak protobuf/grpc types; do NOT include from core/include.
 #pragma once
 
 #include <memory>
@@ -21,7 +21,7 @@ namespace core::grpcdesc {
 
 namespace gp = google::protobuf;
 
-// Gom lỗi compile .proto thành chuỗi để báo về UI.
+// Collect .proto compile errors into a string to report back to the UI.
 class ProtoErrorCollector : public gp::compiler::MultiFileErrorCollector {
 public:
     std::string errors;
@@ -29,8 +29,8 @@ public:
                      absl::string_view message) override;
 };
 
-// Giữ mọi nguồn descriptor sống suốt vòng gửi/liệt kê.
-// Thứ tự khai báo quan trọng: pool (tham chiếu db) phải khai báo SAU db để huỷ TRƯỚC.
+// Keep every descriptor source alive across the send/list pass.
+// Declaration order matters: pool (references db) must be declared AFTER db so it destructs FIRST.
 struct DescriptorContext {
     // protoFiles
     std::unique_ptr<gp::compiler::DiskSourceTree> sourceTree;
@@ -40,21 +40,21 @@ struct DescriptorContext {
     std::unique_ptr<gp::DescriptorPool> pool;
     // reflection
     std::shared_ptr<grpc::Channel> channel;
-    std::unique_ptr<gp::DescriptorDatabase> reflectionDb; // khai báo TRƯỚC reflectionPool
+    std::unique_ptr<gp::DescriptorDatabase> reflectionDb; // declared BEFORE reflectionPool
     std::unique_ptr<gp::DescriptorPool> reflectionPool;
 
     const gp::DescriptorPool* activePool = nullptr;
-    std::vector<std::string> serviceNames; // full name của mọi service phát hiện được
+    std::vector<std::string> serviceNames; // full name of every discovered service
     std::string error;
 };
 
-// Tạo credentials cho channel (insecure / TLS).
+// Create channel credentials (insecure / TLS).
 std::shared_ptr<grpc::ChannelCredentials> makeCreds(const GrpcTls& tls);
 
-// Dựng descriptor theo g.protoSource.mode. Trả false + ctx.error nếu lỗi.
+// Build descriptors per g.protoSource.mode. Returns false + ctx.error on failure.
 bool buildDescriptors(const GrpcRequest& g, DescriptorContext& ctx);
 
-// Liệt kê service/method từ context đã build (dùng cho dropdown chọn RPC).
+// List services/methods from a built context (used for the RPC-selection dropdown).
 std::vector<GrpcMethodInfo> listMethods(const DescriptorContext& ctx);
 
 // unary | server_streaming | client_streaming | bidi_streaming.

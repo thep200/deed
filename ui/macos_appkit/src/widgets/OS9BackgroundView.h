@@ -1,4 +1,4 @@
-// Nền platinum (tô xám đặc cho content).
+// Platinum background (solid gray fill for content).
 #import <Cocoa/Cocoa.h>
 
 @interface OS9BackgroundView : NSView

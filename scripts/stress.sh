@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# scripts/stress.sh — chạy stress Core qua các pass sanitizer + leak, thu crash report,
-# rồi phân tích log (STRESS_TEST.md §7). KHÔNG ship release (chỉ dev/CI).
+# scripts/stress.sh — stress Core across sanitizer + leak passes, collect crash reports,
+# then analyze logs (STRESS_TEST.md §7). DO NOT ship in release (dev/CI only).
 #
 #   ./scripts/stress.sh [ITERS] [SEED]
 #
-# Mỗi pass build ra cây build riêng (build-asan / build-tsan / build-leak) để cờ sanitizer
-# không lẫn nhau. ASan và TSan loại trừ nhau -> chạy tách. macOS không có LeakSanitizer tin
-# cậy -> dùng `leaks --atExit`. Artifact (log + crash report + summary) gom vào stress-artifacts/<ts>.
+# Each pass builds into its own build tree (build-asan / build-tsan / build-leak) so sanitizer
+# flags don't mix. ASan and TSan are mutually exclusive -> run separately. macOS has no reliable
+# LeakSanitizer -> use `leaks --atExit`. Artifacts (log + crash report + summary) collected into stress-artifacts/<ts>.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ITERS="${1:-50000}"
 SEED="${2:-42}"
 
-# Gọi cmake qua mise nếu có (đảm bảo đúng toolchain + VCPKG_ROOT), như Makefile.
+# Invoke cmake via mise if available (ensures correct toolchain + VCPKG_ROOT), like the Makefile.
 if command -v mise >/dev/null 2>&1; then RUN="mise exec --"; else RUN=""; fi
 
 TS=$(date +%Y%m%d-%H%M%S); ART="stress-artifacts/$TS"; mkdir -p "$ART"
@@ -40,23 +40,23 @@ run_bin () { # $1=name
 build_pass asan -DENABLE_ASAN=ON
 ASAN_OPTIONS=detect_leaks=0 run_bin asan
 
-# --- TSan pass: data race (ResponseCache put nền vs get, ThreadPool) ---
+# --- TSan pass: data race (ResponseCache background put vs get, ThreadPool) ---
 build_pass tsan -DENABLE_TSAN=ON
 run_bin tsan
 
-# --- Leak pass: build thường + leaks --atExit ---
+# --- Leak pass: normal build + leaks --atExit ---
 build_pass leak
 echo ">>> leaks --atExit"
 DEED_STRESS=1 MallocStackLogging=1 \
   leaks --atExit -- "./build-leak/ui/cli/deed_stress" --iters "$ITERS" --seed "$SEED" \
   --log "$ART/core-leak.csv" 2>&1 | tee "$ART/leaks.out" || true
 
-# --- Crash report mới sinh trong khi chạy ---
+# --- Crash reports newly generated during the run ---
 AFTER=$(ls "$DR" 2>/dev/null | sort || true)
 comm -13 <(echo "$BEFORE") <(echo "$AFTER") | while read -r f; do
   [ -n "$f" ] && cp "$DR/$f" "$ART/" 2>/dev/null || true
 done
 
-# --- Phân tích log (slope/baseline/cap) ---
+# --- Analyze logs (slope/baseline/cap) ---
 python3 scripts/analyze.py "$ART"/*.csv | tee "$ART/summary.txt" || true
 echo "Artifacts: $ART"

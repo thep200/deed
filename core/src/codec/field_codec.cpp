@@ -15,7 +15,7 @@ bool gb(const json& j, const char* k, bool d = false) {
     auto it = j.find(k);
     if (it == j.end()) return d;
     if (it->is_boolean()) return it->get<bool>();
-    if (it->is_number()) return it->get<double>() != 0;   // chấp nhận 0/1 (dạng mới)
+    if (it->is_number()) return it->get<double>() != 0;   // accept 0/1 (new format)
     return d;
 }
 } // namespace
@@ -129,12 +129,12 @@ std::string formatJson(const std::string& text, bool pretty) {
         auto j = json::parse(text);
         return pretty ? j.dump(2) : j.dump();
     } catch (...) {
-        return text; // không phải JSON -> giữ nguyên
+        return text; // not JSON -> leave unchanged
     }
 }
 
 std::string jsonEncodeString(const std::string& text) {
-    json j = text;       // string -> "\"...\"" (escape \n, \" ...)
+    json j = text;       // string -> "\"...\"" (escapes \n, \" ...)
     return j.dump();
 }
 

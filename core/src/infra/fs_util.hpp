@@ -1,26 +1,26 @@
-// fs_util.hpp — tiện ích filesystem nội bộ Core (atomic write, slug, đọc/ghi text).
+// fs_util.hpp — Core-internal filesystem utilities (atomic write, slug, text read/write).
 #pragma once
 
 #include <string>
 
 namespace core::fsutil {
 
-// Đọc toàn bộ file thành string. Trả false nếu không mở được.
+// Read the whole file into a string. Returns false if it cannot be opened.
 bool readFile(const std::string& path, std::string& out);
 
-// Atomic write: ghi ra file tạm cùng thư mục rồi rename đè (README §6.5).
+// Atomic write: write to a temp file in the same dir then rename over it (README §6.5).
 void writeFileAtomic(const std::string& path, const std::string& content);
 
-// Slug hoá tên hiển thị -> tên file an toàn (chữ thường, [a-z0-9-]).
+// Slugify a display name -> safe filename (lowercase, [a-z0-9-]).
 std::string slugify(const std::string& name);
 
-// Tạo thư mục (đệ quy) nếu chưa có.
+// Create the directory (recursively) if it doesn't exist.
 void ensureDir(const std::string& path);
 
-// Đường app-support của OS cho <appName> (macOS: ~/Library/Application Support/<app>).
+// OS app-support path for <appName> (macOS: ~/Library/Application Support/<app>).
 std::string appSupportDir(const std::string& appName);
 
-// Nối path tương đối vào gốc (chuẩn hoá tách '/').
+// Join a relative path onto a base (normalizes '/' separators).
 std::string join(const std::string& a, const std::string& b);
 
 } // namespace core::fsutil

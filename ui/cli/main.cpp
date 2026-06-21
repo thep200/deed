@@ -1,5 +1,5 @@
-// ui/cli — adapter headless để chạy Core không cần GUI (README §3, Phase 1).
-// Dùng cho dev/CI và thử full luồng send → response.
+// ui/cli — headless adapter to run Core without a GUI (README §3, Phase 1).
+// Used for dev/CI and to exercise the full send → response flow.
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
@@ -12,7 +12,7 @@ using namespace core;
 
 namespace {
 
-// Delegate đồng bộ hoá: chờ callback terminal rồi in.
+// Synchronizing delegate: wait for the terminal callback, then print.
 class CliDelegate : public IUiDelegate {
 public:
     void onResponse(RequestHandle, const ApiResponse& r) override {
@@ -55,7 +55,7 @@ private:
 
 int usage() {
     std::cerr <<
-        "apicli — headless driver cho Core\n"
+        "apicli — headless driver for Core\n"
         "  apicli tree <root>\n"
         "  apicli send <root> <relPath>\n"
         "  apicli resolve <root> <template>\n"
@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
         if (cmd == "import-curl" && argc >= 3) {
             CurlImporter imp;
             auto r = imp.parse(joinArgs(argc, argv, 2));
-            if (!r.ok) { std::cerr << "Import lỗi: " << r.error << "\n"; return 1; }
+            if (!r.ok) { std::cerr << "Import error: " << r.error << "\n"; return 1; }
             const HttpRequest& h = r.model.http;
             std::cout << "Imported HTTP OK: " << h.method << " " << h.url << "\n";
             std::cout << "  headers=" << h.headers.size() << " params=" << h.params.size()
@@ -128,13 +128,13 @@ int main(int argc, char** argv) {
         if (cmd == "import-grpc" && argc >= 3) {
             GrpcImporter imp;
             auto r = imp.parse(joinArgs(argc, argv, 2));
-            if (!r.ok) { std::cerr << "Import lỗi: " << r.error << "\n"; return 1; }
+            if (!r.ok) { std::cerr << "Import error: " << r.error << "\n"; return 1; }
             std::cout << "Imported gRPC OK: " << r.model.grpc.service << "/" << r.model.grpc.method
                       << " @ " << r.model.grpc.target << "\n";
             return 0;
         }
     } catch (const std::exception& e) {
-        std::cerr << "Lỗi: " << e.what() << "\n";
+        std::cerr << "Error: " << e.what() << "\n";
         return 1;
     }
     return usage();

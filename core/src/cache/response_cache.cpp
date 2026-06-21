@@ -40,11 +40,11 @@ std::unique_ptr<ResponseCache> ResponseCache::create(const CacheConfig& cfg,
 
 std::optional<ResponseRecord> ResponseCache::get(const std::string& id) {
     if (id.empty()) return std::nullopt;
-    if (auto r = l1_->get(id)) return r;             // L1 hit (RAM trước)
+    if (auto r = l1_->get(id)) return r;             // L1 hit (RAM first)
     if (l2_) {
         if (auto r = l2_->get(id)) {                 // L2 hit
             std::uint64_t b = r->bytes ? r->bytes : estimateBytes(*r);
-            if (b < ramThresholdBytes_) l1_->put(id, *r, b);  // promote lên RAM nếu nhỏ
+            if (b < ramThresholdBytes_) l1_->put(id, *r, b);  // promote to RAM if small
             return r;
         }
     }
@@ -55,9 +55,9 @@ void ResponseCache::put(const std::string& id, ResponseRecord r) {
     if (id.empty()) return;
     if (r.bytes == 0) r.bytes = estimateBytes(r);
     std::uint64_t b = r.bytes;
-    if (l2_) l2_->put(id, r, b);                          // write-through (đọc r, serialize -> đĩa)
-    if (b < ramThresholdBytes_) l1_->put(id, std::move(r), b);  // ưu tiên RAM; move (lần dùng r cuối)
-    // b >= threshold -> chỉ nằm disk (không chiếm RAM)
+    if (l2_) l2_->put(id, r, b);                          // write-through (read r, serialize -> disk)
+    if (b < ramThresholdBytes_) l1_->put(id, std::move(r), b);  // prefer RAM; move (last use of r)
+    // b >= threshold -> disk only (does not occupy RAM)
 }
 
 void ResponseCache::remove(const std::string& id) {

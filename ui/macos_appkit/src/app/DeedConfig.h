@@ -1,6 +1,6 @@
-// DeedConfig — cấu hình giao diện. Giá trị lấy từ .env (gốc repo) nhưng được NHÚNG vào
-// binary lúc build (compile-time constant), nên app KHÔNG cần file .env khi chạy.
-// Đổi cấu hình: sửa .env rồi build lại. Dòng dạng KEY=VALUE, bỏ qua dòng trống và '#'.
+// DeedConfig — UI configuration. Values come from .env (repo root) but are EMBEDDED into
+// the binary at build time (compile-time constant), so the app does NOT need a .env at runtime.
+// To change config: edit .env and rebuild. Lines are KEY=VALUE; blank lines and '#' are ignored.
 #import <Cocoa/Cocoa.h>
 
 @interface DeedConfig : NSObject
@@ -11,6 +11,6 @@
 - (NSInteger)intFor:(NSString *)key def:(NSInteger)def;
 - (BOOL)boolFor:(NSString *)key def:(BOOL)def;
 
-// Tiện ích hay dùng.
-- (NSString *)appName;          // APP_NAME (mặc định "deed")
+// Common convenience accessors.
+- (NSString *)appName;          // APP_NAME (default "deed")
 @end

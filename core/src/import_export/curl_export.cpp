@@ -6,7 +6,7 @@ namespace core {
 
 namespace {
 
-// Bọc giá trị trong nháy đơn an toàn cho shell: ' -> '\''
+// Shell-safe single-quote wrap: ' -> '\''
 std::string shq(const std::string& s) {
     std::string out = "'";
     for (char c : s) {
@@ -52,7 +52,7 @@ std::string curlHttp(const HttpRequest& h) {
     bool authActive = (h.auth.type != "none" && !h.auth.type.empty());
     for (const auto& hd : h.headers) {
         if (!hd.enabled || hd.key.empty()) continue;
-        if (authActive && toLower(hd.key) == "authorization") continue; // auth thắng
+        if (authActive && toLower(hd.key) == "authorization") continue; // auth wins
         cmd += " \\\n  -H " + shq(hd.key + ": " + hd.value);
     }
     if (h.auth.type == "bearer") cmd += " \\\n  -H " + shq("Authorization: Bearer " + h.auth.bearerToken);
@@ -60,7 +60,7 @@ std::string curlHttp(const HttpRequest& h) {
     else if (h.auth.type == "apikey" && h.auth.apikeyIn == "header")
         cmd += " \\\n  -H " + shq(h.auth.apikeyKey + ": " + h.auth.apikeyValue);
 
-    // Có sẵn Content-Type trong headers chưa? (tránh thêm trùng)
+    // Content-Type already in headers? (avoid duplicate)
     bool hasContentType = false;
     for (const auto& hd : h.headers)
         if (hd.enabled && toLower(hd.key) == "content-type") hasContentType = true;

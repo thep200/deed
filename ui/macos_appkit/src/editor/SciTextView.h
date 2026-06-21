@@ -1,20 +1,20 @@
-// SciTextView — wrapper mỏng quanh ScintillaView (docs/RENDERING_AND_ASSETS.md §3.6).
-// Giấu API SCI_* khỏi phần còn lại; dùng cho cả pane request (sửa được) lẫn response (read-only).
+// SciTextView — thin wrapper around ScintillaView (docs/RENDERING_AND_ASSETS.md §3.6).
+// Hides the SCI_* API from the rest; used for both the request pane (editable) and response (read-only).
 #import <Cocoa/Cocoa.h>
 
 @interface SciTextView : NSView
-@property(nonatomic, copy) NSString *string;          // get/set toàn bộ text
-@property(nonatomic) BOOL editable;                   // bật/tắt sửa (response = NO)
-@property(nonatomic, copy) void (^onTextChanged)(void); // gọi khi NGƯỜI DÙNG sửa (không gọi khi set bằng code)
+@property(nonatomic, copy) NSString *string;          // get/set the entire text
+@property(nonatomic) BOOL editable;                   // toggle editing (response = NO)
+@property(nonatomic, copy) void (^onTextChanged)(void); // called when the USER edits (not when set by code)
 
-- (instancetype)initEditable:(BOOL)editable;          // tạo + cấu hình JSON + theme Platinum
+- (instancetype)initEditable:(BOOL)editable;          // create + configure JSON + Platinum theme
 - (void)setFontName:(NSString *)name size:(CGFloat)size;
-- (BOOL)hasFocus;                                     // editor đang giữ con trỏ?
-// Giải phóng buffer text + undo (LAZY_TREE §8.3): xoá text rồi empty undo buffer.
-// Gọi khi chuyển/đóng request để không giữ nội dung cũ trong RAM.
+- (BOOL)hasFocus;                                     // is the editor holding the caret?
+// Free the text + undo buffers (LAZY_TREE §8.3): clear text then empty the undo buffer.
+// Call when switching/closing a request so old content isn't kept in RAM.
 - (void)clearContents;
-// Teardown an toàn (CRASH_FIX_LIFECYCLE §2.2): resign input context + gỡ delegate Scintilla
-// (unsafe_unretained) trước khi huỷ -> không gửi notification tới object đã chết. Idempotent;
-// cũng được gọi tự động trong dealloc.
+// Safe teardown (CRASH_FIX_LIFECYCLE §2.2): resign input context + detach the Scintilla delegate
+// (unsafe_unretained) before destruction -> don't send notifications to a dead object. Idempotent;
+// also called automatically in dealloc.
 - (void)teardown;
 @end

@@ -49,7 +49,7 @@ static long long EnvLL(const char *key, long long def) {
     const char *logPath = getenv("DEED_STRESS_LOG");
     if (logPath && *logPath) {
         _logger = std::make_unique<core::memprobe::StructuredLogger>(logPath);
-        if (!_logger->ok()) NSLog(@"[stress] khong mo duoc log %s", logPath);
+        if (!_logger->ok()) NSLog(@"[stress] could not open log %s", logPath);
     }
 
     NSLog(@"[stress] start iters=%lld seed=%u idleEvery=%lld delayMs=%.0f",
@@ -60,8 +60,8 @@ static long long EnvLL(const char *key, long long def) {
 
 - (void)scheduleNext {
     if (_cur >= _iters) { [self finish]; return; }
-    // Lặp qua timer trên main thread (KHÔNG block run loop) -> AppKit xử lý updateWindows
-    // giữa các op, đúng điều kiện tái hiện crash input-context.
+    // Loop via a main-thread timer (do NOT block the run loop) -> AppKit processes updateWindows
+    // between ops, the exact condition that reproduces the input-context crash.
     [self performSelector:@selector(tick) withObject:nil afterDelay:_delay];
 }
 
@@ -114,7 +114,7 @@ static long long EnvLL(const char *key, long long def) {
     if (_logger) _logger->flush();
     NSLog(@"[stress] done iters=%lld final_footprint_mb=%.2f", _cur,
           (double)core::memprobe::PhysFootprintBytes() / (1024.0 * 1024.0));
-    // Đặt _wc = nil để runner không giữ controller sống thêm.
+    // Set _wc = nil so the runner no longer keeps the controller alive.
     _wc = nil;
 }
 

@@ -1,5 +1,5 @@
-// url_util — tiện ích URL dùng chung (decode percent-encoding, tách query sau '?').
-// Header-only (inline) -> dùng được ở import_export lẫn sending mà không thêm nguồn CMake.
+// url_util — shared URL utilities (percent-encoding decode, split query after '?').
+// Header-only (inline) -> usable in both import_export and sending without adding a CMake source.
 #pragma once
 
 #include <string>
@@ -9,7 +9,7 @@
 
 namespace core::urlutil {
 
-// Giải mã percent-encoding: %XX -> byte, '+' -> space. Chuỗi không hợp lệ giữ nguyên.
+// Decode percent-encoding: %XX -> byte, '+' -> space. Invalid sequences kept as-is.
 inline std::string urlDecode(const std::string& s) {
     auto hex = [](char h) -> int {
         if (h >= '0' && h <= '9') return h - '0';
@@ -34,14 +34,14 @@ inline std::string urlDecode(const std::string& s) {
     return out;
 }
 
-// Tách query (sau '?') ra khỏi url: url trở thành RAW (bỏ '?...'), các cặp k=v
-// được DECODE và đẩy vào params (enabled=true). Không có '?' -> không làm gì.
+// Split the query (after '?') off the url: url becomes RAW (drops '?...'), k=v pairs are
+// DECODED and pushed into params (enabled=true). No '?' -> no-op.
 inline void splitUrlQuery(std::string& url, std::vector<KeyValue>& params) {
     size_t q = url.find('?');
     if (q == std::string::npos) return;
     std::string query = url.substr(q + 1);
     url = url.substr(0, q);
-    size_t hash = query.find('#');           // bỏ fragment nếu lẫn vào
+    size_t hash = query.find('#');           // drop fragment if mixed in
     if (hash != std::string::npos) query = query.substr(0, hash);
     size_t pos = 0;
     while (pos < query.size()) {

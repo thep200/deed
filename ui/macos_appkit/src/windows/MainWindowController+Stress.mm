@@ -5,7 +5,7 @@
 
 @implementation MainWindowController (Stress)
 
-// Quét đệ quy cây -> mọi relPath request (không folder).
+// Recursively scan the tree -> every request relPath (no folders).
 static void StressCollectRels(const core::TreeNode &n, NSMutableArray<NSString *> *out) {
     if (n.isFolder) { for (const auto &c : n.children) StressCollectRels(c, out); }
     else if (!n.relPath.empty()) [out addObject:N(n.relPath)];
@@ -44,7 +44,7 @@ static void StressCollectRels(const core::TreeNode &n, NSMutableArray<NSString *
 - (void)stressLoadRel:(NSString *)rel {
     if (rel.length == 0) return;
     [self loadRequestAtRel:rel];
-    [_window makeFirstResponder:_urlField];   // input context thật trên ô URL
+    [_window makeFirstResponder:_urlField];   // real input context on the URL field
 }
 
 - (void)stressSwitchRandom:(uint32_t)r {
@@ -54,10 +54,10 @@ static void StressCollectRels(const core::TreeNode &n, NSMutableArray<NSString *
 }
 
 - (void)stressTypeRandom:(uint32_t)r {
-    if ((r & 1) && _urlField) {            // gõ vào URL field (NSTextField + field editor)
+    if ((r & 1) && _urlField) {            // type into URL field (NSTextField + field editor)
         [_window makeFirstResponder:_urlField];
         _urlField.stringValue = [NSString stringWithFormat:@"localhost:%u/api/%u", (r % 9000) + 1000, r];
-    } else if (_reqText && _reqText.editable) {   // gõ vào editor Scintilla
+    } else if (_reqText && _reqText.editable) {   // type into Scintilla editor
         [_window makeFirstResponder:_reqText];
         _reqText.string = [NSString stringWithFormat:@"{\n  \"k\": %u\n}", r % 1000];
     }
@@ -94,15 +94,15 @@ static void StressCollectRels(const core::TreeNode &n, NSMutableArray<NSString *
     _lastResp.sizeBytes = (std::int64_t)n;
     _hasResp = YES;
     [self rebuildResponseBuffers];
-    if (!_currentId.empty()) _engine->putResponse(_currentId, _lastResp);   // qua cache (cap/evict)
+    if (!_currentId.empty()) _engine->putResponse(_currentId, _lastResp);   // through cache (cap/evict)
 }
 
 - (void)stressRenameAutoDismiss:(uint32_t)r {
     if (_tree.numberOfRows <= 0) return;
     TreeItem *t = [_tree itemAtRow:(NSInteger)(r % (uint32_t)_tree.numberOfRows)];
     if (!t || t.relPath.length == 0) return;
-    // Modal chặn run loop -> hẹn abort trước; block main-queue chạy trong NSModalPanelRunLoopMode
-    // -> dialog mở, field thành first responder, rồi tự huỷ (đi qua end-editing/orderOut §2.3).
+    // Modal blocks the run loop -> schedule the abort first; the main-queue block runs in NSModalPanelRunLoopMode
+    // -> dialog opens, field becomes first responder, then auto-dismisses (goes through end-editing/orderOut §2.3).
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.02 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ [NSApp abortModal]; });
     [self promptRenameItem:t];

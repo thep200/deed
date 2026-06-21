@@ -1,5 +1,5 @@
-// core/infra/mem_probe.hpp — đo RAM tiến trình + logger có cấu trúc cho stress harness.
-// STRESS_TEST.md §3. Header public (cả CLI lẫn UI macOS link core đều dùng được).
+// core/infra/mem_probe.hpp — measure process RAM + structured logger for the stress harness.
+// STRESS_TEST.md §3. Public header (usable by both CLI and the macOS UI that links core).
 #pragma once
 
 #include <cstdint>
@@ -9,13 +9,13 @@
 
 namespace core::memprobe {
 
-// phys_footprint (~ cột "Memory" trong Activity Monitor), tính bằng byte.
-// Trả 0 nếu không lấy được (hoặc nền non-Apple — guard mach).
+// phys_footprint (~ "Memory" column in Activity Monitor), in bytes.
+// Returns 0 if unavailable (or non-Apple platform — mach guard).
 std::uint64_t PhysFootprintBytes();
 
-// Logger CSV có cấu trúc, thread-safe. Mỗi iteration ghi 1 dòng (STRESS_TEST §3.2).
-// Cột: ts_ms, iter, op, phys_footprint_mb, ram_cache_bytes, disk_cache_bytes, open_request_id, idle
-// `idle=1` đánh dấu idle checkpoint (đã về trạng thái không mở request) -> phân tích baseline.
+// Thread-safe structured CSV logger. Each iteration writes one row (STRESS_TEST §3.2).
+// Columns: ts_ms, iter, op, phys_footprint_mb, ram_cache_bytes, disk_cache_bytes, open_request_id, idle
+// `idle=1` marks an idle checkpoint (back to no-open-request state) -> baseline analysis.
 class StructuredLogger {
 public:
     struct Row {
@@ -27,13 +27,13 @@ public:
         bool idle = false;
     };
 
-    explicit StructuredLogger(const std::string& path); // mở (truncate) + ghi header CSV
+    explicit StructuredLogger(const std::string& path); // open (truncate) + write CSV header
     ~StructuredLogger();
 
     StructuredLogger(const StructuredLogger&) = delete;
     StructuredLogger& operator=(const StructuredLogger&) = delete;
 
-    void log(const Row& r);   // tự lấy phys_footprint + timestamp khi ghi
+    void log(const Row& r);   // auto-captures phys_footprint + timestamp on write
     void flush();
     bool ok() const { return out_.is_open(); }
 

@@ -1,15 +1,15 @@
-// OS9Glyphs — icon vẽ tay bằng NSBezierPath (tách từ OS9Widgets).
+// OS9Glyphs — hand-drawn icons via NSBezierPath (split from OS9Widgets).
 #import <Cocoa/Cocoa.h>
 
-// Vẽ icon bánh răng cổ điển (cog) cỡ size — dùng cho nút Setting.
+// Draw a classic cog icon of given size — used for the Settings button.
 NSImage *OS9GearImage(CGFloat size);
 
-// Icon "send" (máy bay giấy hướng phải) — thay label nút Send.
+// "Send" icon (right-facing paper plane) — replaces the Send button label.
 NSImage *OS9SendImage(CGFloat size);
-// Icon folder OS9 (màu xanh Platinum, có tab) — dùng cho title bar trạng thái Inactive.
+// OS9 folder icon (Platinum blue, with tab) — used for the Inactive title bar state.
 NSImage *OS9FolderImage(CGFloat size);
-// Icon loading (spinner nan hoa) tại pha quay phase∈[0,1) — animate bằng timer.
+// Loading spinner (spoked) at rotation phase∈[0,1) — animate with a timer.
 NSImage *OS9SpinnerImage(CGFloat size, CGFloat phase);
-// Mảng `frameCount` ảnh spinner dựng sẵn (pha chia đều) + CACHE theo (size,frameCount).
-// Dùng cho animation: timer chỉ index vào mảng thay vì cấp phát NSImage mỗi tick.
+// Array of `frameCount` prebuilt spinner images (evenly spaced phases) + CACHE keyed by (size,frameCount).
+// For animation: timer just indexes into the array instead of allocating an NSImage each tick.
 NSArray<NSImage *> *OS9SpinnerFrames(CGFloat size, int frameCount);

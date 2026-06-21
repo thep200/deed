@@ -1,4 +1,4 @@
-// thread_pool.hpp — pool nhỏ để chạy request bất đồng bộ (README §1, Phase 1).
+// thread_pool.hpp — small pool to run requests asynchronously (README §1, Phase 1).
 #pragma once
 
 #include <algorithm>

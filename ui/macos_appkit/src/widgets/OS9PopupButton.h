@@ -1,13 +1,13 @@
-// Popup kiểu OS9: bevel + tiêu đề đang chọn + mũi ▼; bấm để bung menu.
+// OS9-style popup: bevel + selected title + ▼ arrow; click to open the menu.
 #import <Cocoa/Cocoa.h>
 
 @interface OS9PopupButton : NSControl
 @property(nonatomic, strong) NSArray<NSString *> *itemTitles;
 @property(nonatomic) NSInteger selectedIndex;
 @property(nonatomic, readonly) NSString *selectedTitle;
-// Nếu set: bấm nút sẽ gọi block này THAY VÌ tự bung menu (owner tự quyết khi nào openMenu).
+// If set: clicking calls this block INSTEAD of auto-opening the menu (owner decides when to openMenu).
 @property(nonatomic, copy) void (^onClick)(void);
 - (instancetype)initWithItems:(NSArray<NSString *> *)items target:(id)target action:(SEL)action;
 - (void)selectTitle:(NSString *)title;
-- (void)openMenu;   // bung danh sách item hiện tại (dùng sau khi nạp xong RPC bất đồng bộ)
+- (void)openMenu;   // open current item list (use after async RPC load completes)
 @end

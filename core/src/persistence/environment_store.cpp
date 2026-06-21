@@ -16,7 +16,7 @@ EnvironmentStore::EnvironmentStore(std::string root) : root_(std::move(root)) {}
 
 void EnvironmentStore::setRoot(std::string root) {
     root_ = std::move(root);
-    epoch_.fetch_add(1, std::memory_order_relaxed);   // đổi collection -> vars cache phải dựng lại
+    epoch_.fetch_add(1, std::memory_order_relaxed);   // collection changed -> vars cache must be rebuilt
 }
 
 namespace {
@@ -66,11 +66,11 @@ bool EnvironmentStore::renameEnv(const std::string& oldName, const std::string& 
     if (newName.empty() || oldName.empty()) return false;
     if (oldName == newName) return true;
     std::error_code ec;
-    // Trùng tên env khác -> từ chối.
+    // Collides with another env name -> reject.
     if (fs::exists(fs::path(envFile(root_, newName)), ec)) return false;
     fs::path src(envFile(root_, oldName));
     if (!fs::exists(src, ec)) return false;
-    // Đọc, đổi tên trong nội dung, ghi file mới atomic rồi xoá file cũ.
+    // Read, rename inside content, atomically write the new file, then delete the old one.
     Environment e = load(oldName);
     e.name = newName;
     fsutil::writeFileAtomic(envFile(root_, newName), codec::toJson(e).dump(2));
@@ -82,7 +82,7 @@ bool EnvironmentStore::renameEnv(const std::string& oldName, const std::string& 
 bool EnvironmentStore::renameAlias(const std::string& oldAlias, const std::string& newAlias) {
     if (newAlias.empty() || oldAlias.empty()) return false;
     if (oldAlias == newAlias) return true;
-    // Cross-env: kiểm tra trùng trên TẤT CẢ env trước, rồi mới ghi (atomic về mặt logic).
+    // Cross-env: check for collisions across ALL envs first, then write (logically atomic).
     auto names = list();
     std::vector<Environment> envs;
     envs.reserve(names.size());
@@ -94,7 +94,7 @@ bool EnvironmentStore::renameAlias(const std::string& oldAlias, const std::strin
             if (k.key == oldAlias) hasOld = true;
             if (k.key == newAlias) hasNew = true;
         }
-        if (hasOld && hasNew) return false; // sẽ tạo trùng khoá -> từ chối
+        if (hasOld && hasNew) return false; // would create a duplicate key -> reject
         envs.push_back(std::move(e));
     }
     bool changedAny = false;
@@ -112,14 +112,14 @@ void EnvironmentStore::migrateLegacySecrets() {
     fs::path secretsDir = fs::path(root_) / ".secrets";
     fs::path secretsFile = secretsDir / "secrets.json";
     std::error_code ec;
-    if (!fs::exists(secretsDir, ec)) return; // đã migrate / chưa từng có secret -> no-op
+    if (!fs::exists(secretsDir, ec)) return; // already migrated / never had secrets -> no-op
 
     std::string txt;
     if (fsutil::readFile(secretsFile.string(), txt)) {
         try {
             auto j = nlohmann::json::parse(txt);
             if (j.is_object()) {
-                // Layout cũ: { "<env>": { "<key>": "<value>" } }
+                // Old layout: { "<env>": { "<key>": "<value>" } }
                 for (auto it = j.begin(); it != j.end(); ++it) {
                     const std::string& envName = it.key();
                     if (!it->is_object()) continue;
@@ -137,9 +137,9 @@ void EnvironmentStore::migrateLegacySecrets() {
                     if (!e.name.empty()) save(e);
                 }
             }
-        } catch (...) { /* .secrets hỏng -> bỏ qua, vẫn cho mở app (SPEC edge case) */ }
+        } catch (...) { /* corrupt .secrets -> skip, still allow opening the app (SPEC edge case) */ }
     }
-    // Xoá .secrets/ -> đây cũng là cờ "đã migrate" (lần sau exists() == false -> no-op).
+    // Delete .secrets/ -> this also acts as the "migrated" flag (next time exists() == false -> no-op).
     fs::remove_all(secretsDir, ec);
 }
 

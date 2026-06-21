@@ -12,23 +12,23 @@ static const CGFloat kBtnMinW = 70;
 static const CGFloat kBtnH = 22;
 static const CGFloat kMinW = 340;
 static const CGFloat kMaxW = 460;
-// NSTextField vẽ chữ với line-fragment padding (~vài px mỗi bên) mà phép đo chuỗi thô
-// KHÔNG tính tới -> nếu cấp đúng bằng bề rộng đo được, từ cuối bị wrap xuống dòng 2 rồi
-// bị cắt (label chỉ cao 1 dòng). Cộng thêm slack để label luôn rộng hơn chữ một chút.
+// NSTextField draws text with line-fragment padding (~a few px each side) that raw string
+// measurement does NOT account for -> if sized exactly to the measured width, the last word
+// wraps to line 2 and gets clipped (the label is only 1 line tall). Add slack so the label is always a bit wider than the text.
 static const CGFloat kTextSlack = 12;
 static const CGFloat kTitleH = 20;     // pinstripe title bar (movable)
-static const CGFloat kIconW = 40;      // cột icon cảnh báo
+static const CGFloat kIconW = 40;      // alert icon column
 static const CGFloat kFieldH = 22;
 
-#pragma mark - OS9DialogWindow (borderless, nhận phím được)
+#pragma mark - OS9DialogWindow (borderless, can receive key events)
 
 @interface OS9DialogWindow : NSWindow
-@property(nonatomic, copy) void (^onReturn)(void);   // Enter -> nút mặc định
+@property(nonatomic, copy) void (^onReturn)(void);   // Enter -> default button
 @property(nonatomic, copy) void (^onEscape)(void);   // Esc/Cmd-. -> cancel
 @end
 
 @implementation OS9DialogWindow
-- (BOOL)canBecomeKeyWindow { return YES; }    // bắt buộc cho borderless để nhận phím/focus field
+- (BOOL)canBecomeKeyWindow { return YES; }    // required for borderless to receive keys/field focus
 - (BOOL)canBecomeMainWindow { return YES; }
 - (void)keyDown:(NSEvent *)e {
     NSString *chars = e.charactersIgnoringModifiers;
@@ -38,23 +38,23 @@ static const CGFloat kFieldH = 22;
     if ((e.modifierFlags & NSEventModifierFlagCommand) && c == '.') { if (_onEscape) _onEscape(); return; }
     [super keyDown:e];
 }
-- (void)cancelOperation:(id)sender { if (_onEscape) _onEscape(); }   // Esc qua responder chain
+- (void)cancelOperation:(id)sender { if (_onEscape) _onEscape(); }   // Esc via responder chain
 @end
 
-#pragma mark - OS9DialogView (vẽ Platinum + kéo title)
+#pragma mark - OS9DialogView (draws Platinum + title drag)
 
 @interface OS9DialogView : NSView
-@property(nonatomic) BOOL movable;            // có title bar pinstripe -> kéo di chuyển
+@property(nonatomic) BOOL movable;            // has pinstripe title bar -> draggable to move
 @property(nonatomic, copy) NSString *titleText;
 @property(nonatomic) OS9AlertIcon icon;
 @end
 
 @implementation OS9DialogView
-- (BOOL)isFlipped { return YES; }             // layout từ trên xuống cho dễ
+- (BOOL)isFlipped { return YES; }             // top-down layout for convenience
 
 - (void)drawRect:(NSRect)dirty {
     NSRect b = self.bounds;
-    // Nền Platinum + viền 1px + bevel (sáng trên-trái / tối dưới-phải). KHÔNG bóng mềm.
+    // Platinum background + 1px border + bevel (light top-left / dark bottom-right). No soft shadow.
     [[OS9Theme windowBg] set];
     NSRectFill(b);
     [[OS9Theme highlight] set];
@@ -66,14 +66,14 @@ static const CGFloat kFieldH = 22;
     [[OS9Theme frame] set];
     NSFrameRect(b);
 
-    if (_movable) {   // title bar kẻ sọc Platinum
+    if (_movable) {   // Platinum striped title bar
         NSRect tr = NSMakeRect(1, 1, b.size.width - 2, kTitleH);
         [OS9Theme drawStripedTitleInRect:tr stripesInRect:tr active:YES];
         if (_titleText.length) {
             NSDictionary *a = @{NSFontAttributeName : [OS9Theme uiFont],
                                 NSForegroundColorAttributeName : [NSColor blackColor]};
             NSSize sz = [_titleText sizeWithAttributes:a];
-            // nền nhỏ sau chữ để tách khỏi sọc (đọc rõ)
+            // small background behind the text to separate it from the stripes (readability)
             NSRect lblBg = NSMakeRect((b.size.width - sz.width) / 2 - 6, 2, sz.width + 12, kTitleH - 3);
             [[OS9Theme windowBg] set]; NSRectFill(lblBg);
             [_titleText drawAtPoint:NSMakePoint((b.size.width - sz.width) / 2,
@@ -84,7 +84,7 @@ static const CGFloat kFieldH = 22;
     if (_icon != OS9AlertNone) [self drawAlertIconAt:NSMakePoint(kPad, (_movable ? kTitleH : 0) + kPad)];
 }
 
-// Icon cảnh báo tự vẽ đơn giản (note=ⓘ, caution=⚠, stop=⊘). Đặt trong cột rộng kIconW.
+// Simple self-drawn alert icons (note=ⓘ, caution=⚠, stop=⊘). Placed in a column of width kIconW.
 - (void)drawAlertIconAt:(NSPoint)p {
     NSRect r = NSMakeRect(p.x, p.y, 28, 28);
     NSColor *ink = [NSColor blackColor];
@@ -110,17 +110,17 @@ static const CGFloat kFieldH = 22;
     (void)ink;
 }
 
-// Kéo title bar -> di chuyển cửa sổ (movable-modal).
+// Drag the title bar -> move the window (movable-modal).
 - (void)mouseDown:(NSEvent *)e {
     if (!_movable) return;
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
-    if (p.y <= kTitleH + 1) {     // trong vùng title bar (flipped: y nhỏ = trên)
+    if (p.y <= kTitleH + 1) {     // within the title bar area (flipped: small y = top)
         [self.window performWindowDragWithEvent:e];
     }
 }
 @end
 
-#pragma mark - OS9DialogController (driver modal + layout)
+#pragma mark - OS9DialogController (modal driver + layout)
 
 @interface OS9DialogController : NSObject <NSTextFieldDelegate>
 @end
@@ -128,8 +128,8 @@ static const CGFloat kFieldH = 22;
 @implementation OS9DialogController {
     OS9DialogWindow *_win;
     OS9DialogView *_view;
-    NSTextField *_field;        // chỉ PROMPT
-    NSTextField *_errorLabel;   // chỉ PROMPT (dialogErrorText)
+    NSTextField *_field;        // PROMPT only
+    NSTextField *_errorLabel;   // PROMPT only (dialogErrorText)
     NSArray<OS9BevelButton *> *_buttons;
     NSInteger _defaultIdx, _cancelIdx;
     NSInteger _result;
@@ -139,7 +139,7 @@ static const CGFloat kFieldH = 22;
 
 - (NSColor *)errorColor { return [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0]; }
 
-// Đo bề rộng chữ message (wrap trong maxW) -> tính kích thước dialog.
+// Measure the message text width (wrapped within maxW) -> compute dialog size.
 - (NSRect)measureMessage:(NSString *)msg width:(CGFloat)maxTextW {
     if (!msg.length) return NSZeroRect;
     NSDictionary *a = @{NSFontAttributeName : [OS9Theme uiFont]};
@@ -159,7 +159,7 @@ static const CGFloat kFieldH = 22;
 - (void)fireDefault { [self resolveIndex:_defaultIdx]; }
 - (void)fireCancel { [self resolveIndex:_cancelIdx]; }
 
-// Quyết định đóng dialog: prompt + nút mặc định -> validate trước; fail -> giữ dialog + báo lỗi.
+// Decide whether to close the dialog: prompt + default button -> validate first; fail -> keep dialog + show error.
 - (void)resolveIndex:(NSInteger)idx {
     if (_isPrompt && idx == _defaultIdx) {
         NSString *input = _field.stringValue;
@@ -170,7 +170,7 @@ static const CGFloat kFieldH = 22;
                 _errorLabel.hidden = NO;
                 NSBeep();
                 [_win makeFirstResponder:_field];
-                return;   // KHÔNG đóng
+                return;   // do NOT close
             }
         }
     }
@@ -178,7 +178,7 @@ static const CGFloat kFieldH = 22;
     [NSApp stopModalWithCode:idx];
 }
 
-// Đặt cửa sổ canh giữa parent (hoặc màn hình chứa parent / main screen).
+// Center the window over the parent (or the screen containing the parent / main screen).
 - (void)positionRelativeTo:(NSWindow *)parent size:(NSSize)sz {
     NSRect area;
     if (parent) area = parent.frame;
@@ -202,7 +202,7 @@ static const CGFloat kFieldH = 22;
     NSRect tb = [self measureMessage:message width:(kMaxW - 2 * kPad - iconW)];
     CGFloat textW = ceil(tb.size.width) + kTextSlack, textH = MAX(ceil(tb.size.height), iconW ? 28 : 16);
 
-    // bề rộng theo nút.
+    // width driven by buttons.
     NSMutableArray<OS9BevelButton *> *btns = [NSMutableArray array];
     CGFloat btnsTotal = 0;
     for (NSInteger i = 0; i < (NSInteger)titles.count; i++) {
@@ -255,8 +255,8 @@ static const CGFloat kFieldH = 22;
         y += msgH + kBtnGap;
     }
 
-    // Ô nhập: bọc trong OS9SerratedInset (góc răng cưa) GIỐNG ô URL ngoài pane chính.
-    // Field borderless, nền trắng do inset vẽ.
+    // Input field: wrapped in OS9SerratedInset (serrated corners) LIKE the URL field in the main pane.
+    // Borderless field, white background drawn by the inset.
     OS9SerratedInset *fieldInset =
         [[OS9SerratedInset alloc] initWithFrame:NSMakeRect(kPad, y, contentW - 2 * kPad, kFieldH)];
     _field = [[NSTextField alloc] initWithFrame:NSInsetRect(fieldInset.bounds, 4, 3)];
@@ -265,9 +265,9 @@ static const CGFloat kFieldH = 22;
     _field.font = [OS9Theme uiFont];
     _field.bezeled = NO;
     _field.bordered = NO;
-    _field.drawsBackground = NO;                  // nền trắng do OS9SerratedInset vẽ
+    _field.drawsBackground = NO;                  // white background drawn by OS9SerratedInset
     _field.textColor = [NSColor blackColor];
-    _field.focusRingType = NSFocusRingTypeNone;   // tắt focus ring xanh
+    _field.focusRingType = NSFocusRingTypeNone;   // disable the blue focus ring
     _field.usesSingleLineMode = YES;
     _field.cell.scrollable = YES;
     _field.delegate = self;
@@ -312,7 +312,7 @@ static const CGFloat kFieldH = 22;
     CGFloat total = 0;
     for (OS9BevelButton *b in btns) total += b.frame.size.width;
     total += kBtnGap * (btns.count - 1);
-    CGFloat x = contentW - kPad - total;       // canh phải-dưới; array order trái->phải
+    CGFloat x = contentW - kPad - total;       // align bottom-right; array order left->right
     for (OS9BevelButton *b in btns) {
         b.frame = NSMakeRect(x, y, b.frame.size.width, kBtnH);
         [_view addSubview:b];
@@ -327,7 +327,7 @@ static const CGFloat kFieldH = 22;
                                                 backing:NSBackingStoreBuffered defer:NO];
     _win.opaque = NO;
     _win.hasShadow = YES;
-    _win.releasedWhenClosed = NO;   // §2.3: controller giữ strong ref suốt modal; ARC quản vòng đời
+    _win.releasedWhenClosed = NO;   // §2.3: controller holds a strong ref for the modal's lifetime; ARC manages lifecycle
     _win.level = NSModalPanelWindowLevel;
     __weak OS9DialogController *ws = self;
     _win.onReturn = ^{ [ws fireDefault]; };
@@ -343,7 +343,7 @@ static const CGFloat kFieldH = 22;
     [_win makeKeyAndOrderFront:nil];
     if (fr) { [_win makeFirstResponder:fr]; if ([fr isKindOfClass:[NSTextField class]]) [(NSTextField *)fr selectText:nil]; }
     NSInteger code = [NSApp runModalForWindow:_win];
-    // §2.3: deactivate input context của ô nhập (rename) KHI window còn sống, RỒI mới đóng.
+    // §2.3: deactivate the input field's input context (rename) WHILE the window is alive, THEN close.
     OS9SafeEndEditing(_win, _field);
     [_win orderOut:nil];
     return code;
@@ -356,7 +356,7 @@ static const CGFloat kFieldH = 22;
     if (sel == @selector(cancelOperation:)) { [self fireCancel]; return YES; }
     return NO;
 }
-- (void)controlTextDidChange:(NSNotification *)n { _errorLabel.hidden = YES; }  // gõ lại -> ẩn lỗi
+- (void)controlTextDidChange:(NSNotification *)n { _errorLabel.hidden = YES; }  // retyping -> hide error
 @end
 
 #pragma mark - OS9Dialog (public API)
@@ -367,7 +367,7 @@ static const CGFloat kFieldH = 22;
                       buttons:(NSArray<NSString *> *)buttons
                 defaultButton:(NSInteger)defaultIdx cancelButton:(NSInteger)cancelIdx
                          icon:(OS9AlertIcon)icon parent:(NSWindow *)parent {
-    OS9DialogController *c = [OS9DialogController new];   // giữ sống suốt modal
+    OS9DialogController *c = [OS9DialogController new];   // kept alive for the modal's lifetime
     if (icon == OS9AlertStop || icon == OS9AlertCaution) NSBeep();
     return [c runConfirmTitle:title message:message buttons:buttons
                 defaultButton:defaultIdx cancelButton:cancelIdx icon:icon parent:parent];

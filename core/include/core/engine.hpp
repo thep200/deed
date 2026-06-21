@@ -1,5 +1,5 @@
-// core/engine.hpp — Port VÀO (UI → Core). README §2 / UI spec §2.1.
-// Engine dispatch theo request.type qua SenderRegistry; resolve {{var}} theo env active.
+// core/engine.hpp — INBOUND port (UI → Core). README §2 / UI spec §2.1.
+// Engine dispatches by request.type via SenderRegistry; resolves {{var}} per active env.
 #pragma once
 
 #include <map>
@@ -19,8 +19,8 @@ namespace core {
 
 class SenderRegistry; // fwd (internal)
 
-// Trần/sàn cache ở ENV layer (ops-level). 0 = "không set" -> Core fallback getenv/default.
-// UI nạp từ file .env (DeedConfig) rồi truyền vào; Core không tự đọc .env (giữ thuần C++).
+// Cache ceiling/floor at ENV layer (ops-level). 0 = "unset" -> Core falls back to getenv/default.
+// UI loads from .env file (DeedConfig) then passes in; Core does not read .env itself (stays pure C++).
 struct CacheLimits {
     int ramMaxMb = 0;
     int ramMinMb = 0;
@@ -29,12 +29,12 @@ struct CacheLimits {
     int thresholdKb = 0;
 };
 
-// Cấu hình khởi tạo Engine: thư mục collection + (tuỳ chọn) đường app-config.
+// Engine init config: collection dir + (optional) app-config path.
 struct EngineConfig {
     std::string collectionRoot;
-    std::string appConfigPath; // rỗng -> dùng OS app-support mặc định
-    CacheLimits cacheLimits;   // trần/sàn cache từ .env (rỗng -> getenv/default)
-    AppConfig appDefaults;     // giá trị mặc định app-config từ .env (khi config.json thiếu key)
+    std::string appConfigPath; // empty -> use OS app-support default
+    CacheLimits cacheLimits;   // cache ceiling/floor from .env (empty -> getenv/default)
+    AppConfig appDefaults;     // app-config default values from .env (when config.json misses a key)
 };
 
 class Engine {
@@ -52,42 +52,42 @@ public:
     EnvironmentStore& environments();
     AppConfigStore& appConfig();
 
-    // --- Gửi (async, trả handle ngay) ---
+    // --- Send (async, returns handle immediately) ---
     RequestHandle send(const RequestModel& model, IUiDelegate* delegate);
     void cancel(RequestHandle);
 
-    // --- Response cache (RESPONSE_CACHE.md). No-op khi tắt cache (cacheResponses=false). ---
-    // Lưu response/lỗi mới nhất của request id (ghi đè bản cũ). resolvedRequestDump nằm trong resp.
+    // --- Response cache (RESPONSE_CACHE.md). No-op when cache off (cacheResponses=false). ---
+    // Store latest response/error for request id (overwrites old). resolvedRequestDump lives in resp.
     void putResponse(const std::string& id, const ApiResponse& resp);
     void putError(const std::string& id, const ApiError& err);
-    // Lấy response gần nhất (RAM trước -> disk). nullopt nếu miss/tắt cache.
+    // Get latest response (RAM first -> disk). nullopt if miss/cache off.
     std::optional<ResponseRecord> getResponse(const std::string& id);
-    void removeResponse(const std::string& id);          // xoá khi xoá request
-    void reloadCacheConfig();                            // gọi sau khi đổi Settings
-    const CacheConfig& cacheConfig() const;              // cấu hình hiệu lực hiện tại
-    ResponseCache* responseCache();                      // truy cập trực tiếp (test/diagnostic), null nếu tắt
+    void removeResponse(const std::string& id);          // remove when request deleted
+    void reloadCacheConfig();                            // call after Settings change
+    const CacheConfig& cacheConfig() const;              // current effective config
+    ResponseCache* responseCache();                      // direct access (test/diagnostic), null if off
 
-    // --- gRPC: liệt kê service/method khả dụng (cho dropdown chọn RPC) ---
-    // reflection: query server qua ServerReflection; protoFiles/descriptorSet: parse nguồn.
-    // ĐỒNG BỘ + có IO mạng cho reflection — UI nên gọi trên thread nền.
+    // --- gRPC: list available service/methods (for RPC dropdown) ---
+    // reflection: query server via ServerReflection; protoFiles/descriptorSet: parse source.
+    // SYNCHRONOUS + network IO for reflection — UI should call on a background thread.
     std::vector<GrpcMethodInfo> listGrpcMethods(const GrpcRequest& grpc, std::string& error) const;
 
     // --- Import cURL / grpcurl (CURL_IMPORT.md) ---
-    // Phân loại text dán vào ô URL; rồi parse sang RequestModel (KHÔNG ghi file).
+    // Classify text pasted into URL box; then parse into RequestModel (does NOT write file).
     bool looksLikeCurl(const std::string& text) const;
     bool looksLikeGrpcurl(const std::string& text) const;
     ImportResult importFromCurl(const std::string& text) const;   // type=http
     ImportResult importFromGrpc(const std::string& text) const;   // type=grpc
 
-    // --- Tiện ích đồng bộ cho UI ---
+    // --- Synchronous helpers for UI ---
     ValidationResult validateJson(const std::string& text) const;
-    // Resolve {{var}} theo env active (Global + active) để preview.
+    // Resolve {{var}} per active env (Global + active) for preview.
     std::string resolvePreview(const std::string& tpl) const;
 
-    // Build map biến hiệu lực (Global <- active env), value plaintext từ EnvironmentStore.
+    // Build effective var map (Global <- active env), values plaintext from EnvironmentStore.
     std::map<std::string, std::string> activeVars() const;
 
-    // Resolve toàn bộ model -> ResolvedRequest (áp env + merge settings precedence + auth).
+    // Resolve whole model -> ResolvedRequest (apply env + merge settings precedence + auth).
     ResolvedRequest resolveRequest(const RequestModel& model) const;
 
 private:

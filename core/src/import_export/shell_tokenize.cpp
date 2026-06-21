@@ -21,7 +21,7 @@ std::vector<std::string> shellTokenize(const std::string& input) {
             continue;
         }
         if (c == '\\') {
-            // '\' + newline -> nối dòng (bỏ cả hai); ngược lại escape ký tự kế.
+            // '\' + newline -> line continuation (drop both); otherwise escape next char.
             if (i + 1 < n && (input[i + 1] == '\n' || input[i + 1] == '\r')) {
                 i += 2;
                 continue;
@@ -34,7 +34,7 @@ std::vector<std::string> shellTokenize(const std::string& input) {
             inTok = true;
             ++i;
             while (i < n && input[i] != '\'') cur += input[i++];
-            if (i < n) ++i; // bỏ nháy đóng
+            if (i < n) ++i; // drop closing quote
             continue;
         }
         if (c == '"') {
@@ -48,7 +48,7 @@ std::vector<std::string> shellTokenize(const std::string& input) {
             continue;
         }
         if (c == '$' && i + 1 < n && input[i + 1] == '\'') {
-            // $'...' ANSI-C quoting: hỗ trợ vài escape phổ biến.
+            // $'...' ANSI-C quoting: support a few common escapes.
             inTok = true;
             i += 2;
             while (i < n && input[i] != '\'') {

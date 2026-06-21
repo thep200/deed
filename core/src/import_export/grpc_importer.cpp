@@ -19,7 +19,7 @@ std::string lower(std::string s) {
     return s;
 }
 
-// Tách "pkg.Service/Method" -> service, method.
+// Split "pkg.Service/Method" -> service, method.
 bool splitServiceMethod(const std::string& sm, std::string& service, std::string& method) {
     size_t slash = sm.rfind('/');
     if (slash == std::string::npos || slash == 0 || slash + 1 >= sm.size()) return false;
@@ -32,27 +32,27 @@ bool splitServiceMethod(const std::string& sm, std::string& service, std::string
 
 bool GrpcImporter::canHandle(const std::string& input) const {
     std::string t = lower(trim(input));
-    if (t.rfind("grpcurl", 0) == 0) return true;                         // lệnh grpcurl
-    if (t.rfind("grpc://", 0) == 0 || t.rfind("grpcs://", 0) == 0) return true;  // scheme rõ
+    if (t.rfind("grpcurl", 0) == 0) return true;                         // grpcurl command
+    if (t.rfind("grpc://", 0) == 0 || t.rfind("grpcs://", 0) == 0) return true;  // explicit scheme
 
-    // Dạng gọn host:port/pkg.Service/Method — CHẶT để không nhầm URL HTTP:
-    //   - không khoảng trắng,
-    //   - host phải có ':' (host:port),
-    //   - phần path = "Service/Method" đúng 2 đoạn, Service có dấu '.' (namespace),
-    //     Method bắt đầu bằng chữ HOA (PascalCase).
+    // Shorthand host:port/pkg.Service/Method — STRICT so it isn't mistaken for an HTTP URL:
+    //   - no whitespace,
+    //   - host must have ':' (host:port),
+    //   - path = "Service/Method" exactly 2 segments, Service has a '.' (namespace),
+    //     Method starts with an UPPERCASE letter (PascalCase).
     std::string s = trim(input);
     if (s.empty() || s.find(' ') != std::string::npos) return false;
     size_t slash = s.find('/');
     if (slash == std::string::npos) return false;
     std::string host = s.substr(0, slash);
-    if (host.find(':') == std::string::npos) return false;              // cần host:port
+    if (host.find(':') == std::string::npos) return false;              // need host:port
     std::string rest = s.substr(slash + 1);                            // pkg.Service/Method
     size_t slash2 = rest.find('/');
-    if (slash2 == std::string::npos) return false;                     // cần Service/Method
+    if (slash2 == std::string::npos) return false;                     // need Service/Method
     std::string svc = rest.substr(0, slash2);
     std::string method = rest.substr(slash2 + 1);
-    if (svc.find('.') == std::string::npos) return false;              // Service phải dotted
-    if (method.empty() || method.find('/') != std::string::npos) return false; // đúng 2 đoạn
+    if (svc.find('.') == std::string::npos) return false;              // Service must be dotted
+    if (method.empty() || method.find('/') != std::string::npos) return false; // exactly 2 segments
     return std::isupper(static_cast<unsigned char>(method[0])) != 0;   // Method PascalCase
 }
 
@@ -107,7 +107,7 @@ ImportResult GrpcImporter::parse(const std::string& input) const {
                 return res;
             }
         }
-        g.tls.enabled = tlsSeen ? !plaintext : true; // mặc định grpcurl dùng TLS trừ khi -plaintext
+        g.tls.enabled = tlsSeen ? !plaintext : true; // grpcurl defaults to TLS unless -plaintext
         if (g.message.empty()) g.message = "{}";
     } else {
         // (b) [grpc://|grpcs://]host:port/pkg.Service/Method
@@ -117,7 +117,7 @@ ImportResult GrpcImporter::parse(const std::string& input) const {
         else if (lower(s).rfind("grpc://", 0) == 0) { secure = false; s = s.substr(7); }
         g.tls.enabled = secure;
 
-        // host:port là phần trước dấu '/' đầu tiên.
+        // host:port is the part before the first '/'.
         size_t slash = s.find('/');
         if (slash == std::string::npos) {
             res.error = "missing Service/Method (format host:port/pkg.Service/Method)";

@@ -1,7 +1,7 @@
-// AppStrings.mm — định nghĩa cho AppStrings.h. Sửa từ ngữ hiển thị TẠI ĐÂY.
+// AppStrings.mm — definitions for AppStrings.h. Edit displayed wording HERE.
 #import "app/AppStrings.h"
 
-#pragma mark - Nút / nhãn dùng chung
+#pragma mark - Shared buttons / labels
 NSString *const StrOK = @"OK";
 NSString *const StrCancel = @"Cancel";
 NSString *const StrDelete = @"Delete";
@@ -24,7 +24,7 @@ NSString *const StrMenuZoom = @"Zoom";
 NSString *const StrMenuClose = @"Close";
 NSString *const StrMenuSend = @"Send";
 
-#pragma mark - Toolbar / nút chính
+#pragma mark - Toolbar / main buttons
 NSString *const StrOpenFolder = @"Open Folder…";
 NSString *const StrOpenCollection = @"Open Collection";
 NSString *const StrSave = @"Save";
@@ -50,7 +50,7 @@ NSString *const StrViewRaw = @"Raw";
 NSString *const StrViewEncode = @"Encode";
 NSString *const StrViewDecode = @"Decode";
 
-#pragma mark - Nguồn proto (gRPC)
+#pragma mark - Proto source (gRPC)
 NSString *const StrProtoReflection = @"Reflection";
 NSString *const StrProtoFile = @".proto";
 
@@ -83,17 +83,17 @@ NSString *const StrBodyJson = @"JSON";
 NSString *const StrBodyFile = @"File";
 NSString *const StrBodyForm = @"Form";
 
-#pragma mark - Tiêu đề màn config
+#pragma mark - Config screen titles
 NSString *const StrTitleSettings = @"Settings";
 NSString *const StrTitleEnvironments = @"Environments";
 
-#pragma mark - Context menu cây
+#pragma mark - Tree context menu
 NSString *const StrMenuNewHttp = @"New HTTP Request";
 NSString *const StrMenuNewGrpc = @"New gRPC Request";
 NSString *const StrNewFolder = @"New Folder";
 NSString *const StrFmtDeleteItems = @"Delete %lu items";
 
-#pragma mark - Tên mặc định
+#pragma mark - Default names
 NSString *const StrDefaultRequestName = @"New Request";
 NSString *const StrDefaultRpcName = @"New RPC";
 NSString *const StrDefaultImportName = @"request";
@@ -107,7 +107,7 @@ NSString *const StrBtnCreateRequest = @"Create request";
 NSString *const StrCurlDetected = @"cURL command detected";
 NSString *const StrGrpcurlDetected = @"grpcurl command detected";
 
-#pragma mark - Dialog: xoá (xác nhận)
+#pragma mark - Dialog: delete (confirm)
 NSString *const StrDlgDeleteEnv = @"Delete environment";
 NSString *const StrDlgDeleteAlias = @"Delete alias";
 NSString *const StrFmtConfirmDelete = @"Do you want to delete \"%@\"?";
@@ -125,7 +125,7 @@ NSString *const StrDlgNewEnv = @"New environment";
 NSString *const StrDlgNewAlias = @"New alias";
 NSString *const StrFmtEnvAliasTitle = @"%@ · %@";
 
-#pragma mark - Validate (tên)
+#pragma mark - Validate (names)
 NSString *const StrValNameEmpty = @"Name cannot be empty";
 NSString *const StrValAliasExists = @"Alias already exists";
 NSString *const StrValEnvExists = @"Environment already exists";

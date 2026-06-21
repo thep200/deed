@@ -1,7 +1,7 @@
 #import "widgets/OS9StyleMenu.h"
 #import "theme/OS9Theme.h"
 
-#pragma mark - OS9MenuItemView (item dropdown kiểu OS9)
+#pragma mark - OS9MenuItemView (OS9-style dropdown item)
 
 @interface OS9MenuItemView : NSView
 @end
@@ -26,10 +26,10 @@
 - (void)drawRect:(NSRect)r {
     NSMenuItem *item = self.enclosingMenuItem;
     BOOL hl = _hover;
-    // nền: chọn -> xanh tím #333399 ; thường -> platinum
+    // background: selected -> blue-purple #333399 ; normal -> platinum
     [(hl ? [NSColor colorWithCalibratedRed:0.2 green:0.2 blue:0.6 alpha:1.0] : [OS9Theme buttonFace]) set];
     NSRectFill(self.bounds);
-    // tick nếu item đang chọn (state On)
+    // tick if item is selected (state On)
     NSColor *fg = hl ? [NSColor whiteColor] : [NSColor blackColor];
     NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : fg};
     if (item.state == NSControlStateValueOn) {

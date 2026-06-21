@@ -2,7 +2,7 @@
 
 @class MainWindowController;
 
-// App delegate: tạo cửa sổ chính, chuyển tiếp các action menu.
+// App delegate: creates the main window, forwards menu actions.
 @interface AppController : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) MainWindowController *mainWC;
 - (void)openFolder:(id)sender;

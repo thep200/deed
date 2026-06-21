@@ -14,10 +14,10 @@
 
 @implementation SciTextView {
     ScintillaView *_sci;
-    BOOL _programmatic; // đang set text bằng code -> KHÔNG bắn onTextChanged
-    JsonEditorBehavior *_behavior; // hành vi soạn JSON; nil cho ô read-only
-    NSString *_fontFace;  // họ chữ Scintilla (mặc định = font cấu hình OS9Theme, fallback Monaco)
-    CGFloat _fontPt;      // cỡ chữ Scintilla
+    BOOL _programmatic; // setting text by code -> do NOT fire onTextChanged
+    JsonEditorBehavior *_behavior; // JSON editing behavior; nil for read-only fields
+    NSString *_fontFace;  // Scintilla font family (default = OS9Theme configured font, fallback Monaco)
+    CGFloat _fontPt;      // Scintilla font size
 }
 
 - (instancetype)initEditable:(BOOL)editable {
@@ -35,42 +35,42 @@
 - (void)msg:(unsigned int)m w:(uptr_t)w l:(sptr_t)l { [_sci message:m wParam:w lParam:l]; }
 - (sptr_t)q:(unsigned int)m w:(uptr_t)w l:(sptr_t)l { return [_sci message:m wParam:w lParam:l]; }
 
-// §2.2: deactivate input context của Scintilla rồi NGẮT delegate (unsafe_unretained) TRƯỚC khi
-// view bị huỷ. Nếu không, ScintillaView có thể bắn notification vào self đã giải phóng, hoặc
-// updateWindows kích hoạt lại input context của content view đã chết -> use-after-free.
+// §2.2: deactivate Scintilla's input context then DETACH the delegate (unsafe_unretained) BEFORE
+// the view is destroyed. Otherwise ScintillaView may fire a notification into a freed self, or
+// updateWindows may reactivate the dead content view's input context -> use-after-free.
 - (void)teardown {
     OS9SafeEndEditing(self.window, self);
-    _sci.delegate = nil;   // unsafe_unretained -> phải nil thủ công, ARC không lo hộ
-    _behavior = nil;       // thả hành vi JSON (giữ con trỏ ScintillaView)
+    _sci.delegate = nil;   // unsafe_unretained -> must nil manually, ARC won't handle it
+    _behavior = nil;       // release the JSON behavior (holds a pointer to ScintillaView)
 }
 
 - (void)dealloc { [self teardown]; }
 
 - (void)configure {
-    // Lexer JSON + lề số dòng + idle styling (chi phí ~ vùng nhìn thấy).
+    // JSON lexer + line-number margin + idle styling (cost ~ visible area).
     [self msg:SCI_SETILEXER w:0 l:(sptr_t)DeedCreateJSONLexer()];
     [self msg:SCI_SETWRAPMODE w:SC_WRAP_NONE l:0];
     [self msg:SCI_SETIDLESTYLING w:SC_IDLESTYLING_ALL l:0];
 
-    // lề 0 = số dòng. KHÔNG dùng lề fold (bỏ các nốt tròn ở đầu mỗi dòng).
+    // margin 0 = line numbers. Do NOT use a fold margin (drops the little dots at each line start).
     [self msg:SCI_SETMARGINTYPEN w:0 l:SC_MARGIN_NUMBER];
     [self msg:SCI_SETMARGINWIDTHN w:0 l:34];
-    [self msg:SCI_SETMARGINWIDTHN w:1 l:0]; // lề symbol/fold = 0 -> không hiện marker
+    [self msg:SCI_SETMARGINWIDTHN w:1 l:0]; // symbol/fold margin = 0 -> no markers shown
 
-    // Thanh cuộn ngang: dòng dài (không wrap) -> hiện scrollbar kéo trái/phải.
-    // Tracking để Scintilla tự nới bề rộng cuộn theo dòng dài nhất.
+    // Horizontal scroll bar: long (unwrapped) lines -> show a left/right scrollbar.
+    // Tracking so Scintilla widens the scroll area to the longest line on its own.
     [self msg:SCI_SETHSCROLLBAR w:1 l:0];
     [self msg:SCI_SETSCROLLWIDTHTRACKING w:1 l:0];
-    [self msg:SCI_SETSCROLLWIDTH w:1 l:0]; // mốc tối thiểu; tracking sẽ tự tăng
+    [self msg:SCI_SETSCROLLWIDTH w:1 l:0]; // minimum baseline; tracking grows it
 
     [self applyPlatinumTheme];
     [_sci setEditable:_editable];
     [self msg:SCI_SETREADONLY w:(_editable ? 0 : 1) l:0];
-    // Response (read-only): KHÔNG tích undo -> response lớn không phình undo buffer (§8.3).
+    // Response (read-only): do NOT collect undo -> large responses don't bloat the undo buffer (§8.3).
     if (!_editable) [self msg:SCI_SETUNDOCOLLECTION w:0 l:0];
 
-    // Scrollbar RETRO: dùng OS9Scroller (như cây thư mục) thay scroller hệ thống.
-    // Overlay + autohide -> ẩn khi không cuộn, chỉ hiện lúc có scroll event.
+    // RETRO scrollbar: use OS9Scroller (like the folder tree) instead of the system scroller.
+    // Overlay + autohide -> hidden when not scrolling, shown only on a scroll event.
     NSScrollView *sv = [(NSView *)[_sci content] enclosingScrollView];
     if (sv) {
         sv.scrollerStyle = NSScrollerStyleOverlay;
@@ -82,7 +82,7 @@
         sv.horizontalScroller = [[OS9Scroller alloc] initWithFrame:NSMakeRect(0, 0, 100, 16)];
     }
 
-    // Hành vi soạn JSON (auto-close / auto-indent / brace-match): chỉ ô SOẠN.
+    // JSON editing behavior (auto-close / auto-indent / brace-match): EDITABLE fields only.
     if (_editable) {
         _behavior = [[JsonEditorBehavior alloc] initWithScintillaView:_sci];
         [_behavior applyHighlightStyles];
@@ -90,8 +90,8 @@
 }
 
 - (void)applyPlatinumTheme {
-    // Font lấy từ ivar (mặc định = font cấu hình của OS9Theme, fallback Monaco/11) -> Scintilla
-    // dùng CÙNG font với phần còn lại của app. KHÔNG hardcode "Monaco" (sẽ ghi đè cấu hình).
+    // Font taken from ivar (default = OS9Theme configured font, fallback Monaco/11) -> Scintilla
+    // uses the SAME font as the rest of the app. Do NOT hardcode "Monaco" (would override config).
     if (!_fontFace) {
         _fontFace = [[OS9Theme configuredFontName] copy] ?: @"Monaco";
         CGFloat sz = [OS9Theme configuredFontSize];
@@ -101,13 +101,13 @@
     [self msg:SCI_STYLESETSIZE w:STYLE_DEFAULT l:(sptr_t)(long)_fontPt];
     [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_DEFAULT value:[NSColor blackColor]];
     [_sci setColorProperty:SCI_STYLESETBACK parameter:STYLE_DEFAULT value:[NSColor whiteColor]];
-    [self msg:SCI_STYLECLEARALL w:0 l:0]; // áp default cho mọi style
+    [self msg:SCI_STYLECLEARALL w:0 l:0]; // apply default to all styles
 
-    // số dòng: nền platinum, chữ xám
+    // line numbers: platinum background, gray text
     [_sci setColorProperty:SCI_STYLESETBACK parameter:STYLE_LINENUMBER value:[OS9Theme buttonFace]];
     [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_LINENUMBER value:[NSColor colorWithCalibratedWhite:0.4 alpha:1]];
 
-    // màu cú pháp JSON
+    // JSON syntax colors
     NSColor *green = [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1];
     NSColor *blue = [NSColor colorWithCalibratedRed:0.1 green:0.2 blue:0.8 alpha:1];
     NSColor *purple = [NSColor colorWithCalibratedRed:0.45 green:0.1 blue:0.5 alpha:1];
@@ -124,10 +124,10 @@
 }
 
 - (void)setFontName:(NSString *)name size:(CGFloat)size {
-    if (name.length) _fontFace = [name copy];   // rỗng -> giữ font hiện tại (applyPlatinumTheme dùng ivar)
+    if (name.length) _fontFace = [name copy];   // empty -> keep current font (applyPlatinumTheme uses ivar)
     if (size > 0) _fontPt = size;
-    [self applyPlatinumTheme];                   // áp font ivar + STYLECLEARALL bên trong
-    [_behavior applyHighlightStyles];            // STYLECLEARALL xoá -> set lại màu brace
+    [self applyPlatinumTheme];                   // applies ivar font + STYLECLEARALL inside
+    [_behavior applyHighlightStyles];            // STYLECLEARALL cleared them -> re-set brace colors
 }
 
 #pragma mark text get/set
@@ -136,10 +136,10 @@
 
 - (void)setString:(NSString *)string {
     _programmatic = YES;
-    [self msg:SCI_SETREADONLY w:0 l:0];            // mở khoá để set được
+    [self msg:SCI_SETREADONLY w:0 l:0];            // unlock so we can set
     [_sci setString:string ?: @""];
     [self msg:SCI_SETREADONLY w:(_editable ? 0 : 1) l:0];
-    [self msg:SCI_EMPTYUNDOBUFFER w:0 l:0];        // §8.3: bỏ lịch sử undo -> không giữ bản text cũ
+    [self msg:SCI_EMPTYUNDOBUFFER w:0 l:0];        // §8.3: drop undo history -> don't keep the old text copy
     [self msg:SCI_SETSCROLLWIDTH w:1 l:0];         // reset scroll width
     [self msg:SCI_GOTOPOS w:0 l:0];
     _programmatic = NO;
@@ -148,9 +148,9 @@
 - (void)clearContents {
     _programmatic = YES;
     [self msg:SCI_SETREADONLY w:0 l:0];
-    [self msg:SCI_CLEARALL w:0 l:0];               // xoá toàn bộ text
+    [self msg:SCI_CLEARALL w:0 l:0];               // clear all text
     [self msg:SCI_SETREADONLY w:(_editable ? 0 : 1) l:0];
-    [self msg:SCI_EMPTYUNDOBUFFER w:0 l:0];        // xoá undo -> giải phóng bản sao nội dung cũ
+    [self msg:SCI_EMPTYUNDOBUFFER w:0 l:0];        // clear undo -> free the old content copy
     [self msg:SCI_SETSCROLLWIDTH w:1 l:0];
     _programmatic = NO;
 }
@@ -166,9 +166,9 @@
     return ([r isKindOfClass:[NSView class]] && [(NSView *)r isDescendantOf:_sci]);
 }
 
-// Click vào vùng TRỐNG dưới text rơi vào NSClipView (document view chỉ cao bằng
-// số dòng) -> không tới SCIContentView -> không giành được focus. Chuyển hit về
-// content view để click đâu trong editor cũng đặt được con trỏ + nhận bàn phím.
+// A click on the EMPTY area below the text lands on NSClipView (the document view is only
+// as tall as the line count) -> never reaches SCIContentView -> doesn't grab focus. Redirect
+// the hit to the content view so a click anywhere in the editor sets the caret + takes keyboard.
 - (NSView *)hitTest:(NSPoint)point {
     NSView *v = [super hitTest:point];
     if ([v isKindOfClass:[NSClipView class]]) {
@@ -185,7 +185,7 @@
         case SCN_CHARADDED:                          // (b)(c) auto-close/indent/skip-over
             if (!_programmatic) [_behavior handleCharAdded:(unsigned)n->ch];
             break;
-        case SCN_UPDATEUI:                           // (f) brace-match (no-op nếu _behavior nil)
+        case SCN_UPDATEUI:                           // (f) brace-match (no-op if _behavior is nil)
             [_behavior updateBraceMatch];
             break;
         case SCN_MODIFIED:

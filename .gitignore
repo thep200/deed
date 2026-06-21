@@ -6,17 +6,17 @@
 # Stress harness artifacts (STRESS_TEST.md)
 /stress-artifacts/
 
-# vcpkg manifest mode (rebuilt tu vcpkg.json)
+# vcpkg manifest mode (rebuilt from vcpkg.json)
 /vcpkg_installed/
 
-# Local caches (ccache theo mise.toml)
+# Local caches (ccache per mise.toml)
 /.cache/
 /.claude/
 
 /docs/
 /assets/
 
-# CMake per-machine (khong vao VCS)
+# CMake per-machine (not in VCS)
 CMakeUserPresets.json
 
 # macOS

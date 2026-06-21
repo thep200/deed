@@ -1,5 +1,5 @@
-// core/importer.hpp — Import từ cURL / gRPC (README §8.2, §12.2).
-// Chỉ PARSE -> RequestModel để user xem/sửa rồi mới lưu; KHÔNG tự ghi file.
+// core/importer.hpp — Import from cURL / gRPC (README §8.2, §12.2).
+// PARSE only -> RequestModel for the user to review/edit before saving; does NOT write file.
 #pragma once
 
 #include <memory>
@@ -13,8 +13,8 @@ namespace core {
 struct ImportResult {
     bool ok = false;
     RequestModel model;
-    std::vector<std::string> unknown; // cờ/đoạn không nhận diện được (gom lại, không fail)
-    std::string error;                // khi ok == false
+    std::vector<std::string> unknown; // unrecognized flags/segments (collected, not a failure)
+    std::string error;                // when ok == false
 };
 
 class IImporter {
@@ -24,17 +24,17 @@ public:
     virtual ImportResult parse(const std::string& input) const = 0;
 };
 
-// Xuất request hiện tại thành lệnh cURL (HTTP) / grpcurl (gRPC). Nên truyền model ĐÃ resolve.
+// Export current request as a cURL (HTTP) / grpcurl (gRPC) command. Pass a RESOLVED model.
 std::string toCurl(const RequestModel& resolved);
 
-// cURL: tokenizing dòng lệnh shell + map cờ -> field.
+// cURL: tokenize the shell command line + map flags -> fields.
 class CurlImporter : public IImporter {
 public:
     bool canHandle(const std::string& input) const override;
     ImportResult parse(const std::string& input) const override;
 };
 
-// gRPC: (a) lệnh grpcurl ...  (b) chuỗi host:port/pkg.Service/Method (grpc://, grpcs://).
+// gRPC: (a) grpcurl ... command  (b) host:port/pkg.Service/Method string (grpc://, grpcs://).
 class GrpcImporter : public IImporter {
 public:
     bool canHandle(const std::string& input) const override;

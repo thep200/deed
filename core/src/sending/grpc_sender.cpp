@@ -48,7 +48,7 @@ void GrpcSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
                       const std::shared_ptr<CancelToken>& cancel) {
     const GrpcRequest& g = req.model.grpc;
 
-    // POC: chỉ unary.
+    // POC: unary only.
     if (g.methodType != "unary") {
         delegate.onError(handle, ApiError{ErrorKind::Unsupported,
                                           "POC supports unary only; methodType '" + g.methodType +
@@ -56,14 +56,14 @@ void GrpcSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
         return;
     }
 
-    // Nạp descriptor (protoFiles | descriptorSet | reflection).
+    // Load descriptors (protoFiles | descriptorSet | reflection).
     DescriptorContext ctx;
     if (!grpcdesc::buildDescriptors(g, ctx)) {
         delegate.onError(handle, ApiError{ErrorKind::Parse, ctx.error});
         return;
     }
 
-    // Tìm service + method.
+    // Find service + method.
     const gp::ServiceDescriptor* svc = ctx.activePool->FindServiceByName(g.service);
     if (!svc) {
         delegate.onError(handle, ApiError{ErrorKind::Parse, "service not found: " + g.service});
@@ -101,7 +101,7 @@ void GrpcSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
         return;
     }
 
-    // Kênh + generic stub.
+    // Channel + generic stub.
     auto channel = grpc::CreateChannel(g.target, makeCreds(g.tls));
     grpc::GenericStub stub(channel);
 
@@ -127,7 +127,7 @@ void GrpcSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
     void* finishTag = reinterpret_cast<void*>(1);
     reader->Finish(&respBuffer, &status, finishTag);
 
-    // Poll CQ + hỗ trợ cancel.
+    // Poll CQ + support cancel.
     bool done = false;
     while (!done) {
         void* tag = nullptr;

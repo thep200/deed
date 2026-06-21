@@ -4,7 +4,7 @@ namespace core::codec {
 
 namespace {
 
-// ---- helpers an toàn (key thiếu -> mặc định) ----
+// ---- safe helpers (missing key -> default) ----
 std::string getStr(const json& j, const char* k, const std::string& def = "") {
     auto it = j.find(k);
     return (it != j.end() && it->is_string()) ? it->get<std::string>() : def;
@@ -17,7 +17,7 @@ bool getBool(const json& j, const char* k, bool def = false) {
     auto it = j.find(k);
     if (it == j.end()) return def;
     if (it->is_boolean()) return it->get<bool>();
-    if (it->is_number()) return it->get<double>() != 0;   // chấp nhận 0/1 (dạng mới)
+    if (it->is_number()) return it->get<double>() != 0;   // accept 0/1 (new format)
     return def;
 }
 
@@ -262,8 +262,8 @@ Environment envFromJson(const json& j) {
         for (const auto& k : *it) {
             EnvKey ek;
             ek.key = getStr(k, "key");
-            ek.value = getStr(k, "value");   // file env cũ có thể thiếu value nếu từng là secret;
-                                             // migrateLegacySecrets() đã gộp value lại trước đó.
+            ek.value = getStr(k, "value");   // old env files may lack value if it was once a secret;
+                                             // migrateLegacySecrets() already merged the value back in earlier.
             ek.enabled = getBool(k, "enabled", true);
             e.keys.push_back(ek);
         }
@@ -271,7 +271,7 @@ Environment envFromJson(const json& j) {
     return e;
 }
 
-// Keys snake_case (cấu hình app). cacheResponses/cachePersist KHÔNG phơi cho user -> luôn default true.
+// snake_case keys (app config). cacheResponses/cachePersist NOT exposed to user -> always default true.
 json toJson(const AppConfig& c) {
     return json{{"default_timeout_ms", c.defaultTimeoutMs},
                 {"verify_tls", c.verifyTls},
@@ -282,7 +282,7 @@ json toJson(const AppConfig& c) {
                 {"disk_cache_size", c.diskCacheSizeMb}};
 }
 namespace {
-// Đọc int theo key snake_case, fallback key camelCase cũ (tương thích config.json cũ).
+// Read int by snake_case key, fall back to the old camelCase key (compat with old config.json).
 int getIntCompat(const json& j, const char* snake, const char* camel, int def) {
     if (j.find(snake) != j.end()) return getInt(j, snake, def);
     return getInt(j, camel, def);
@@ -301,7 +301,7 @@ bool getBoolCompat(const json& j, const char* snake, const char* camel, bool def
 AppConfig appConfigFromJson(const json& j) { return appConfigFromJson(j, AppConfig{}); }
 
 AppConfig appConfigFromJson(const json& j, const AppConfig& def) {
-    AppConfig c = def;   // key thiếu -> giữ giá trị mặc định (từ .env)
+    AppConfig c = def;   // missing key -> keep the default value (from .env)
     c.defaultTimeoutMs = getIntCompat(j, "default_timeout_ms", "defaultTimeoutMs", def.defaultTimeoutMs);
     c.verifyTls = getBoolCompat(j, "verify_tls", "verifyTls", def.verifyTls);
     c.lastCollectionRoot = getStrCompat(j, "last_collection_root", "lastCollectionRoot", def.lastCollectionRoot);
@@ -309,7 +309,7 @@ AppConfig appConfigFromJson(const json& j, const AppConfig& def) {
     c.fontSize = getIntCompat(j, "font_size", "fontSize", def.fontSize);
     c.ramCacheSizeMb = getIntCompat(j, "ram_cache_size", "ramCacheSizeMb", def.ramCacheSizeMb);
     c.diskCacheSizeMb = getIntCompat(j, "disk_cache_size", "diskCacheSizeMb", def.diskCacheSizeMb);
-    // cacheResponses/cachePersist không còn trong config user -> giữ default true của struct.
+    // cacheResponses/cachePersist no longer in user config -> keep the struct's default true.
     return c;
 }
 
@@ -326,7 +326,7 @@ Session sessionFromJson(const json& j) {
     return s;
 }
 
-// ---- ResponseRecord (cache disk) ----
+// ---- ResponseRecord (disk cache) ----
 namespace {
 json cookieArray(const std::vector<Cookie>& v) {
     json a = json::array();

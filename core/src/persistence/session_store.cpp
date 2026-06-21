@@ -11,7 +11,7 @@ namespace {
 std::string sessionPath(const std::string& root) {
     return fsutil::join(fsutil::join(root, ".session"), "session.json");
 }
-// Cửa sổ gộp ghi: thay đổi trong khoảng này dồn vào 1 lần ghi đĩa.
+// Write-coalescing window: changes within this span collapse into one disk write.
 constexpr auto kDebounce = std::chrono::milliseconds(400);
 } // namespace
 
@@ -27,39 +27,39 @@ SessionStore::~SessionStore() {
     }
     cv_.notify_all();
     if (worker_.joinable()) worker_.join();
-    flush();   // ghi nốt nếu còn treo (worker không ghi lúc stop -> tránh ghi 2 lần)
+    flush();   // write any pending state (worker does not write on stop -> avoid double-write)
 }
 
 Session SessionStore::load() const {
-    // Fail-safe: thiếu/hỏng -> mặc định, không throw (README §6.3).
+    // Fail-safe: missing/corrupt -> defaults, no throw (README §6.3).
     std::string txt;
     if (!fsutil::readFile(sessionPath(root_), txt)) return Session{};
     try {
         return codec::sessionFromJson(codec::json::parse(txt));
     } catch (...) {
-        return Session{}; // file hỏng -> khởi động sạch
+        return Session{}; // corrupt file -> start clean
     }
 }
 
 void SessionStore::writeSnapshot(const std::string& root, const Session& s) {
     try { fsutil::writeFileAtomic(sessionPath(root), codec::toJson(s).dump(2)); }
-    catch (...) { /* session là state phụ trợ; lỗi ghi -> bỏ qua, sẽ thử lại lần sau */ }
+    catch (...) { /* session is auxiliary state; write error -> ignore, retry next time */ }
 }
 
 void SessionStore::markDirtyLocked() {
     dirty_ = true;
-    cv_.notify_all();   // đánh thức worker để bắt đầu cửa sổ debounce
+    cv_.notify_all();   // wake the worker to start the debounce window
 }
 
 void SessionStore::workerLoop() {
     std::unique_lock<std::mutex> lk(mu_);
     while (true) {
         cv_.wait(lk, [&] { return stop_ || dirty_; });
-        if (stop_) return;                                  // destructor flush phần treo
-        // Có thay đổi: chờ thêm kDebounce để gộp các thay đổi kế tiếp (thoát sớm nếu stop).
+        if (stop_) return;                                  // destructor flushes the pending part
+        // Change pending: wait another kDebounce to coalesce following changes (exit early if stop).
         cv_.wait_for(lk, kDebounce, [&] { return stop_; });
         if (stop_) return;
-        if (dirty_) {                                       // ghi snapshot mới nhất NGOÀI lock
+        if (dirty_) {                                       // write the latest snapshot OUTSIDE the lock
             Session snap = current_;
             std::string root = root_;
             dirty_ = false;
@@ -82,7 +82,7 @@ void SessionStore::flush() {
 }
 
 void SessionStore::setRoot(std::string root) {
-    flush();   // ghi state của collection cũ trước khi chuyển
+    flush();   // write the old collection's state before switching
     std::lock_guard<std::mutex> lk(mu_);
     root_ = std::move(root);
     current_ = load();
@@ -95,7 +95,7 @@ std::string SessionStore::loadLastOpened() const {
 
 void SessionStore::saveLastOpened(const std::string& relPath) {
     std::lock_guard<std::mutex> lk(mu_);
-    if (current_.lastOpenedFile == relPath) return;   // không đổi -> khỏi ghi
+    if (current_.lastOpenedFile == relPath) return;   // unchanged -> no write
     current_.lastOpenedFile = relPath;
     markDirtyLocked();
 }
@@ -107,7 +107,7 @@ std::string SessionStore::getActiveEnv() const {
 
 void SessionStore::setActiveEnv(const std::string& name) {
     std::lock_guard<std::mutex> lk(mu_);
-    if (current_.activeEnv == name) return;            // không đổi -> khỏi ghi
+    if (current_.activeEnv == name) return;            // unchanged -> no write
     current_.activeEnv = name;
     markDirtyLocked();
 }

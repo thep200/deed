@@ -11,16 +11,16 @@
         _enabledState = YES;
         self.target = target;
         self.action = action;
-        self.focusRingType = NSFocusRingTypeNone; // không vẽ focus ring (tránh "viền đậm" dính)
+        self.focusRingType = NSFocusRingTypeNone; // no focus ring (avoids sticky "bold border")
     }
     return self;
 }
 
 - (BOOL)isFlipped { return NO; }
-- (BOOL)acceptsFirstResponder { return NO; } // không nhận focus -> không có viền focus
+- (BOOL)acceptsFirstResponder { return NO; } // no focus -> no focus border
 
 - (void)drawRect:(NSRect)dirty {
-    BOOL sunken = _pressed || _selected;   // "đang chọn" (tab) trông như đang nhấn
+    BOOL sunken = _pressed || _selected;   // "selected" (tab) looks pressed
     [OS9Theme drawButtonInRect:self.bounds pressed:sunken isDefault:_isDefault];
     if (_icon) {
         NSSize is = _icon.size;
@@ -36,7 +36,7 @@
                             NSForegroundColorAttributeName : fg};
     NSString *title = _title ?: @"";
     NSSize sz = [title sizeWithAttributes:attrs];
-    CGFloat cw = self.bounds.size.width - (_dropdown ? 16 : 0); // chừa chỗ mũi tên
+    CGFloat cw = self.bounds.size.width - (_dropdown ? 16 : 0); // leave room for arrow
     NSPoint pt = NSMakePoint(floor((cw - sz.width) / 2),
                              floor((self.bounds.size.height - sz.height) / 2) + (sunken ? -1 : 0));
     [title drawAtPoint:pt withAttributes:attrs];
@@ -66,7 +66,7 @@
     BOOL fire = _pressed;
     _pressed = NO;
     [self setNeedsDisplay:YES];
-    [self displayIfNeeded]; // vẽ lại trạng thái "nhả" NGAY, trước khi action mở modal/menu
+    [self displayIfNeeded]; // redraw "released" state NOW, before action opens modal/menu
     if (fire && self.action) [NSApp sendAction:self.action to:self.target from:self];
 }
 

@@ -1,4 +1,4 @@
-// Scrollbar OS9 tự vẽ (theo scrollbar.svg): track #AAAAAA, thumb #9999FF có gân, nút mũi tên.
+// Self-drawn OS9 scrollbar (per scrollbar.svg): track #AAAAAA, ribbed #9999FF thumb, arrow buttons.
 #import <Cocoa/Cocoa.h>
 
 @interface OS9Scroller : NSScroller

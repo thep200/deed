@@ -1,22 +1,22 @@
-// AppStrings.h — NGUỒN DUY NHẤT cho mọi chuỗi text hiển thị cho người dùng trong app.
+// AppStrings.h — THE SINGLE SOURCE for every user-facing text string in the app.
 //
-// Mục tiêu: gom toàn bộ text (nhãn nút, tiêu đề/nội dung dialog, toast, menu, tab,
-// placeholder, thông báo lỗi/validate, tên mặc định...) vào MỘT chỗ để dễ quản lý,
-// rà soát và đổi từ ngữ nhất quán.
+// Goal: gather all text (button labels, dialog titles/bodies, toasts, menus, tabs,
+// placeholders, error/validation messages, default names...) in ONE place for easy
+// management, review, and consistent wording.
 //
-// Quy ước:
-//  - Hằng dạng `extern NSString *const Str...` (định nghĩa ở AppStrings.mm) -> link 1 bản.
-//  - Hằng có tiền tố `StrFmt...` là chuỗi ĐỊNH DẠNG (dùng với +stringWithFormat:),
-//    giữ nguyên thứ tự/loại tham số (%@, %lu, %s...).
-//  - Chuỗi giống hệt & cùng ngữ nghĩa thì DÙNG CHUNG một hằng (vd Cancel/OK/Delete).
+// Conventions:
+//  - Constants `extern NSString *const Str...` (defined in AppStrings.mm) -> one linked copy.
+//  - Constants prefixed `StrFmt...` are FORMAT strings (used with +stringWithFormat:);
+//    keep argument order/types intact (%@, %lu, %s...).
+//  - Identical strings with the same meaning SHARE one constant (e.g. Cancel/OK/Delete).
 //
-// Không gom vào đây (cố ý): khoá nội bộ/định danh (mode "json", key "Global"...),
-// template dữ liệu JSON, glyph icon, và các mảnh format thuần ký hiệu (vd "%@ | %@").
+// Intentionally excluded: internal keys/identifiers (mode "json", key "Global"...),
+// JSON data templates, icon glyphs, and pure-symbol format fragments (e.g. "%@ | %@").
 #pragma once
 
 #import <Foundation/Foundation.h>
 
-#pragma mark - Nút / nhãn dùng chung
+#pragma mark - Shared buttons / labels
 extern NSString *const StrOK;
 extern NSString *const StrCancel;
 extern NSString *const StrDelete;
@@ -39,13 +39,13 @@ extern NSString *const StrMenuZoom;
 extern NSString *const StrMenuClose;
 extern NSString *const StrMenuSend;
 
-#pragma mark - Toolbar / nút chính
-extern NSString *const StrOpenFolder;   // menu File + nút mở thư mục
-extern NSString *const StrOpenCollection;   // prompt nút trong NSOpenPanel
+#pragma mark - Toolbar / main buttons
+extern NSString *const StrOpenFolder;   // File menu + open-folder button
+extern NSString *const StrOpenCollection;   // button prompt in NSOpenPanel
 extern NSString *const StrSave;
 extern NSString *const StrBtnCurl;
 extern NSString *const StrBtnBack;
-extern NSString *const StrEnvLocal;      // nhãn cột/biến môi trường base
+extern NSString *const StrEnvLocal;      // base environment column/variable label
 extern NSString *const StrEnvManage;
 
 #pragma mark - Tooltip
@@ -65,7 +65,7 @@ extern NSString *const StrViewRaw;
 extern NSString *const StrViewEncode;
 extern NSString *const StrViewDecode;
 
-#pragma mark - Nguồn proto (gRPC)
+#pragma mark - Proto source (gRPC)
 extern NSString *const StrProtoReflection;
 extern NSString *const StrProtoFile;
 
@@ -98,20 +98,20 @@ extern NSString *const StrBodyJson;
 extern NSString *const StrBodyFile;
 extern NSString *const StrBodyForm;
 
-#pragma mark - Tiêu đề màn config
+#pragma mark - Config screen titles
 extern NSString *const StrTitleSettings;
 extern NSString *const StrTitleEnvironments;
 
-#pragma mark - Context menu cây
+#pragma mark - Tree context menu
 extern NSString *const StrMenuNewHttp;
 extern NSString *const StrMenuNewGrpc;
-extern NSString *const StrNewFolder;     // menu + tên folder mặc định
+extern NSString *const StrNewFolder;     // menu + default folder name
 extern NSString *const StrFmtDeleteItems;
 
-#pragma mark - Tên mặc định
+#pragma mark - Default names
 extern NSString *const StrDefaultRequestName;
 extern NSString *const StrDefaultRpcName;
-extern NSString *const StrDefaultImportName;   // fallback khi không suy ra được tên
+extern NSString *const StrDefaultImportName;   // fallback when a name cannot be inferred
 extern NSString *const StrImportedGrpc;
 
 #pragma mark - Dialog: Rename / Import
@@ -122,9 +122,9 @@ extern NSString *const StrBtnCreateRequest;
 extern NSString *const StrCurlDetected;
 extern NSString *const StrGrpcurlDetected;
 
-#pragma mark - Dialog: xoá (xác nhận)
-extern NSString *const StrDlgDeleteEnv;            // tiêu đề dialog xoá environment
-extern NSString *const StrDlgDeleteAlias;          // tiêu đề dialog xoá alias
+#pragma mark - Dialog: delete (confirm)
+extern NSString *const StrDlgDeleteEnv;            // delete-environment dialog title
+extern NSString *const StrDlgDeleteAlias;          // delete-alias dialog title
 extern NSString *const StrFmtConfirmDelete;        // "Do you want to delete \"%@\"?"
 extern NSString *const StrFmtConfirmDeleteMulti;   // "Do you want to delete %lu selected items?"
 extern NSString *const StrFmtConfirmDeleteEnv;     // "Do you want to delete environment \"%@\"?"
@@ -140,13 +140,13 @@ extern NSString *const StrDlgNewEnv;
 extern NSString *const StrDlgNewAlias;
 extern NSString *const StrFmtEnvAliasTitle;
 
-#pragma mark - Validate (tên)
+#pragma mark - Validate (names)
 extern NSString *const StrValNameEmpty;
 extern NSString *const StrValAliasExists;
 extern NSString *const StrValEnvExists;
 extern NSString *const StrValReservedBase;
-extern NSString *const StrFmtAliasExists;   // dialog báo trùng alias (có tên)
-extern NSString *const StrFmtEnvExists;     // dialog báo trùng env (có tên)
+extern NSString *const StrFmtAliasExists;   // duplicate-alias dialog (with name)
+extern NSString *const StrFmtEnvExists;     // duplicate-env dialog (with name)
 
 #pragma mark - Toast / status
 extern NSString *const StrToastOpenFolderFirst;

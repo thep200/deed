@@ -4,8 +4,8 @@
 
 #pragma mark Load / populate / sync
 
-// Huỷ + vô hiệu request đang bay trước khi chuyển (§8.2 bước 2): callback đến trễ
-// sẽ bị drop vì handle khác _currentHandle.
+// Cancel + invalidate the in-flight request before switching (§8.2 step 2): a late callback
+// is dropped because its handle != _currentHandle.
 - (void)cancelInFlightForSwitch {
     if (!_sending) return;
     if (_engine) _engine->cancel(_currentHandle);
@@ -13,10 +13,10 @@
     [self finishSending];
 }
 
-// §A1: loadRequest đọc đĩa + parse JSON (request body lớn) -> chạy NỀN, áp model trên main.
-// Request CŨ giữ NGUYÊN (editor + _model + _currentRel) cho tới khi áp -> KHÔNG có "cửa sổ"
-// editor bị xoá giữa chừng (an toàn khi arrow-key duyệt cây nhanh). Token _loadReqSeq: chỉ kết
-// quả MỚI NHẤT được áp -> các lần chọn cũ bị bỏ (không hiện model của request đã chuyển đi).
+// §A1: loadRequest reads disk + parses JSON (large request body) -> run in BACKGROUND, apply model on main.
+// The OLD request stays INTACT (editor + _model + _currentRel) until applied -> no "window" where the
+// editor is cleared mid-flight (safe when arrow-keying through the tree fast). Token _loadReqSeq: only the
+// LATEST result is applied -> older selections are dropped (won't show the model of a request already left).
 - (void)loadRequestAtRel:(NSString *)rel {
     if (!_engine || rel.length == 0) return;
     NSString *relCopy = [rel copy];
@@ -27,36 +27,36 @@
         if (!s || !s->_engine) return;
         core::RequestModel model;
         std::string err;
-        try { model = s->_engine->collection().loadRequest(relCopy.UTF8String); }  // I/O NGOÀI main
+        try { model = s->_engine->collection().loadRequest(relCopy.UTF8String); }  // I/O OFF main
         catch (const std::exception &e) { err = e.what(); }
         __block core::RequestModel modelCopy = std::move(model);
         __block std::string errCopy = std::move(err);
         dispatch_async(dispatch_get_main_queue(), ^{
             MainWindowController *s2 = ws;
-            if (!s2 || token != s2->_loadReqSeq) return;   // đã chọn request khác -> bỏ kết quả cũ
+            if (!s2 || token != s2->_loadReqSeq) return;   // a different request was selected -> drop stale result
             if (!errCopy.empty()) { [s2 toastWarn:N(errCopy)]; return; }
             [s2 applyLoadedModel:modelCopy rel:relCopy];
         });
     });
 }
 
-// Áp model đã nạp lên UI (chạy trên MAIN). Teardown request cũ ở ĐÂY (editor cũ còn nguyên tới
-// lúc này) -> autosave đọc đúng nội dung A, không lưu nhầm editor đã xoá khi chuyển nhanh.
+// Apply the loaded model to the UI (runs on MAIN). Tear down the old request HERE (the old editor is
+// still intact at this point) -> autosave reads A's correct contents, not a cleared editor from a fast switch.
 - (void)applyLoadedModel:(const core::RequestModel &)model rel:(NSString *)rel {
     if (!_engine) return;
     BOOL switching = (_hasRequest && S(rel) != _currentRel);
     if (switching) {
-        [self autosaveCurrent];         // 1. A dirty -> tự lưu (editor A còn nguyên)
-        [self cancelInFlightForSwitch]; // 2. huỷ request đang bay của A
-        // 2b. (CRASH_FIX §2.1) commit + deactivate input context của A TRƯỚC khi xoá Scintilla.
-        // Xoá nội dung khi editor/response còn first responder = tạo input context treo -> crash
-        // trong updateWindows (đặc biệt khi đang gõ IME tiếng Việt rồi chuyển nhanh request).
+        [self autosaveCurrent];         // 1. A dirty -> autosave (editor A still intact)
+        [self cancelInFlightForSwitch]; // 2. cancel A's in-flight request
+        // 2b. (CRASH_FIX §2.1) commit + deactivate A's input context BEFORE clearing Scintilla.
+        // Clearing content while the editor/response is still first responder = dangling input context -> crash
+        // in updateWindows (especially when typing via IME then switching requests quickly).
         OS9SafeEndEditing(_window, _reqText);
         OS9SafeEndEditing(_window, _respText);
-        // 3. giải phóng buffer text của A (editor + response) + undo (§8.3)
+        // 3. free A's text buffers (editor + response) + undo (§8.3)
         [_reqText clearContents];
         [_respText clearContents];
-        // §8.5: thả response của A — view KHÔNG giữ bản thứ hai (body lớn -> RAM về baseline).
+        // §8.5: release A's response — the view does NOT keep a second copy (large body -> RAM back to baseline).
         [_respBuffers removeAllObjects];
         _lastResp = core::ApiResponse{};
         _hasResp = NO;
@@ -64,7 +64,7 @@
     try {
         _model = model;
         _currentRel = rel.UTF8String;
-        _currentId = _model.id;          // theo dõi request đang mở bằng id ổn định
+        _currentId = _model.id;          // track the open request by stable id
         _hasRequest = YES;
         _hasResp = NO;
         [self setRequestType:_model.type];
@@ -75,15 +75,15 @@
         [self relayout];
         [self updateStatus:@""];
         _respText.string = @"";
-        [self showCachedResponseForId:_currentId];   // hiện response gần nhất (nếu có) — không gửi lại
-        // reveal + unfold + highlight node đang mở (dùng id từ tên file, chỉ mở nhánh tổ tiên).
+        [self showCachedResponseForId:_currentId];   // show the most recent response (if any) — no resend
+        // reveal + unfold + highlight the open node (id from filename, only expand ancestor branch).
         [self revealAndSelectRequestById:N(_currentId) relPath:N(_currentRel)];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 
-// Mở request -> tra cache (RAM trước, rồi disk) và dựng lại pane response nếu trúng (§0).
-// §1.3: getResponse có thể đọc đĩa + parse JSON (response lớn) -> chạy NỀN, render trên main.
-// Guard _currentId == reqId lúc hoàn tất để KHÔNG hiển thị response của request đã chuyển đi.
+// On open -> look up cache (RAM first, then disk) and rebuild the response pane on a hit (§0).
+// §1.3: getResponse may read disk + parse JSON (large response) -> run in BACKGROUND, render on main.
+// Guard _currentId == reqId at completion so we DON'T show the response of a request already left.
 - (void)showCachedResponseForId:(const std::string &)reqId {
     if (reqId.empty() || !_engine) return;
     std::string idCopy = reqId;
@@ -91,18 +91,18 @@
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         MainWindowController *s = ws;
         if (!s || !s->_engine) return;
-        auto rec = s->_engine->getResponse(idCopy);    // I/O đĩa NGOÀI main thread
+        auto rec = s->_engine->getResponse(idCopy);    // disk I/O OFF the main thread
         if (!rec) return;
         __block core::ResponseRecord recCopy = std::move(*rec);
         dispatch_async(dispatch_get_main_queue(), ^{
             MainWindowController *s2 = ws;
-            if (!s2 || s2->_currentId != idCopy) return;   // request đã chuyển -> bỏ kết quả cũ
+            if (!s2 || s2->_currentId != idCopy) return;   // request switched -> drop stale result
             if (recCopy.isError) {
                 [s2 displayErrorKind:recCopy.errorKind message:N(recCopy.errorMessage)];
             } else {
                 s2->_lastResp = recCopy.response;
                 s2->_hasResp = YES;
-                [s2 rebuildResponseBuffersAsync];   // format ngoài main -> response cache lớn không freeze (U2)
+                [s2 rebuildResponseBuffersAsync];   // format off main -> large cached response won't freeze UI (U2)
                 [s2 updateStatusFromResponse:recCopy.response error:NO endMs:recCopy.receivedAt];
             }
         });
@@ -114,10 +114,10 @@
     using namespace core;
     if (_model.type == RequestType::Http) {
         HttpRequest &h = _model.http;
-        // Body mặc định JSON: request chưa có body (mode none) -> hiển thị như JSON.
+        // Body defaults to JSON: request has no body yet (mode none) -> show as JSON.
         if (h.body.mode == "none") { h.body = Body{}; h.body.mode = "json"; }
-        // Buffer body = ĐÚNG nội dung muốn gửi (không bọc {"mode","json"}); mode do app giữ.
-        [_reqBuffers addObject:[self bodyBufferFromModel:h.body]];     // 0 = Body (ngoài cùng trái)
+        // Body buffer = EXACTLY the content to send (no {"mode","json"} wrapper); mode held by the app.
+        [_reqBuffers addObject:[self bodyBufferFromModel:h.body]];     // 0 = Body (leftmost)
         [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(h.params))];   // 1
         [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(h.headers))];  // 2
         [_reqBuffers addObject:N(fieldcodec::authToJson(h.auth))];          // 3
@@ -135,16 +135,16 @@
         // reflection -> index 0; protoFiles/descriptorSet -> ".proto" (index 1).
         _protoPopup.selectedIndex = (g.protoSource.mode == "reflection") ? 0 : 1;
         [_protoPopup setNeedsDisplay:YES];
-        [self showSavedGrpcMethodLabel];   // hiện RPC đã lưu (KHÔNG fetch; fetch khi bấm dropdown)
+        [self showSavedGrpcMethodLabel];   // show the saved RPC (do NOT fetch; fetch on dropdown click)
     }
-    // Áp LẠI tab đã nhớ của pane trái (nếu khoá tồn tại trong loại request hiện tại); else tab đầu.
+    // Re-apply the left pane's remembered tab (if the key exists for the current request type); else first tab.
     NSInteger li = [self tabIndexForKey:_leftPaneActiveTabKey inTitles:_reqTabTitles];
     if (li >= (NSInteger)_reqBuffers.count) li = 0;
     _activeReqTab = li;
     _reqText.string = _reqBuffers.count ? _reqBuffers[li] : @"";
     [self highlightActiveTab:_reqTabButtons active:li];}
 
-// Index của tab theo KHOÁ (title) trong bộ titles; không khớp/nil -> 0 (tab đầu của loại đó).
+// Tab index by KEY (title) within the titles set; no-match/nil -> 0 (first tab of that type).
 - (NSInteger)tabIndexForKey:(NSString *)key inTitles:(NSArray<NSString *> *)titles {
     if (key.length) {
         NSInteger idx = [titles indexOfObject:key];
@@ -154,13 +154,13 @@
 }
 
 - (void)stashActiveReqBuffer {
-    // [copy] BẮT BUỘC: NSTextView.string trả tham chiếu tới text storage SỐNG;
-    // không copy -> buffer các tab cùng trỏ 1 chuỗi đang đổi -> giá trị lẫn vào nhau.
+    // [copy] is REQUIRED: NSTextView.string returns a reference to the LIVE text storage;
+    // without copy -> tab buffers all point at one mutating string -> values bleed into each other.
     if (_activeReqTab >= 0 && _activeReqTab < (NSInteger)_reqBuffers.count)
         _reqBuffers[_activeReqTab] = [(_reqText.string ?: @"") copy];
 }
 
-// Trả NO nếu JSON sai (báo toast + chọn tab). silent=YES -> không đổi tab/không toast (autosave).
+// Return NO on bad JSON (toast + select tab). silent=YES -> no tab change/no toast (autosave).
 - (BOOL)syncModelFromEditors:(BOOL)silent {
     [self stashActiveReqBuffer];
     using namespace core;
@@ -191,8 +191,8 @@
     return YES;
 }
 
-// Nếu request đang mở nằm trong danh sách item bị xoá -> ĐÓNG editor để autosave KHÔNG tạo lại file.
-// So khớp theo id ổn định (fallback relPath).
+// If the open request is among the deleted items -> CLOSE the editor so autosave does NOT recreate the file.
+// Match by stable id (fallback relPath).
 - (void)closeEditorIfDeleted:(NSArray<TreeItem *> *)deleted {
     for (TreeItem *t in deleted) {
         BOOL match = (_currentId.size() && t.requestId.length && S(t.requestId) == _currentId) ||
@@ -201,17 +201,17 @@
     }
 }
 
-// Tự lưu mọi thay đổi (không hỏi). JSON sai -> bỏ qua + cảnh báo nhẹ.
+// Autosave all changes (no prompt). Bad JSON -> skip + light warning.
 - (void)autosaveCurrent {
     if (!_hasRequest || !_engine || _currentRel.empty()) return;
-    if (![self resyncCurrentRelById]) return;     // request đã bị xoá/đổi path -> không ghi lại path cũ
+    if (![self resyncCurrentRelById]) return;     // request deleted/path-changed -> don't write back the old path
     if (![self syncModelFromEditors:YES]) { [self toastWarn:StrToastAutosaveFailed]; return; }
-    try { _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // tên file có thể đổi (sync §4)
+    try { _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // filename may change (sync §4)
           _engine->session().saveLastOpened(_currentRel);
-          // §T1: autosave chỉ đụng 1 request -> cập nhật cấp chứa nó, KHÔNG re-scan gốc + reloadData toàn cây.
+          // §T1: autosave touches only 1 request -> update its containing level, do NOT re-scan root + reloadData the whole tree.
           NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];
           [self refreshTreeLevel:parentRel];
-          [self reselectTreeByRel:N(_currentRel)]; }   // giữ highlight (tên file có thể đổi do sync §4)
+          [self reselectTreeByRel:N(_currentRel)]; }   // keep highlight (filename may change due to sync §4)
     catch (...) {}
 }
 
@@ -219,27 +219,27 @@
 
 #pragma mark Body dropdown (json/file/form)
 
-// Tên hiển thị nút Body theo mode hiện tại: "Body (JSON)" / "Body (FILE)" / "Body (FORM)".
+// Body button display name per current mode: "Body (JSON)" / "Body (FILE)" / "Body (FORM)".
 - (NSString *)bodyButtonTitle {
     NSString *m = _bodyMode.length ? _bodyMode : @"json";
     for (NSDictionary *d in BodyModeTable()) if ([d[@"mode"] isEqualToString:m]) return d[@"label"];
-    return StrBodyJson;   // text/xml/none -> JSON (giữ hành vi cũ)
+    return StrBodyJson;   // text/xml/none -> JSON (keep old behavior)
 }
-- (NSInteger)bodyTabIndex { return [_reqTabTitles indexOfObject:StrTabBody]; } // 0 cho HTTP, NSNotFound cho gRPC
+- (NSInteger)bodyTabIndex { return [_reqTabTitles indexOfObject:StrTabBody]; } // 0 for HTTP, NSNotFound for gRPC
 - (void)updateBodyButtonLabel {
     NSInteger bi = [self bodyTabIndex];
     if (bi == NSNotFound || bi >= (NSInteger)_reqTabButtons.count) return;
     _reqTabButtons[bi].title = [self bodyButtonTitle];
 }
-// Template body cho từng mode — KHÔNG bọc key "mode" (app tự giữ mode), nhưng CÓ sẵn
-// các key gợi ý để người dùng biết điền gì.
-//   json -> JSON thô.   form -> 1 entry key/value mẫu.   file -> object có key filePath.
+// Body template per mode — does NOT wrap a "mode" key (the app holds the mode), but DOES include
+// hint keys so the user knows what to fill in.
+//   json -> raw JSON.   form -> 1 sample key/value entry.   file -> object with a filePath key.
 static NSString *const kFormBodyTemplate =
     @"[\n  {\n    \"key\": \"\",\n    \"value\": \"\",\n    \"enabled\": true\n  }\n]";
 static NSString *const kFileBodyTemplate = @"{\n  \"filePath\": \"\"\n}";
 
-// NGUỒN DUY NHẤT cho dropdown Body: mode nội bộ <-> option/label/template.
-// Thêm/bớt định dạng chỉ cần sửa bảng này (trước đây rải rác ở 3 hàm if-else).
+// SINGLE SOURCE for the Body dropdown: internal mode <-> option/label/template.
+// Add/remove a format by editing this table only (previously scattered across 3 if-else functions).
 static NSArray<NSDictionary *> *BodyModeTable(void) {
     static NSArray *t;
     if (!t) t = @[
@@ -251,10 +251,10 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
 }
 - (NSString *)bodyTemplateForMode:(NSString *)mode {
     for (NSDictionary *d in BodyModeTable()) if ([d[@"mode"] isEqualToString:mode]) return d[@"tpl"];
-    return @"{}";                                        // json (mặc định cho text/xml/none)
+    return @"{}";                                        // json (default for text/xml/none)
 }
 
-// Model.Body -> nội dung hiển thị trong editor (đúng cái gửi đi, không bọc).
+// Model.Body -> content shown in the editor (exactly what's sent, unwrapped).
 - (NSString *)bodyBufferFromModel:(const core::Body &)b {
     if (b.mode == "form-urlencoded")
         return b.formUrlEncoded.empty() ? kFormBodyTemplate
@@ -265,10 +265,10 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     }
     if (b.mode == "text") return N(b.text);
     if (b.mode == "xml") return N(b.xml);
-    return N(b.json.empty() ? "{}" : b.json);            // json (mặc định)
+    return N(b.json.empty() ? "{}" : b.json);            // json (default)
 }
 
-// Editor buffer -> Model.Body, parse theo _bodyMode (mode do app định nghĩa, không nằm trong text).
+// Editor buffer -> Model.Body, parsed per _bodyMode (mode defined by the app, not in the text).
 - (BOOL)syncBodyFromBuffer:(NSString *)buf into:(core::Body &)out err:(std::string &)err {
     using namespace core;
     NSString *bm = _bodyMode.length ? _bodyMode : @"json";
@@ -278,7 +278,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         if (!fieldcodec::jsonToKeyValues(S(buf), nb.formUrlEncoded, err)) return NO;
     } else if ([bm isEqualToString:@"binary"]) {
         nb.mode = "binary";
-        // Nhận cả object {"filePath": "..."} lẫn chuỗi path thuần (tương thích cũ).
+        // Accept both an object {"filePath": "..."} and a bare path string (backward compat).
         NSString *t = [buf stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         id obj = t.length ? [NSJSONSerialization JSONObjectWithData:[t dataUsingEncoding:NSUTF8StringEncoding]
                                                             options:0 error:nil] : nil;
@@ -286,14 +286,14 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
             NSString *fp = ((NSDictionary *)obj)[@"filePath"] ?: ((NSDictionary *)obj)[@"path"];
             nb.binaryFilePath = fp.length ? S(fp) : "";
         } else {
-            nb.binaryFilePath = S(t);   // coi cả text là path
+            nb.binaryFilePath = S(t);   // treat the whole text as a path
         }
     } else if ([bm isEqualToString:@"text"]) {
         nb.mode = "text"; nb.text = S(buf);
     } else if ([bm isEqualToString:@"xml"]) {
         nb.mode = "xml"; nb.xml = S(buf);
     } else {
-        nb.mode = "json"; nb.json = S(buf);   // JSON thô người dùng nhập, KHÔNG encode vào key "json"
+        nb.mode = "json"; nb.json = S(buf);   // raw user-entered JSON, NOT encoded into a "json" key
     }
     out = nb;
     return YES;
@@ -317,12 +317,12 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
 - (void)pickBodyMode:(NSString *)mode {
     NSInteger bi = [self bodyTabIndex];
     if (bi == NSNotFound) return;
-    [self stashActiveReqBuffer];                 // lưu nội dung đang gõ vào tab hiện tại
-    if (![_bodyMode isEqualToString:mode])       // đổi mode -> nạp template mới
+    [self stashActiveReqBuffer];                 // save the currently-typed content into the current tab
+    if (![_bodyMode isEqualToString:mode])       // mode changed -> load the new template
         _reqBuffers[bi] = [self bodyTemplateForMode:mode];
     _bodyMode = mode;
     [self updateBodyButtonLabel];
-    _activeReqTab = bi;                          // kích hoạt + hiện body
+    _activeReqTab = bi;                          // activate + show body
     if (bi < (NSInteger)_reqTabTitles.count) _leftPaneActiveTabKey = _reqTabTitles[bi];
     _reqText.string = _reqBuffers[bi];
     [self highlightActiveTab:_reqTabButtons active:bi];}
@@ -334,7 +334,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     if (tab < 0 || tab >= (NSInteger)_reqBuffers.count) return;
     [self stashActiveReqBuffer];
     _activeReqTab = tab;
-    if (tab < (NSInteger)_reqTabTitles.count) _leftPaneActiveTabKey = _reqTabTitles[tab];  // nhớ pane trái
+    if (tab < (NSInteger)_reqTabTitles.count) _leftPaneActiveTabKey = _reqTabTitles[tab];  // remember left pane
     _reqText.string = _reqBuffers[tab];
     [self highlightActiveTab:_reqTabButtons active:tab];}
 
@@ -342,12 +342,12 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     NSInteger tab = b.tag;
     if (tab < 0 || tab >= (NSInteger)_respBuffers.count) return;
     _activeRespTab = tab;
-    if (tab < (NSInteger)_respTabTitles.count) _rightPaneActiveTabKey = _respTabTitles[tab];  // nhớ pane phải
+    if (tab < (NSInteger)_respTabTitles.count) _rightPaneActiveTabKey = _respTabTitles[tab];  // remember right pane
     _respText.string = _respBuffers[tab];
     [self highlightActiveTab:_respTabButtons active:tab];
 }
 - (void)highlightActiveTab:(NSArray<OS9BevelButton *> *)buttons active:(NSInteger)active {
-    // Tab đang chọn vẽ LÕM (selected) thay vì viền đậm (isDefault) — hợp phong cách OS9.
+    // The active tab is drawn SUNKEN (selected) instead of with a bold border (isDefault) — fits the OS9 style.
     for (OS9BevelButton *b in buttons) b.selected = (b.tag == active);
 }
 - (void)prettyToggle:(id)sender {
@@ -356,24 +356,24 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     [self applyPrettyToFocusedPane];
 }
 
-// Áp chế độ hiện tại lên Ô ĐANG CÓ CON TRỎ: editor request (tab đang mở), setting,
-// hoặc (mặc định) pane response. Nút bevel không nhận focus nên firstResponder giữ nguyên.
+// Apply the current mode to the FIELD WITH THE CURSOR: request editor (open tab), setting,
+// or (default) the response pane. Bevel buttons don't take focus, so firstResponder stays put.
 - (void)applyPrettyToFocusedPane {
-    // request editor (Scintilla) đang giữ con trỏ?
+    // request editor (Scintilla) holds the cursor?
     if ([_reqText hasFocus]) {
         _reqText.string = [self applyView:S(_reqText.string)];
         [self stashActiveReqBuffer];
         return;
     }
-    // setting editor (Scintilla) đang giữ con trỏ?
+    // setting editor (Scintilla) holds the cursor?
     if ([_settingEditor hasFocus]) {
         _settingEditor.string = [self applyView:S(_settingEditor.string)];
         return;
     }
-    if (_hasResp) [self rebuildResponseBuffers]; // mặc định: pane response
+    if (_hasResp) [self rebuildResponseBuffers]; // default: response pane
 }
 
-// Copy request hiện tại dạng cURL (HTTP) / grpcurl (gRPC) vào clipboard.
+// Copy the current request as cURL (HTTP) / grpcurl (gRPC) to the clipboard.
 - (void)copyAsCurl:(id)sender {
     if (!_hasRequest || !_engine) return;
     if (![self syncModelFromEditors:NO]) return;
@@ -385,7 +385,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     [self toastOk:StrToastCopiedCurl];
 }
 
-// Zoom toggle thủ công (performZoom đôi khi không thu nhỏ lại được).
+// Manual zoom toggle (performZoom sometimes can't un-zoom).
 - (void)zoomToggle:(id)sender {
     NSScreen *sc = _window.screen ?: [NSScreen mainScreen];
     NSRect vis = sc.visibleFrame;
@@ -397,59 +397,59 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     }
 }
 
-// Minimize: thu cửa sổ vào Dock (genie). Window borderless + Miniaturizable -> miniaturize: chạy.
+// Minimize: shrink the window into the Dock (genie). Borderless + Miniaturizable -> miniaturize: works.
 - (void)collapseToggle:(id)sender { [_window miniaturize:nil]; }
 
-// Đệ quy đánh dấu vẽ lại cả cây view (widget tự vẽ đọc [OS9Theme uiFont] mỗi lần drawRect
-// nên chỉ cần setNeedsDisplay; KHÔNG cache font).
+// Recursively mark the whole view tree for redraw (self-drawing widgets read [OS9Theme uiFont]
+// on every drawRect, so setNeedsDisplay is enough; do NOT cache the font).
 static void OS9MarkTreeNeedsDisplay(NSView *v) {
     [v setNeedsDisplay:YES];
     for (NSView *s in v.subviews) OS9MarkTreeNeedsDisplay(s);
 }
 
-// Áp font cấu hình (từ Settings) cho mọi ô chữ + vẽ lại.
+// Apply the configured font (from Settings) to every text field + redraw.
 - (void)applyConfiguredFontAndRefresh {
     core::AppConfigStore a; a.setDefaults([self appDefaultsFromEnv]); core::AppConfig c = a.load();
     [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize];
     NSFont *mono = [OS9Theme monoFont];
-    // Truyền thẳng tên font người dùng cấu hình cho Scintilla (vd "Monaco 9").
+    // Pass the user-configured font name straight to Scintilla (e.g. "Monaco 9").
     [_reqText setFontName:N(c.fontName) size:c.fontSize];
     [_respText setFontName:N(c.fontName) size:c.fontSize];
     [_settingEditor setFontName:N(c.fontName) size:c.fontSize];
     _urlField.font = mono;
     _tree.font = [OS9Theme uiFont];
-    // NSTextField giữ font đã set -> phải gán lại (widget tự vẽ thì không cần).
+    // NSTextField keeps its set font -> must reassign (self-drawing widgets don't need this).
     _statusLabel.font = [OS9Theme uiFont];
     [_tree reloadData];
     [self restoreExpansion:_roots];
-    OS9MarkTreeNeedsDisplay(_window.contentView);   // title bar, nút, tab, dropdown... vẽ lại
-    if (_envVC.view) [_envVC layout];               // lưới Environments dựng lại theo font mới
+    OS9MarkTreeNeedsDisplay(_window.contentView);   // title bar, buttons, tabs, dropdowns... redraw
+    if (_envVC.view) [_envVC layout];               // Environments grid rebuilt for the new font
 }
 
 #pragma mark Editing
 
-// Dán cURL/grpcurl vào ô URL -> tự nhận biết -> preview -> tạo request mới (CURL_IMPORT.md).
-// Nhận biết "dán/drop" bằng độ dài tăng đột biến (>=8 ký tự một lần) — gõ tay tăng 1/ký tự.
+// Paste cURL/grpcurl into the URL field -> auto-detect -> preview -> create a new request (CURL_IMPORT.md).
+// Detect "paste/drop" by a sudden length jump (>=8 chars at once) — typing grows 1 char at a time.
 - (void)controlTextDidChange:(NSNotification *)note {
     if (note.object != _urlField) return;
     NSString *text = _urlField.stringValue ?: @"";
     NSUInteger len = text.length;
     NSUInteger prev = _urlPrevLen;
     _urlPrevLen = len;
-    if (!_engine || len < prev + 8) return;            // không phải dán -> bỏ qua
+    if (!_engine || len < prev + 8) return;            // not a paste -> ignore
     BOOL isCurl = _engine->looksLikeCurl(text.UTF8String);
     BOOL isGrpc = !isCurl && _engine->looksLikeGrpcurl(text.UTF8String);
     if (!isCurl && !isGrpc) return;
-    // cURL: tự import + tạo request luôn (chỉ toast, KHÔNG popup). grpcurl: vẫn xác nhận popup.
-    // Defer: tránh xử lý NGAY trong callback đổi text (field editor đang bận).
+    // cURL: auto-import + create request immediately (toast only, NO popup). grpcurl: still confirm via popup.
+    // Defer: avoid processing RIGHT inside the text-change callback (the field editor is busy).
     dispatch_async(dispatch_get_main_queue(), ^{
         if (isCurl) [self importNow:text grpc:NO];
         else        [self offerImport:text grpc:YES];
     });
 }
 
-// Import + tạo request ngay, không hỏi; báo kết quả qua toast.
-// §A3: parse curl/grpcurl (có thể lớn) chạy NỀN -> không chặn main; marshal kết quả về main.
+// Import + create request immediately, no prompt; report result via toast.
+// §A3: parse curl/grpcurl (possibly large) in BACKGROUND -> doesn't block main; marshal result to main.
 - (void)importNow:(NSString *)text grpc:(BOOL)isGrpc {
     if (!_engine) return;
     NSString *t = [text copy];
@@ -472,8 +472,8 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     });
 }
 
-// Hiện preview xác nhận; nếu OK -> tạo request mới trong tree + mở editor.
-// §A3: parse chạy NỀN; dialog + applyImport trên main.
+// Show a confirmation preview; if OK -> create a new request in the tree + open the editor.
+// §A3: parse in BACKGROUND; dialog + applyImport on main.
 - (void)offerImport:(NSString *)text grpc:(BOOL)isGrpc {
     if (!_engine) return;
     NSString *t = [text copy];
@@ -501,7 +501,7 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
                                                       icon:OS9AlertNote
                                                     parent:s2->_window];
             if (choice == 1) [s2 applyImport:rb.model];
-            else [s2 restoreUrlField];   // bỏ: trả ô URL về giá trị request đang mở
+            else [s2 restoreUrlField];   // cancel: restore the URL field to the open request's value
         });
     });
 }
@@ -528,7 +528,7 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     return s;
 }
 
-// Tên gợi ý: HTTP "METHOD lastPathSegment"; gRPC = method.
+// Suggested name: HTTP "METHOD lastPathSegment"; gRPC = method.
 - (NSString *)deriveImportName:(const core::RequestModel &)m {
     if (m.type == core::RequestType::Grpc)
         return m.grpc.method.empty() ? StrImportedGrpc : N(m.grpc.method);
@@ -536,17 +536,17 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     NSString *path = url;
     NSRange q = [path rangeOfString:@"?"]; if (q.location != NSNotFound) path = [path substringToIndex:q.location];
     NSString *last = path.lastPathComponent;
-    if (!last.length || [last containsString:@":"]) last = StrDefaultImportName; // chỉ có host
+    if (!last.length || [last containsString:@":"]) last = StrDefaultImportName; // host only
     return [NSString stringWithFormat:@"%s %@", m.http.method.c_str(), last];
 }
 
-// REPLACE request đang mở bằng model import (giữ id/name/file, thay type + payload).
-// Không có request nào đang mở -> tạo mới (fallback).
+// REPLACE the open request with the imported model (keep id/name/file, swap type + payload).
+// No request open -> create new (fallback).
 - (void)applyImport:(const core::RequestModel &)m {
     if (!_hasRequest || _currentRel.empty() || ![self resyncCurrentRelById]) {
-        NSString *name = [self deriveImportName:m];   // fallback: chưa mở request -> tạo mới
+        NSString *name = [self deriveImportName:m];   // fallback: no request open -> create new
         try {
-            std::string folderRel = [self selectedFolderRel];   // §A4: chỉ refresh cấp đích, không reload cả cây
+            std::string folderRel = [self selectedFolderRel];   // §A4: refresh only the target level, don't reload the whole tree
             std::string rel = _engine->collection().createRequestFromModel(folderRel, m, name.UTF8String);
             [self refreshTreeLevel:N(folderRel)];
             [self loadRequestAtRel:N(rel)];
@@ -554,22 +554,22 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
         return;
     }
-    // Replace tại chỗ: giữ id + name của request hiện tại; URL/target hiện giá trị đã parse.
+    // Replace in place: keep the current request's id + name; URL/target show the parsed value.
     core::RequestModel n = m;
     n.id = _model.id;
     n.name = _model.name;
     _model = n;
     _hasResp = NO;
-    [self setRequestType:_model.type];   // rebuild tab theo type mới (http <-> grpc)
+    [self setRequestType:_model.type];   // rebuild tabs for the new type (http <-> grpc)
     [self populateEditorsFromModel];
     [self setHasRequest:YES];
-    _respText.string = @"";              // xoá response cũ
+    _respText.string = @"";              // clear old response
     [self updateTitle];
     [self relayout];
     try {
-        _currentRel = _engine->collection().saveRequest(_currentRel, _model);   // lưu + sync tên file (§4)
+        _currentRel = _engine->collection().saveRequest(_currentRel, _model);   // save + sync filename (§4)
         _engine->session().saveLastOpened(_currentRel);
-        NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];  // §A4: chỉ cấp chứa request
+        NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];  // §A4: only the request's containing level
         [self refreshTreeLevel:parentRel];
         [self reselectTreeByRel:N(_currentRel)];
         [self toastOk:[NSString stringWithFormat:StrFmtToastReplaced,
@@ -577,7 +577,7 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 
-// Trả ô URL về URL/target của request đang mở (tránh lưu nhầm text lệnh).
+// Restore the URL field to the open request's URL/target (avoid saving the command text by mistake).
 - (void)restoreUrlField {
     if (!_hasRequest) { _urlField.stringValue = @""; _urlPrevLen = 0; return; }
     NSString *u = (_model.type == core::RequestType::Grpc) ? N(_model.grpc.target) : N(_model.http.url);
@@ -587,33 +587,33 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 
 - (void)methodChanged:(id)sender { }
 - (void)urlCommitted:(id)sender {
-    // gRPC: ô URL = target -> Enter nạp lại danh sách RPC. HTTP: tách query.
+    // gRPC: URL field = target -> Enter reloads the RPC list. HTTP: split out the query.
     if (_model.type == core::RequestType::Grpc) [self reloadGrpcMethods];
     else [self parseUrlQueryIntoQueryTab];
 }
 
-// Decode 1 thành phần query: '+' -> space, %XX -> byte (khớp Core urlutil::urlDecode).
+// Decode one query component: '+' -> space, %XX -> byte (matches Core urlutil::urlDecode).
 - (NSString *)urlDecodeComponent:(NSString *)s {
     NSString *plus = [s stringByReplacingOccurrencesOfString:@"+" withString:@" "];
     return [plus stringByRemovingPercentEncoding] ?: plus;
 }
 
-// Nếu ô URL có '?...': tách query (decode) -> nối vào tab Query, ô URL còn raw.
-// Dùng khi user tự gõ query vào URL rồi Enter/Send (giống hành vi import cURL).
+// If the URL field has '?...': split the query (decode) -> append to the Query tab, URL keeps raw.
+// Used when the user types a query into the URL then Enter/Send (matches cURL import behavior).
 - (void)parseUrlQueryIntoQueryTab {
     NSInteger qi = [_reqTabTitles indexOfObject:StrTabQuery];
-    if (qi == NSNotFound || qi >= (NSInteger)_reqBuffers.count) return;   // gRPC: không có Query
+    if (qi == NSNotFound || qi >= (NSInteger)_reqBuffers.count) return;   // gRPC: no Query tab
     NSString *u = _urlField.stringValue ?: @"";
     NSRange qr = [u rangeOfString:@"?"];
-    if (qr.location == NSNotFound) return;                                // không có query
+    if (qr.location == NSNotFound) return;                                // no query
     NSString *raw = [u substringToIndex:qr.location];
     NSString *query = [u substringFromIndex:qr.location + 1];
     NSRange hr = [query rangeOfString:@"#"];
     if (hr.location != NSNotFound) query = [query substringToIndex:hr.location];
 
-    [self stashActiveReqBuffer];   // buffer tab Query hiện tại là mới nhất trước khi nối thêm
+    [self stashActiveReqBuffer];   // make the current Query tab buffer up to date before appending
 
-    // Lấy các entry sẵn có trong tab Query (JSON array) rồi nối entry parse được.
+    // Take the existing entries in the Query tab (JSON array) then append the parsed ones.
     NSMutableArray *items = [NSMutableArray array];
     NSData *cur = [(_reqBuffers[qi] ?: @"[]") dataUsingEncoding:NSUTF8StringEncoding];
     id arr = cur ? [NSJSONSerialization JSONObjectWithData:cur options:0 error:nil] : nil;
@@ -625,7 +625,7 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
         NSString *v = (eq.location == NSNotFound) ? @"" : [seg substringFromIndex:eq.location + 1];
         NSString *dk = [self urlDecodeComponent:k];
         NSString *dv = [self urlDecodeComponent:v];
-        // Cùng key đã có trong tab Query -> GHI ĐÈ giá trị mới (không thêm dòng trùng).
+        // Same key already in the Query tab -> OVERWRITE with the new value (no duplicate row).
         NSUInteger hit = NSNotFound;
         for (NSUInteger idx = 0; idx < items.count; idx++) {
             id it = items[idx];
@@ -643,12 +643,12 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     NSData *out = [NSJSONSerialization dataWithJSONObject:items options:NSJSONWritingPrettyPrinted error:nil];
     if (out) _reqBuffers[qi] = [[NSString alloc] initWithData:out encoding:NSUTF8StringEncoding];
 
-    _urlField.stringValue = raw; _urlPrevLen = raw.length;       // ô URL còn raw
-    if (_activeReqTab == qi) _reqText.string = _reqBuffers[qi];   // đang xem tab Query -> refresh
+    _urlField.stringValue = raw; _urlPrevLen = raw.length;       // URL field keeps raw
+    if (_activeReqTab == qi) _reqText.string = _reqBuffers[qi];   // viewing the Query tab -> refresh
 }
 
 - (void)updateTitle {
-    // Title bar theo NGỮ CẢNH: màn config -> "Settings"/"Environments"; còn lại -> tên request.
+    // Title bar is CONTEXTUAL: config screen -> "Settings"/"Environments"; otherwise -> request name.
     if (_configMode) {
         _titleBar.title = (_configKind == 0) ? StrTitleEnvironments : StrTitleSettings;
     } else {
@@ -657,16 +657,16 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     [_titleBar setNeedsDisplay:YES];
 }
 
-#pragma mark Save (thủ công vẫn giữ ⌘S)
+#pragma mark Save (manual ⌘S still kept)
 
 - (void)saveRequest:(id)sender {
     if (!_hasRequest || !_engine) return;
     if (![self resyncCurrentRelById]) { [self toastWarn:StrToastRequestGone]; return; }
     if (![self syncModelFromEditors:NO]) return;
     try {
-        _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // tên file đồng bộ method/name (§4)
+        _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // filename syncs to method/name (§4)
         _engine->session().saveLastOpened(_currentRel);
-        NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];  // §A4: cập nhật tăng dần
+        NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];  // §A4: incremental update
         [self refreshTreeLevel:parentRel];
         [self reselectTreeByRel:N(_currentRel)];
         [self toastOk:StrToastSaved];

@@ -1,10 +1,10 @@
-# Makefile — wrap setup/build/package cho API Client (REST + gRPC) tren macOS.
-# Goi tools qua `mise exec --` de chac chan dung version da pin + co VCPKG_ROOT/env
-# (ke ca khi chua activate mise trong shell). Xem SETUP.md de biet chi tiet.
+# Makefile — wraps setup/build/package for the API Client (REST + gRPC) on macOS.
+# Invokes tools via `mise exec --` to ensure the pinned versions are used + VCPKG_ROOT/env
+# (even when mise is not activated in the shell). See SETUP.md for details.
 
 SHELL := /bin/bash
 
-# --- Cau hinh (override: vd `make build USE_MISE=0`) ---
+# --- Config (override: e.g. `make build USE_MISE=0`) ---
 USE_MISE   ?= 1
 VCPKG_ROOT ?= $(HOME)/vcpkg
 BUILD_DIR  ?= build
@@ -16,8 +16,8 @@ else
   RUN :=
 endif
 
-# --- Bien cho packaging (truyen khi chay `make package`) ---
-# App build ra trong cay con ui/macos_appkit/ (theo CMake target deed).
+# --- Variables for packaging (passed when running `make package`) ---
+# App is built under the ui/macos_appkit/ subtree (per CMake target deed).
 APP_PATH       ?= $(BUILD_DIR)/ui/macos_appkit/deed.app
 DEV_ID_APP     ?=
 NOTARY_PROFILE ?=
@@ -28,107 +28,107 @@ NOTARY_PROFILE ?=
         build build-all app release dist smoke test core-test run-ui run-ui-smoke \
         setup notary-store package clean distclean
 
-help: ## Liet ke cac target
+help: ## List all targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
-doctor: ## Kiem tra cong cu da san sang
-	@echo "xcode  : $$(xcode-select -p 2>/dev/null || echo 'CHUA CAI -> xcode-select --install')"
-	@command -v mise >/dev/null && echo "mise   : $$(mise --version)" || echo "mise   : CHUA CAI"
-	@$(RUN) cmake --version 2>/dev/null | head -1 | sed 's/^/cmake  : /' || echo "cmake  : CHUA CO (make tools)"
-	@$(RUN) ninja --version 2>/dev/null | sed 's/^/ninja  : /' || echo "ninja  : CHUA CO (make tools)"
-	@test -x "$(VCPKG_ROOT)/vcpkg" && echo "vcpkg  : $(VCPKG_ROOT)" || echo "vcpkg  : CHUA BOOTSTRAP -> make bootstrap"
+doctor: ## Check that tools are ready
+	@echo "xcode  : $$(xcode-select -p 2>/dev/null || echo 'NOT INSTALLED -> xcode-select --install')"
+	@command -v mise >/dev/null && echo "mise   : $$(mise --version)" || echo "mise   : NOT INSTALLED"
+	@$(RUN) cmake --version 2>/dev/null | head -1 | sed 's/^/cmake  : /' || echo "cmake  : MISSING (make tools)"
+	@$(RUN) ninja --version 2>/dev/null | sed 's/^/ninja  : /' || echo "ninja  : MISSING (make tools)"
+	@test -x "$(VCPKG_ROOT)/vcpkg" && echo "vcpkg  : $(VCPKG_ROOT)" || echo "vcpkg  : NOT BOOTSTRAPPED -> make bootstrap"
 
-tools: ## mise install (cmake/ninja theo version pin)
+tools: ## mise install (cmake/ninja per pinned versions)
 	mise trust
 	mise install
 
-bootstrap: ## Clone + bootstrap vcpkg vao $(VCPKG_ROOT) neu chua co
+bootstrap: ## Clone + bootstrap vcpkg into $(VCPKG_ROOT) if missing
 	@if [ -x "$(VCPKG_ROOT)/vcpkg" ]; then \
-	  echo "vcpkg da co tai $(VCPKG_ROOT)"; \
+	  echo "vcpkg already present at $(VCPKG_ROOT)"; \
 	else \
 	  git clone https://github.com/microsoft/vcpkg "$(VCPKG_ROOT)"; \
 	  "$(VCPKG_ROOT)/bootstrap-vcpkg.sh" -disableMetrics; \
 	fi
 
-baseline: ## Ghi builtin-baseline vao vcpkg.json (build tai lap)
+baseline: ## Write builtin-baseline into vcpkg.json (reproducible build)
 	$(RUN) "$(VCPKG_ROOT)/vcpkg" x-update-baseline --add-initial-baseline
 
-configure: ## CMake configure Debug (lan dau vcpkg build deps tu nguon)
-	@test -x "$(VCPKG_ROOT)/vcpkg" || { echo "Chua co vcpkg -> make bootstrap"; exit 1; }
+configure: ## CMake configure Debug (first run vcpkg builds deps from source)
+	@test -x "$(VCPKG_ROOT)/vcpkg" || { echo "No vcpkg -> make bootstrap"; exit 1; }
 	$(RUN) cmake --preset default
 
 configure-release: ## CMake configure Release
-	@test -x "$(VCPKG_ROOT)/vcpkg" || { echo "Chua co vcpkg -> make bootstrap"; exit 1; }
+	@test -x "$(VCPKG_ROOT)/vcpkg" || { echo "No vcpkg -> make bootstrap"; exit 1; }
 	$(RUN) cmake --preset release
 
-# build = ra file .app tren macOS (target deed; keo theo core).
-build: configure ## Build ra file app macOS (.app bundle)
+# build = produces the .app on macOS (target deed; pulls in core).
+build: configure ## Build the macOS app (.app bundle)
 	$(RUN) cmake --build $(BUILD_DIR) --target deed
 	@echo "App: $(APP_PATH)"
 
-app: build ## Alias cua `build`
+app: build ## Alias for `build`
 
-release: configure-release ## Build Release (toan bo project)
+release: configure-release ## Build Release (entire project)
 	$(RUN) cmake --build $(BUILD_DIR)
 
-# dist = 1 LENH RA APP DUNG NGAY: build Release (.app) + ky ad-hoc + copy ra dist/deed.app.
-# App link tinh (khong dylib ngoai) nen keo thang vao /Applications la chay. Khong notarize
-# (chi may minh); phan phoi may khac -> dung `make package` (Developer ID + notarize).
-dist: configure-release ## 1 lenh: Release .app da ky -> dist/deed.app (keo vao /Applications)
+# dist = ONE COMMAND TO A USABLE APP: build Release (.app) + ad-hoc sign + copy to dist/deed.app.
+# App is statically linked (no external dylibs) so it runs by dragging into /Applications. No notarization
+# (own machine only); to distribute to other machines -> use `make package` (Developer ID + notarize).
+dist: configure-release ## One command: signed Release .app -> dist/deed.app (drag into /Applications)
 	$(RUN) cmake --build $(BUILD_DIR) --target deed
-	codesign --force --sign - "$(APP_PATH)"          # ky lai ad-hoc (macdeployqtfix co the lam hong chu ky)
+	codesign --force --sign - "$(APP_PATH)"          # re-sign ad-hoc (macdeployqtfix can break the signature)
 	@mkdir -p "$(DIST_DIR)"
 	@rm -rf "$(DIST_DIR)/deed.app"
 	@cp -R "$(APP_PATH)" "$(DIST_DIR)/deed.app"
 	@echo "OK -> $(DIST_DIR)/deed.app (Release, ad-hoc signed, self-contained)."
-	@echo "    Keo $(DIST_DIR)/deed.app vao /Applications de dung."
+	@echo "    Drag $(DIST_DIR)/deed.app into /Applications to use."
 
-build-all: configure ## Build toan bo (core + cli + tests + app)
+build-all: configure ## Build everything (core + cli + tests + app)
 	$(RUN) cmake --build $(BUILD_DIR)
 
-smoke: ## Build + chay smoke test toolchain (cpr/grpc/json link duoc)
+smoke: ## Build + run toolchain smoke test (cpr/grpc/json link)
 	$(RUN) cmake --preset default -DBUILD_SMOKE=ON
 	$(RUN) cmake --build $(BUILD_DIR) --target smoke
 	./$(BUILD_DIR)/tools/smoke/smoke
 
-# test = build NHANH app (incremental, khong configure lai neu da co) roi mo de test UI.
-test: ## Build nhanh app + mo de test (incremental)
+# test = FAST app build (incremental, no re-configure if already present) then open to test the UI.
+test: ## Fast app build + open to test (incremental)
 	@test -f "$(BUILD_DIR)/build.ninja" || $(RUN) cmake --preset default
 	$(RUN) cmake --build $(BUILD_DIR) --target deed
 	open "$(APP_PATH)"
 
-run-ui: test ## Alias cua `test` (build nhanh + mo app)
+run-ui: test ## Alias for `test` (fast build + open app)
 
-core-test: configure ## Build + chay unit test cua Core (ctest)
+core-test: configure ## Build + run Core unit tests (ctest)
 	$(RUN) cmake --build $(BUILD_DIR)
 	$(RUN) ctest --test-dir $(BUILD_DIR) --output-on-failure
 
-# Smoke UI khong can click: mo san COLLECTION roi tu bam Send, in ket qua ra stdout.
-#   make run-ui-smoke COLLECTION=/duong/dan/collection
-run-ui-smoke: build ## Build + chay app headless: mo COLLECTION, tu Send (in [smoke] log)
-	@test -n "$(COLLECTION)" || { echo "Thieu COLLECTION=<duong dan collection>"; exit 1; }
+# Smoke UI with no clicking: opens COLLECTION, auto-presses Send, prints result to stdout.
+#   make run-ui-smoke COLLECTION=/path/to/collection
+run-ui-smoke: build ## Build + run app headless: open COLLECTION, auto Send (prints [smoke] log)
+	@test -n "$(COLLECTION)" || { echo "Missing COLLECTION=<collection path>"; exit 1; }
 	APICLIENT_OPEN="$(COLLECTION)" APICLIENT_SEND=1 \
 	  "$(APP_PATH)/Contents/MacOS/deed"
 
-setup: ## Chay tat ca buoc cai dat lan dau + verify (tuan tu)
+setup: ## Run all first-time install steps + verify (sequential)
 	$(MAKE) tools
 	$(MAKE) bootstrap
 	$(MAKE) core-test
 
-notary-store: ## In huong dan luu notary credential (chay 1 lan)
-	@echo 'Chay (thay thong tin cua ban), credential luu vao Keychain:'
+notary-store: ## Print instructions to store notary credentials (run once)
+	@echo 'Run (substitute your own details), credentials saved to Keychain:'
 	@echo '  xcrun notarytool store-credentials "api-client-notary" \'
 	@echo '    --apple-id you@example.com --team-id TEAMID --password <app-specific-password>'
 
-package: ## .dmg: codesign + notarize + staple (can DEV_ID_APP, NOTARY_PROFILE)
-	@test -n "$(DEV_ID_APP)"     || { echo "Thieu DEV_ID_APP='Developer ID Application: Ten (TEAMID)'"; exit 1; }
-	@test -n "$(NOTARY_PROFILE)" || { echo "Thieu NOTARY_PROFILE (xem: make notary-store)"; exit 1; }
+package: ## .dmg: codesign + notarize + staple (needs DEV_ID_APP, NOTARY_PROFILE)
+	@test -n "$(DEV_ID_APP)"     || { echo "Missing DEV_ID_APP='Developer ID Application: Name (TEAMID)'"; exit 1; }
+	@test -n "$(NOTARY_PROFILE)" || { echo "Missing NOTARY_PROFILE (see: make notary-store)"; exit 1; }
 	APP_PATH="$(APP_PATH)" DEV_ID_APP="$(DEV_ID_APP)" NOTARY_PROFILE="$(NOTARY_PROFILE)" \
 	  DIST_DIR="$(DIST_DIR)" ./scripts/package_macos.sh
 
-clean: ## Xoa build/
+clean: ## Remove build/
 	rm -rf $(BUILD_DIR)
 
-distclean: clean ## Xoa them dist/ vcpkg_installed/ .cache/
+distclean: clean ## Also remove dist/ vcpkg_installed/ .cache/
 	rm -rf $(DIST_DIR) vcpkg_installed .cache

@@ -27,7 +27,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve version tu tag
+      - name: Resolve version from tag
         id: version
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
@@ -57,12 +57,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -d third_party/scintilla ]; then
-            echo "Tai Scintilla 5.5.0..."
+            echo "Downloading Scintilla 5.5.0..."
             curl -fL --retry 3 -o /tmp/scintilla.tgz https://www.scintilla.org/scintilla550.tgz
             tar xzf /tmp/scintilla.tgz -C third_party
           fi
           if [ ! -d third_party/lexilla ]; then
-            echo "Tai Lexilla 5.2.0..."
+            echo "Downloading Lexilla 5.2.0..."
             curl -fL --retry 3 -o /tmp/lexilla.tgz https://www.scintilla.org/lexilla520.tgz
             tar xzf /tmp/lexilla.tgz -C third_party
           fi
@@ -145,7 +145,7 @@ jobs:
           files: ${{ steps.package.outputs.ASSET }}
 
       # Save artifact
-      - name: Upload artifact (chay tay)
+      - name: Upload artifact (manual run)
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:

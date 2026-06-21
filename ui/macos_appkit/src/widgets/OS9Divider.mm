@@ -6,7 +6,7 @@
 - (void)drawRect:(NSRect)dirty {
     [[OS9Theme face] set];
     NSRectFill(self.bounds);
-    // vạch chìm giữa cho dễ thấy chỗ kéo
+    // sunken center line to mark the drag spot
     CGFloat mx = floor(self.bounds.size.width / 2);
     [[OS9Theme shadow] set];
     NSRectFill(NSMakeRect(mx - 1, 2, 1, self.bounds.size.height - 4));

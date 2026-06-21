@@ -1,5 +1,5 @@
-// Throwaway smoke test: chung minh ca 3 thu vien (cpr/libcurl, nlohmann-json, grpc++)
-// configure + link duoc tren may. Xoa file nay khi bat dau code that.
+// Throwaway smoke test: proves all 3 libraries (cpr/libcurl, nlohmann-json, grpc++)
+// configure + link on this machine. Delete this file when real code begins.
 #include <cstdio>
 
 #include <nlohmann/json.hpp>
@@ -8,12 +8,12 @@
 
 int main() {
     nlohmann::json j = {{"toolchain", "ok"}};
-    cpr::Session session;   // ep link cpr/libcurl (khong goi mang)
+    cpr::Session session;   // force-link cpr/libcurl (no network call)
     (void)session;
 
     std::printf("nlohmann/json : %s\n", j.dump().c_str());
     std::printf("cpr/libcurl   : linked\n");
     std::printf("gRPC          : %s\n", grpc::Version().c_str());
-    std::puts("Setup OK - moi thu link duoc.");
+    std::puts("Setup OK - everything links.");
     return 0;
 }

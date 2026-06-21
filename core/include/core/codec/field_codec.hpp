@@ -1,6 +1,6 @@
-// core/field_codec.hpp — round-trip JSON-thô từng field cho editor (UI spec
-// §3). UI hiển thị mỗi tab (Params/Headers/Body/Auth/Metadata/Message) là một ô
-// JSON map thẳng vào field. Đây là port phụ để UI không phải tự parse JSON.
+// core/field_codec.hpp — round-trip raw JSON per field for the editor (UI spec
+// §3). UI shows each tab (Params/Headers/Body/Auth/Metadata/Message) as a JSON
+// box mapping straight to a field. This is a helper port so UI need not parse JSON itself.
 #pragma once
 
 #include <string>
@@ -23,14 +23,13 @@ bool jsonToBody(const std::string &, Body &out, std::string &err);
 std::string authToJson(const Auth &);
 bool jsonToAuth(const std::string &, Auth &out, std::string &err);
 
-// Định dạng JSON: pretty (indent 2) hoặc compact. Không parse được -> trả
-// nguyên văn.
+// Format JSON: pretty (indent 2) or compact. Unparseable -> return verbatim.
 std::string formatJson(const std::string &text, bool pretty);
 
-// Encode: bọc text thành string literal JSON đã escape ("\"...\"").
+// Encode: wrap text into an escaped JSON string literal ("\"...\"").
 std::string jsonEncodeString(const std::string &text);
-// Decode: nếu text là string literal JSON -> trả nội dung bên trong; ngược lại
-// giữ nguyên.
+// Decode: if text is a JSON string literal -> return inner content; otherwise
+// keep as-is.
 std::string jsonDecodeString(const std::string &text);
 
 } // namespace core::fieldcodec

@@ -9,7 +9,7 @@
 
 #include "infra/fs_util.hpp"
 
-// Stub reflection sinh từ third_party/grpc_reflection/reflection.proto (codegen trong CMake).
+// Reflection stub generated from third_party/grpc_reflection/reflection.proto (codegen in CMake).
 #include "reflection.grpc.pb.h"
 #include "reflection.pb.h"
 
@@ -19,9 +19,9 @@ namespace {
 
 namespace refl = grpc::reflection::v1alpha;
 
-// DescriptorDatabase lười, lấy FileDescriptorProto qua gRPC ServerReflection.
-// Giữ 1 bidi-stream sống, cache file đã nhận để DescriptorPool resolve transitive imports.
-// Dùng đơn luồng trong 1 vòng send/list (mỗi vòng 1 instance riêng).
+// Lazy DescriptorDatabase that fetches FileDescriptorProto via gRPC ServerReflection.
+// Keeps one bidi-stream alive, caches received files so DescriptorPool can resolve transitive imports.
+// Single-threaded use within one send/list pass (a fresh instance per pass).
 class ReflectionDescriptorDatabase : public gp::DescriptorDatabase {
 public:
     explicit ReflectionDescriptorDatabase(std::shared_ptr<grpc::Channel> channel)
@@ -61,10 +61,10 @@ public:
     }
 
     bool FindFileContainingExtension(const std::string&, int, gp::FileDescriptorProto*) override {
-        return false; // POC: không hỗ trợ extension.
+        return false; // POC: extensions not supported.
     }
 
-    // Liệt kê full name của mọi service đăng ký trên server.
+    // List the full name of every service registered on the server.
     bool getServices(std::vector<std::string>* out) {
         refl::ServerReflectionRequest req;
         req.set_list_services("*");
@@ -119,7 +119,7 @@ private:
     std::mutex mu_;
 };
 
-// Gom service full_name từ một FileDescriptor (kể cả không có service thì bỏ qua).
+// Collect service full_names from a FileDescriptor (skip if it has none).
 void collectServices(const gp::FileDescriptor* file, std::vector<std::string>& out) {
     if (!file) return;
     for (int i = 0; i < file->service_count(); ++i)
@@ -129,7 +129,7 @@ void collectServices(const gp::FileDescriptor* file, std::vector<std::string>& o
 bool buildFromProtoFiles(const GrpcRequest& g, DescriptorContext& ctx) {
     ctx.sourceTree = std::make_unique<gp::compiler::DiskSourceTree>();
     if (g.protoSource.importPaths.empty()) {
-        ctx.sourceTree->MapPath("", "."); // mặc định cwd
+        ctx.sourceTree->MapPath("", "."); // default to cwd
     }
     for (const auto& ip : g.protoSource.importPaths) ctx.sourceTree->MapPath("", ip);
     ctx.errCollector = std::make_unique<ProtoErrorCollector>();
@@ -182,7 +182,7 @@ bool buildFromReflection(const GrpcRequest& g, DescriptorContext& ctx) {
         ctx.error = db->lastError().empty() ? "reflection: ListServices failed" : db->lastError();
         return false;
     }
-    ctx.reflectionDb = std::move(db); // hạ về base; GetServices đã gọi xong nên không cần kiểu cụ thể nữa
+    ctx.reflectionDb = std::move(db); // downcast to base; GetServices is done so the concrete type is no longer needed
     ctx.reflectionPool = std::make_unique<gp::DescriptorPool>(ctx.reflectionDb.get());
     ctx.activePool = ctx.reflectionPool.get();
     return true;
@@ -226,7 +226,7 @@ std::vector<GrpcMethodInfo> listMethods(const DescriptorContext& ctx) {
     std::vector<GrpcMethodInfo> out;
     if (!ctx.activePool) return out;
     for (const auto& sname : ctx.serviceNames) {
-        // Ẩn chính service reflection của server (mọi version: v1, v1alpha, ...).
+        // Hide the server's own reflection service (any version: v1, v1alpha, ...).
         if (sname.rfind("grpc.reflection.", 0) == 0) continue;
         const gp::ServiceDescriptor* svc = ctx.activePool->FindServiceByName(sname);
         if (!svc) continue;
