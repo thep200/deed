@@ -35,3 +35,13 @@ Supported type of request:
 
 - Search & filter
 - gRPC streaming
+
+# Releases
+
+The asset is `deed-<version>-macos-arm64.zip`.
+
+The app is **ad-hoc signed** (not notarized with a Developer ID), so on first launch
+macOS Gatekeeper blocks it. To open it:
+
+- Right-click the app → **Open** → **Open**, or
+- Remove the quarantine flag: `xattr -dr com.apple.quarantine /Applications/deed.app`

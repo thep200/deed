@@ -1,0 +1,154 @@
+name: Release macOS app
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag or version to build (e.g. v0.0.0 or v0.0.0-dev). If empty, will use the tag that triggered the workflow, or v0.0.0-dev if none.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build & release deed.app (arm64)
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      VCPKG_DEFAULT_TRIPLET: arm64-osx
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version tu tag
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="${{ github.event.inputs.tag }}"
+            [ -z "$TAG" ] && TAG="v0.0.0-dev"
+          fi
+          VERSION="${TAG#v}"
+          echo "TAG=$TAG"          >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION"  >> "$GITHUB_OUTPUT"
+          echo "Building $TAG (version $VERSION)"
+
+      - name: Install ninja
+        run: brew install ninja
+
+      # Scintilla 5.5 + Lexilla 5.2: source vendored
+      - name: Cache Scintilla + Lexilla
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/scintilla
+            third_party/lexilla
+          key: scintilla-550-lexilla-520
+
+      - name: Vendor Scintilla + Lexilla
+        run: |
+          set -euo pipefail
+          if [ ! -d third_party/scintilla ]; then
+            echo "Tai Scintilla 5.5.0..."
+            curl -fL --retry 3 -o /tmp/scintilla.tgz https://www.scintilla.org/scintilla550.tgz
+            tar xzf /tmp/scintilla.tgz -C third_party
+          fi
+          if [ ! -d third_party/lexilla ]; then
+            echo "Tai Lexilla 5.2.0..."
+            curl -fL --retry 3 -o /tmp/lexilla.tgz https://www.scintilla.org/lexilla520.tgz
+            tar xzf /tmp/lexilla.tgz -C third_party
+          fi
+          test -f third_party/scintilla/cocoa/ScintillaCocoa.mm
+          test -f third_party/lexilla/lexers/LexJSON.cxx
+
+      # .env.example for backup
+      - name: Prepare .env
+        env:
+          DEED_ENV: ${{ secrets.DEED_ENV }}
+        run: |
+          if [ -n "${DEED_ENV:-}" ]; then
+            printf '%s' "$DEED_ENV" > .env
+            echo "Using .env from DEED_ENV secret"
+          else
+            cp .env.example .env
+            echo "DEED_ENV not set, using .env.example"
+          fi
+
+      - name: Update Info.plist version
+        run: |
+          PLIST=ui/macos_appkit/resources/Info.plist
+          V="${{ steps.version.outputs.VERSION }}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" "$PLIST"
+
+      # vcpkg
+      - name: Cache vcpkg (clone + bootstrap)
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg
+          key: vcpkg-clone-macos-arm64-v1
+
+      - name: Bootstrap vcpkg
+        run: |
+          set -euo pipefail
+          if [ ! -x "$VCPKG_ROOT/vcpkg" ]; then
+            git clone https://github.com/microsoft/vcpkg "$VCPKG_ROOT"
+            "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+
+      # Binary cache vcpkg
+      - name: Cache vcpkg binary archives
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-archives-macos-arm64-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-archives-macos-arm64-
+
+      - name: Configure (Release)
+        run: cmake --preset release
+
+      - name: Build deed.app
+        run: cmake --build build --target deed
+
+      # Codesign
+      - name: Ad-hoc codesign
+        run: codesign --force --sign - build/ui/macos_appkit/deed.app
+
+      - name: Zip .app bundle
+        id: package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ASSET="dist/deed-${{ steps.version.outputs.VERSION }}-macos-arm64.zip"
+          ditto -c -k --keepParent build/ui/macos_appkit/deed.app "$ASSET"
+          echo "ASSET=$ASSET" >> "$GITHUB_OUTPUT"
+          ls -lh "$ASSET"
+
+      # Release + upload asset
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.TAG }}
+          name: deed ${{ steps.version.outputs.TAG }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: ${{ steps.package.outputs.ASSET }}
+
+      # Save artifact
+      - name: Upload artifact (chay tay)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: deed-${{ steps.version.outputs.VERSION }}-macos-arm64
+          path: ${{ steps.package.outputs.ASSET }}
+          if-no-files-found: error
