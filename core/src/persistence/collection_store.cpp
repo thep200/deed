@@ -311,11 +311,13 @@ std::string CollectionStore::createRequest(const std::string& folderRel, Request
     m.type = type;
     if (type == RequestType::Http) {
         m.http.method = "GET";
-        // 5 common default headers, OFF BY DEFAULT (enabled=false): offered as hints,
-        // user enables each as needed (like how Postman ships headers disabled).
+        // Common default headers offered as hints, OFF BY DEFAULT (enabled=false); the user enables
+        // each as needed (like how Postman ships headers disabled). EXCEPTION: User-Agent="deed" is
+        // enabled so every NEW request identifies itself. This applies to freshly created requests
+        // only — existing requests (loaded via load/save) and imports are never auto-modified.
         m.http.headers.push_back({"Content-Type", "application/json", false});
         m.http.headers.push_back({"Accept", "*/*", false});
-        m.http.headers.push_back({"User-Agent", "deed/0.1", false});
+        m.http.headers.push_back({"User-Agent", "deed", true});
         m.http.headers.push_back({"Accept-Encoding", "gzip, deflate, br", false});
         m.http.headers.push_back({"Connection", "keep-alive", false});
         m.http.body.mode = "none";

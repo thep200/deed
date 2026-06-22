@@ -5,6 +5,8 @@
 #pragma mark Send / Cancel
 
 - (void)sendRequest:(id)sender {
+    // Hot path: do ONLY what's needed to send (no env reads / aliasify / persistence here —
+    // alias substitution is an import-time concern, §9.5). Keep this lean for performance.
     if (!_hasRequest || !_engine || _sending) return;
     [self parseUrlQueryIntoQueryTab];   // user typed query into URL -> split into Query tab before sync
     if (![self syncModelFromEditors:NO]) return;

@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <optional>
@@ -87,8 +88,26 @@ public:
     // Build effective var map (Global <- active env), values plaintext from EnvironmentStore.
     std::map<std::string, std::string> activeVars() const;
 
+    // Same merge as activeVars but preserving ENV DEFINITION ORDER (Global keys first, then the
+    // active env's; a key in both keeps its first position with the active value). Used by
+    // aliasify so that when two keys share a value, the FIRST-defined key wins as the alias.
+    std::vector<std::pair<std::string, std::string>> activeVarsOrdered() const;
+
     // Resolve whole model -> ResolvedRequest (apply env + merge settings precedence + auth).
     ResolvedRequest resolveRequest(const RequestModel& model) const;
+
+    // Distinct {{alias}} references in the model's injectable fields (url, path vars, query,
+    // headers, auth; gRPC target/metadata) that are NOT present in the active env — in first-seen
+    // order. Body is excluded on purpose (JSON/GraphQL legitimately contain braces). Empty ->
+    // every alias resolves. UI uses this to warn + block a send (README §9.5).
+    std::vector<std::string> missingVars(const RequestModel& model) const;
+
+    // Proactively rewrite literal values that match the active env back to {{alias}}: url/target
+    // by longest-prefix, headers/query/auth/metadata by whole-value. Returns the rewritten model;
+    // `applied` (optional) receives the distinct alias keys that were substituted in (sorted).
+    // No match -> fields are left unchanged. Idempotent. Triggered on send + import (README §9.5).
+    RequestModel aliasifyModel(const RequestModel& model,
+                               std::vector<std::string>* applied = nullptr) const;
 
 private:
     struct Impl;

@@ -542,7 +542,9 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 
 // REPLACE the open request with the imported model (keep id/name/file, swap type + payload).
 // No request open -> create new (fallback).
-- (void)applyImport:(const core::RequestModel &)m {
+- (void)applyImport:(const core::RequestModel &)rawModel {
+    // §9.5: proactively rewrite literal values matching the active env back to {{alias}} on import.
+    core::RequestModel m = _engine ? _engine->aliasifyModel(rawModel) : rawModel;
     if (!_hasRequest || _currentRel.empty() || ![self resyncCurrentRelById]) {
         NSString *name = [self deriveImportName:m];   // fallback: no request open -> create new
         try {

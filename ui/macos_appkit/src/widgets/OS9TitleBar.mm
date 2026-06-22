@@ -2,7 +2,7 @@
 // 5 states: Active (default) + Close/Zoom/Collapse pressed + Inactive.
 // Active: close pinned left; right cluster Zoom (left) + Collapse (far right);
 //         pinstripe breaks around the centered bold title.
-// Inactive: flat #D6D6D6 background, NO pinstripe, NO buttons, with folder icon + gray text.
+// Inactive: flat #D6D6D6 background, NO pinstripe, NO buttons, gray centered title only.
 #import "widgets/OS9TitleBar.h"
 #import "theme/OS9Theme.h"
 #import "icons/OS9Glyphs.h"
@@ -17,8 +17,6 @@ static const CGFloat kInsetR   = kEdge + 1 + 2;   // collapse.right from right e
 static const CGFloat kBtnGap   = 6;   // gap between zoom and collapse
 static const CGFloat kGripGap  = 6;   // gap between button and pinstripe band
 static const CGFloat kTitlePad = 8;   // plain gap breaking the pinstripe on each side of the title
-static const CGFloat kFolder   = 16;  // folder icon (Inactive state)
-static const CGFloat kFolderGap = 5;  // gap folder icon ↔ title
 
 // Pressed button. 0=none, 1=close, 2=zoom, 3=collapse.
 typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBHide };
@@ -99,30 +97,20 @@ typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBH
     [OS9Theme drawTitleGripInRect:NSMakeRect(x0, self.bounds.origin.y, x1 - x0, self.bounds.size.height)];
 }
 
-// Inactive: flat background + folder icon (color) + gray title, centered as a group. No buttons.
+// Inactive: flat background + gray title only, centered. No folder icon, no buttons.
 - (void)drawInactive {
     [OS9Theme drawTitleBarInactiveInRect:self.bounds];
 
+    if (!_title.length) return;
     NSDictionary *attrs = [self titleAttrsActive:NO];
-    NSSize sz = _title.length ? [_title sizeWithAttributes:attrs] : NSZeroSize;
-    CGFloat tw = sz.width;
-    // Clamp title width within the frame (leave room for inset + icon).
-    CGFloat avail = self.bounds.size.width - 2 * kInsetL - kFolder - kFolderGap;
-    if (tw > avail) tw = MAX(0, avail);
+    NSSize sz = [_title sizeWithAttributes:attrs];
+    CGFloat avail = self.bounds.size.width - 2 * kInsetL;   // clamp within the frame
+    CGFloat tw = MIN(sz.width, MAX(0, avail));
+    if (tw <= 0) return;
 
-    CGFloat group = kFolder + (tw > 0 ? kFolderGap + tw : 0);
-    CGFloat startX = floor(NSMidX(self.bounds) - group / 2);
-    CGFloat iconY = floor((self.bounds.size.height - kFolder) / 2);
-
-    NSImage *folder = OS9FolderImage(kFolder);
-    [folder drawInRect:NSMakeRect(startX, iconY, kFolder, kFolder)
-              fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1.0];
-
-    if (tw > 0) {
-        NSRect tr = NSMakeRect(startX + kFolder + kFolderGap,
-                               floor((self.bounds.size.height - sz.height) / 2), tw, sz.height);
-        [_title drawInRect:tr withAttributes:attrs];
-    }
+    NSRect tr = NSMakeRect(floor(NSMidX(self.bounds) - tw / 2),
+                           floor((self.bounds.size.height - sz.height) / 2), tw, sz.height);
+    [_title drawInRect:tr withAttributes:attrs];
 }
 
 - (NSRect)hitRectFor:(NSRect)box { return NSInsetRect(box, -kHitPad, -kHitPad); }

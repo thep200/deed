@@ -1,5 +1,6 @@
 // Unit tests for Core — public API only (include/core/). No UI needed.
 // Minimal harness: count pass/fail, return code != 0 on error (CTest reads exit code).
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -7,6 +8,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <vector>
 
 #include "core/cache.hpp"
 #include "core/engine.hpp"
@@ -62,6 +64,58 @@ static void test_variable_resolver() {
 
     auto r4 = VariableResolver::resolve("{{ baseUrl }}", vars);
     CHECK_EQ(r4.text, std::string("http://x"), "trim whitespace inside {{ }}");
+}
+
+// ---------------- VariableResolver: reverse substitution (value -> {{alias}}) ----------------
+static void test_alias_inversion() {
+    std::printf("[alias_inversion]\n");
+    // (key,value) in env definition order. "zfirst" comes BEFORE "afirst" although it sorts later
+    // -> lets us prove the FIRST-defined key (not the lexicographically smallest) wins a tie.
+    std::vector<std::pair<std::string, std::string>> vars{
+        {"baseUrl", "https://api.example.com"},
+        {"token", "secretXYZ"},
+        {"empty", ""},
+        {"zfirst", "shared"},
+        {"afirst", "shared"},
+    };
+    std::string out, key;
+
+    // whole-value exact match -> {{key}}
+    CHECK(VariableResolver::valueToAlias("secretXYZ", vars, out, &key), "whole match found");
+    CHECK_EQ(out, std::string("{{token}}"), "whole -> {{token}}");
+    CHECK_EQ(key, std::string("token"), "whole reports key");
+
+    // no match -> unchanged / false
+    CHECK(!VariableResolver::valueToAlias("not-in-env", vars, out), "whole no match");
+    // empty env value never matches an empty field (avoids aliasing everything)
+    CHECK(!VariableResolver::valueToAlias("", vars, out), "empty field no match");
+
+    // duplicate values -> the FIRST-defined key wins (zfirst before afirst), NOT smallest key.
+    CHECK(VariableResolver::valueToAlias("shared", vars, out, &key), "tie match");
+    CHECK_EQ(key, std::string("zfirst"), "tie -> first-defined key");
+
+    // prefix match (baseUrl pattern), remainder preserved
+    CHECK(VariableResolver::prefixToAlias("https://api.example.com/v1/users", vars, out, &key),
+          "prefix match found");
+    CHECK_EQ(out, std::string("{{baseUrl}}/v1/users"), "prefix -> {{baseUrl}}/rest");
+
+    // prefix exact (whole url == baseUrl) -> just the alias
+    CHECK(VariableResolver::prefixToAlias("https://api.example.com", vars, out),
+          "prefix exact match");
+    CHECK_EQ(out, std::string("{{baseUrl}}"), "prefix exact -> {{baseUrl}}");
+
+    // duplicate prefix values of equal length -> first-defined wins (host1 before host2).
+    std::vector<std::pair<std::string, std::string>> hosts{
+        {"host1", "http://dup.local"}, {"host2", "http://dup.local"}};
+    CHECK(VariableResolver::prefixToAlias("http://dup.local/x", hosts, out, &key), "dup prefix match");
+    CHECK_EQ(key, std::string("host1"), "dup prefix -> first-defined key");
+
+    // already aliased -> idempotent (no match)
+    CHECK(!VariableResolver::prefixToAlias("{{baseUrl}}/v1", vars, out), "no re-alias of {{ }}");
+
+    // short value below the prefix floor must NOT mangle text
+    std::vector<std::pair<std::string, std::string>> shortVars{{"x", "ht"}};
+    CHECK(!VariableResolver::prefixToAlias("http://h", shortVars, out), "short prefix ignored");
 }
 
 // ---------------- Request filename naming (new_format.file.md §2A: id FIRST) ----------------
@@ -167,6 +221,14 @@ static void test_collection_store(const std::string& root) {
     bool hasContentType = false;
     for (const auto& h : m.http.headers) if (h.key == "Content-Type") hasContentType = true;
     CHECK(hasContentType, "has default Content-Type");
+    // New requests auto-identify with an ENABLED User-Agent="deed"; the other hint headers stay off.
+    bool uaOk = false, ctEnabled = false;
+    for (const auto& h : m.http.headers) {
+        if (h.key == "User-Agent") uaOk = (h.value == "deed" && h.enabled);
+        if (h.key == "Content-Type") ctEnabled = h.enabled;
+    }
+    CHECK(uaOk, "User-Agent=deed enabled on new request");
+    CHECK(!ctEnabled, "other hint headers remain disabled");
 
     // edit + save + reload (round-trip). Change method -> filename must change http_get_* -> http_post_*.
     m.http.method = "POST";
@@ -371,6 +433,52 @@ static void test_engine(const std::string& root) {
     auto rr = engine.resolveRequest(m);
     CHECK_EQ(rr.model.http.url, std::string("http://global/u"), "resolveRequest resolves url");
     CHECK_EQ(rr.model.http.settings.timeoutMs, 12345, "timeout from app-global when unset");
+
+    // --- missingVars: flags aliases absent from the active env (Global here) ---
+    RequestModel mm; mm.type = RequestType::Http;
+    mm.http.url = "{{baseUrl}}/{{nope}}";
+    mm.http.headers.push_back({"Authorization", "{{token}}", true});
+    mm.http.headers.push_back({"X-Off", "{{disabledVar}}", false});  // disabled -> ignored
+    auto miss = engine.missingVars(mm);
+    CHECK_EQ(miss.size(), size_t(2), "two missing (nope, token); baseUrl resolves, disabled ignored");
+    CHECK(std::find(miss.begin(), miss.end(), "nope") != miss.end(), "nope reported");
+    CHECK(std::find(miss.begin(), miss.end(), "token") != miss.end(), "token reported");
+    CHECK(std::find(miss.begin(), miss.end(), "baseUrl") == miss.end(), "baseUrl not missing");
+
+    // resolves cleanly once nothing is missing
+    RequestModel ok; ok.type = RequestType::Http; ok.http.url = "{{baseUrl}}/x";
+    CHECK(engine.missingVars(ok).empty(), "no missing when all resolve");
+
+    // --- aliasifyModel: literal values matching the env are rewritten back to {{alias}} ---
+    // env "baseUrl" = http://global (active env is Global at this point).
+    RequestModel a; a.type = RequestType::Http;
+    a.http.url = "http://global/users";                       // prefix -> {{baseUrl}}
+    a.http.headers.push_back({"Host", "http://global", true}); // whole -> {{baseUrl}}
+    a.http.headers.push_back({"X-Lit", "literal", true});      // no match -> unchanged
+    std::vector<std::string> applied;
+    RequestModel ax = engine.aliasifyModel(a, &applied);
+    CHECK_EQ(ax.http.url, std::string("{{baseUrl}}/users"), "url prefix aliasified");
+    CHECK_EQ(ax.http.headers[0].value, std::string("{{baseUrl}}"), "header whole aliasified");
+    CHECK_EQ(ax.http.headers[1].value, std::string("literal"), "non-match left unchanged");
+    CHECK_EQ(applied.size(), size_t(1), "applied = {baseUrl}");
+
+    // idempotent: re-aliasify yields no further change
+    std::vector<std::string> applied2;
+    RequestModel ax2 = engine.aliasifyModel(ax, &applied2);
+    CHECK(applied2.empty(), "aliasify is idempotent");
+    CHECK_EQ(ax2.http.url, std::string("{{baseUrl}}/users"), "url stable on second pass");
+
+    // env definition order decides the alias on duplicate values: "zdup" is defined BEFORE "adup"
+    // (sorts later) -> the first-defined key wins, not the lexicographically smallest.
+    Environment go; go.name = "Global";
+    go.keys.push_back({"zdup", "http://dup.host", true});
+    go.keys.push_back({"adup", "http://dup.host", true});
+    env.save(go);
+    engine.session().setActiveEnv("Global");
+    RequestModel dupReq; dupReq.type = RequestType::Http; dupReq.http.url = "http://dup.host/p";
+    std::vector<std::string> dupApplied;
+    RequestModel dupOut = engine.aliasifyModel(dupReq, &dupApplied);
+    CHECK_EQ(dupOut.http.url, std::string("{{zdup}}/p"), "duplicate value -> first-defined key wins");
 }
 
 // ---------------- ResponseCache (RESPONSE_CACHE.md §10) ----------------
@@ -560,7 +668,11 @@ static void test_importers() {
                         "-d '{\"name\":\"Alice\"}'");
     CHECK(r.ok, "parse curl ok");
     CHECK_EQ(r.model.http.method, std::string("POST"), "method POST");
-    CHECK_EQ(r.model.http.url, std::string("http://api.test/users?q=1"), "url preserved");
+    // Importer splits the query string out of the URL into params (url_util::splitUrlQuery).
+    CHECK_EQ(r.model.http.url, std::string("http://api.test/users"), "url with query stripped");
+    CHECK_EQ(r.model.http.params.size(), size_t(1), "query split into 1 param");
+    CHECK_EQ(r.model.http.params[0].key, std::string("q"), "param key q");
+    CHECK_EQ(r.model.http.params[0].value, std::string("1"), "param value 1");
     CHECK_EQ(r.model.http.body.mode, std::string("json"), "body json from content-type");
     CHECK_EQ(r.model.http.body.json, std::string("{\"name\":\"Alice\"}"), "body content");
     CHECK_EQ(r.model.http.headers.size(), size_t(1), "1 header (Authorization -> Auth)");
@@ -630,6 +742,7 @@ int main() {
     std::printf("Temp root: %s\n", root.c_str());
 
     test_variable_resolver();
+    test_alias_inversion();
     test_field_codec();
     test_curl_export();
     test_request_naming();

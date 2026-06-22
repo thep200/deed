@@ -34,4 +34,36 @@ ResolveResult VariableResolver::resolve(const std::string& tpl,
     return r;
 }
 
+bool VariableResolver::valueToAlias(const std::string& value,
+                                    const std::vector<std::pair<std::string, std::string>>& vars,
+                                    std::string& out, std::string* key) {
+    if (value.empty()) return false;
+    for (const auto& [k, v] : vars) {       // env definition order -> first matching key wins
+        if (!v.empty() && v == value) {
+            out = "{{" + k + "}}";
+            if (key) *key = k;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool VariableResolver::prefixToAlias(const std::string& value,
+                                     const std::vector<std::pair<std::string, std::string>>& vars,
+                                     std::string& out, std::string* key) {
+    if (value.empty()) return false;
+    const std::string* bestKey = nullptr;
+    std::size_t bestLen = 0;
+    for (const auto& [k, v] : vars) {
+        // longest value wins; equal length -> keep the earlier (first-defined) one.
+        if (v.size() < kMinPrefixLen || v.size() <= bestLen) continue;
+        if (value.compare(0, v.size(), v) != 0) continue;
+        bestKey = &k; bestLen = v.size();
+    }
+    if (!bestKey) return false;
+    out = "{{" + *bestKey + "}}" + value.substr(bestLen);
+    if (key) *key = *bestKey;
+    return true;
+}
+
 } // namespace core

@@ -10,6 +10,8 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <set>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -217,6 +219,27 @@ std::map<std::string, std::string> Engine::activeVars() const {
     return vars;
 }
 
+std::vector<std::pair<std::string, std::string>> Engine::activeVarsOrdered() const {
+    std::string active = impl_->session.getActiveEnv();
+    std::vector<std::pair<std::string, std::string>> vars;
+    auto merge = [&](const std::string& name) {
+        try {
+            Environment e = impl_->environments.load(name);
+            for (const auto& k : e.keys) {
+                if (!k.enabled) continue;
+                // Same key in a later env -> override value, keep first position (active wins value).
+                auto it = std::find_if(vars.begin(), vars.end(),
+                                       [&](const auto& p) { return p.first == k.key; });
+                if (it != vars.end()) it->second = k.value;
+                else vars.emplace_back(k.key, k.value);
+            }
+        } catch (...) { /* env does not exist -> skip */ }
+    };
+    merge("Global");                         // base
+    if (!active.empty() && active != "Global") merge(active); // override
+    return vars;
+}
+
 ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
     auto vars = activeVars();
     ResolvedRequest rr;
@@ -255,6 +278,70 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
         resolveKv(g.metadata, vars);
     }
     return rr;
+}
+
+std::vector<std::string> Engine::missingVars(const RequestModel& model) const {
+    auto vars = activeVars();
+    std::vector<std::string> miss;
+    std::set<std::string> seen;
+    auto scan = [&](const std::string& s) {
+        for (auto& m : VariableResolver::resolve(s, vars).missing)
+            if (seen.insert(m).second) miss.push_back(m);
+    };
+    auto scanKv = [&](const std::vector<KeyValue>& kvs) {
+        for (auto& kv : kvs) if (kv.enabled) scan(kv.value);  // disabled lines aren't sent
+    };
+    if (model.type == RequestType::Http) {
+        const auto& h = model.http;
+        scan(h.url);
+        scanKv(h.pathVariables);
+        scanKv(h.params);
+        scanKv(h.headers);
+        scan(h.auth.bearerToken);
+        scan(h.auth.basicUsername);
+        scan(h.auth.basicPassword);
+        scan(h.auth.apikeyValue);
+    } else {
+        const auto& g = model.grpc;
+        scan(g.target);
+        scanKv(g.metadata);
+    }
+    return miss;
+}
+
+RequestModel Engine::aliasifyModel(const RequestModel& model,
+                                   std::vector<std::string>* applied) const {
+    auto vars = activeVarsOrdered();   // ordered -> first-defined key wins on duplicate values
+    RequestModel m = model;
+    std::set<std::string> appliedSet;
+    auto whole = [&](std::string& s) {
+        std::string out, key;
+        if (VariableResolver::valueToAlias(s, vars, out, &key)) { s = out; appliedSet.insert(key); }
+    };
+    auto prefix = [&](std::string& s) {
+        std::string out, key;
+        if (VariableResolver::prefixToAlias(s, vars, out, &key)) { s = out; appliedSet.insert(key); }
+    };
+    auto wholeKv = [&](std::vector<KeyValue>& kvs) {
+        for (auto& kv : kvs) if (kv.enabled) whole(kv.value);
+    };
+    if (m.type == RequestType::Http) {
+        auto& h = m.http;
+        prefix(h.url);              // url: baseUrl-style prefix
+        wholeKv(h.pathVariables);
+        wholeKv(h.params);          // query
+        wholeKv(h.headers);         // header
+        whole(h.auth.bearerToken);  // auth (fields hold the bare secret -> exact match)
+        whole(h.auth.basicUsername);
+        whole(h.auth.basicPassword);
+        whole(h.auth.apikeyValue);
+    } else {
+        auto& g = m.grpc;
+        prefix(g.target);
+        wholeKv(g.metadata);
+    }
+    if (applied) applied->assign(appliedSet.begin(), appliedSet.end());
+    return m;
 }
 
 std::vector<GrpcMethodInfo> Engine::listGrpcMethods(const GrpcRequest& grpc,
