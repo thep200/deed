@@ -71,6 +71,12 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     std::string _currentId;   // id of open request (stable identifier)
     uint64_t _currentHandle;
     BOOL _hasRequest;
+
+    // streaming (SPEC_grpc_streaming §7/§10)
+    BOOL _streaming;                       // a server-stream is in flight (Stop replaces Send)
+    core::StreamHandle _streamHandle;      // handle to cancel the active stream
+    NSMutableString *_streamAccum;         // assembled "[ … ]" array, cached on close
+    uint64_t _streamEvents;                // events received so far (status line)
     std::vector<core::GrpcMethodInfo> _grpcMethods; // parallel to _servicePopup items
     uint64_t _grpcMethodsReqSeq;  // race guard: apply only the latest listGrpcMethods result
     uint64_t _loadReqSeq;         // token: apply only the LATEST loadRequestAtRel model (async load)
@@ -257,6 +263,10 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)cancelClicked:(id)sender;
 - (void)onCoreResponse:(uint64_t)handle response:(const core::ApiResponse &)resp;
 - (void)onCoreError:(uint64_t)handle error:(const core::ApiError &)err;
+- (void)onStreamOpenTransport:(int)transport;
+- (void)onStreamChunk:(NSString *)chunk events:(uint64_t)totalEvents;
+- (void)onStreamClose:(core::StreamStatus)status code:(int)code message:(NSString *)message
+               events:(uint64_t)events elapsedMs:(long long)elapsedMs truncated:(BOOL)truncated;
 - (void)displayErrorKind:(core::ErrorKind)kind message:(NSString *)msg;
 - (void)cacheResponseAsync:(const core::ApiResponse &)resp forId:(const std::string &)reqId;
 - (void)cacheErrorAsync:(const core::ApiError &)err forId:(const std::string &)reqId;

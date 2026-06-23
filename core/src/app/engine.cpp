@@ -105,6 +105,7 @@ struct Engine::Impl {
     explicit Impl(EngineConfig cfg)
         : collectionRoot(std::move(cfg.collectionRoot)),
           cacheLimits(cfg.cacheLimits),
+          streamLimits(cfg.streamLimits),
           collection(collectionRoot),
           session(collectionRoot),
           environments(collectionRoot),
@@ -131,6 +132,7 @@ struct Engine::Impl {
 
     std::string collectionRoot;
     CacheLimits cacheLimits;                  // cache ceiling/floor from .env (via EngineConfig)
+    StreamLimits streamLimits;                // stream ceilings from .env (via EngineConfig)
     CollectionStore collection;
     SessionStore session;
     EnvironmentStore environments;
@@ -164,6 +166,15 @@ struct Engine::Impl {
         std::map<RequestHandle, std::shared_ptr<CancelToken>> map;
     };
     std::shared_ptr<InflightReg> inflight = std::make_shared<InflightReg>();
+
+    // Stream registry (SPEC_grpc_streaming §4/§7): streamId -> CancelToken, for cancel + lifecycle.
+    // Same shared_ptr discipline as inflight (worker keeps its own reference; never derefs impl_).
+    struct StreamReg {
+        std::mutex mu;
+        std::map<std::string, std::shared_ptr<CancelToken>> map;
+    };
+    std::shared_ptr<StreamReg> streams = std::make_shared<StreamReg>();
+    std::atomic<std::uint64_t> nextStreamId{1};
 
     // pool DECLARED LAST -> destructor runs FIRST (reverse order): join all workers
     // before registry/inflight are destroyed, ensuring senders stay alive throughout sending.
@@ -406,6 +417,81 @@ void Engine::cancel(RequestHandle handle) {
     std::lock_guard<std::mutex> lk(inflight->mu);
     auto it = inflight->map.find(handle);
     if (it != inflight->map.end()) it->second->cancel();
+}
+
+// --- Server-streaming (SPEC_grpc_streaming §4) ---
+
+InteractionKind Engine::interactionOf(const RequestModel& model) const {
+    // gRPC: derived from the method descriptor's type (set when the RPC was picked — §4, no round-trip).
+    if (model.type == RequestType::Grpc) {
+        if (model.grpc.methodType == "server_streaming") return InteractionKind::ServerStream;
+        if (model.grpc.methodType == "client_streaming") return InteractionKind::ClientStream;
+        if (model.grpc.methodType == "bidi_streaming") return InteractionKind::BiDi;
+    }
+    // Routing: ServerStream + BiDi produce a STREAM of responses -> openStream()/IStreamSink. ClientStream
+    // yields ONE response -> unary send() path. The UI/CLI route accordingly.
+    return InteractionKind::Unary;
+}
+
+StreamHandle Engine::openStream(const RequestModel& model, IStreamSink* sink) {
+    StreamHandle h;
+    if (!sink) return h;
+    h.streamId = "stream-" + std::to_string(impl_->nextStreamId.fetch_add(1));
+    auto cancel = std::make_shared<CancelToken>();
+    auto streams = impl_->streams;  // shared_ptr — worker keeps its own reference
+    {
+        std::lock_guard<std::mutex> lk(streams->mu);
+        streams->map[h.streamId] = cancel;
+    }
+
+    // Resolve + look up sender NOW on the calling thread (Engine still alive) — same discipline as send().
+    IRequestSender* sender = impl_->registry.get(model.type);
+    std::shared_ptr<ResolvedRequest> rr;
+    std::shared_ptr<std::string> immediateError;
+    if (!sender) {
+        immediateError = std::make_shared<std::string>("no sender for this request type");
+    } else {
+        try {
+            rr = std::make_shared<ResolvedRequest>(resolveRequest(model));
+            rr->streamId = h.streamId;   // sender stamps StreamMeta with this
+            rr->streamMaxEvents = impl_->streamLimits.maxEvents;   // §9 ceilings from .env (0 -> sender default)
+            rr->streamMaxBytes = impl_->streamLimits.maxBytes;
+        } catch (const std::exception& e) {
+            immediateError = std::make_shared<std::string>(e.what());
+        }
+    }
+
+    const std::string sid = h.streamId;
+    impl_->pool.submit([sid, sink, cancel, streams, sender, rr, immediateError]() {
+        try {
+            if (immediateError) {
+                // Honor the §3 contract even on a setup failure: open then close(Error).
+                sink->onStreamOpen(StreamMeta{sid, StreamTransport::Grpc, {}, 0});
+                StreamEnd end;
+                end.status = StreamStatus::Error;
+                end.statusMessage = *immediateError;
+                sink->onStreamClose(end);
+            } else {
+                sender->openStream(*rr, *sink, cancel);
+            }
+        } catch (const std::exception& e) {
+            StreamEnd end;
+            end.status = StreamStatus::Error;
+            end.statusMessage = e.what();
+            sink->onStreamClose(end);   // sender already emitted onStreamOpen before any throw
+        }
+        std::lock_guard<std::mutex> lk(streams->mu);
+        streams->map.erase(sid);
+    });
+    return h;
+}
+
+void Engine::cancelStream(const StreamHandle& h) {
+    if (h.streamId.empty()) return;
+    auto streams = impl_->streams;
+    std::lock_guard<std::mutex> lk(streams->mu);
+    auto it = streams->map.find(h.streamId);
+    if (it != streams->map.end()) it->second->cancel();   // hook + flag -> sender stops its Read loop
 }
 
 // --- Response cache ---

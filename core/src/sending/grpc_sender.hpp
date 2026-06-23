@@ -11,6 +11,11 @@ class GrpcSender : public IRequestSender {
 public:
     void send(const ResolvedRequest& req, RequestHandle handle, IUiDelegate& delegate,
               const std::shared_ptr<CancelToken>& cancel) override;
+
+    // SPEC_grpc_streaming §5/§6: server-streaming over the generic stub + CompletionQueue.
+    bool isStreaming(const ResolvedRequest& req) const override;
+    void openStream(const ResolvedRequest& req, IStreamSink& sink,
+                    const std::shared_ptr<CancelToken>& cancel) override;
 };
 
 } // namespace core

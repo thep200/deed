@@ -18,6 +18,8 @@
     JsonEditorBehavior *_behavior; // JSON editing behavior; nil for read-only fields
     NSString *_fontFace;  // Scintilla font family (default = OS9Theme configured font, fallback Monaco)
     CGFloat _fontPt;      // Scintilla font size
+    BOOL _streaming;      // streaming-write mode (SPEC_grpc_streaming §7)
+    BOOL _followTail;     // auto-scroll to the end as chunks arrive (paused if the user scrolls up)
 }
 
 - (instancetype)initEditable:(BOOL)editable {
@@ -153,6 +155,48 @@
     [self msg:SCI_EMPTYUNDOBUFFER w:0 l:0];        // clear undo -> free the old content copy
     [self msg:SCI_SETSCROLLWIDTH w:1 l:0];
     _programmatic = NO;
+}
+
+#pragma mark Streaming render (SPEC_grpc_streaming §7)
+
+// Is the last document line currently on screen? (decides whether to keep following the tail)
+- (BOOL)isTailVisible {
+    sptr_t first = [self q:SCI_GETFIRSTVISIBLELINE w:0 l:0];
+    sptr_t onScreen = [self q:SCI_LINESONSCREEN w:0 l:0];
+    sptr_t total = [self q:SCI_GETLINECOUNT w:0 l:0];
+    return (first + onScreen) >= (total - 1);
+}
+
+- (void)scrollToEnd {
+    sptr_t len = [self q:SCI_GETLENGTH w:0 l:0];
+    [self msg:SCI_GOTOPOS w:(uptr_t)len l:0];
+    [self msg:SCI_SCROLLCARET w:0 l:0];
+}
+
+- (void)beginStreaming {
+    _streaming = YES;
+    _followTail = YES;
+    [self clearContents];   // resets text + undo + read-only to the configured state
+}
+
+- (void)appendStreamChunk:(NSString *)chunk {
+    if (!chunk.length) return;
+    const char *utf8 = chunk.UTF8String;
+    size_t len = strlen(utf8);
+    // Decide follow BEFORE the append: if the user scrolled up, stop auto-scrolling (log-viewer behavior).
+    if (_followTail && ![self isTailVisible]) _followTail = NO;
+    _programmatic = YES;
+    [self msg:SCI_SETREADONLY w:0 l:0];                       // read-only blocks APPENDTEXT -> unlock
+    [self msg:SCI_APPENDTEXT w:(uptr_t)len l:(sptr_t)utf8];
+    [self msg:SCI_SETREADONLY w:(_editable ? 0 : 1) l:0];     // re-lock
+    _programmatic = NO;
+    if (_followTail) [self scrollToEnd];
+}
+
+- (void)endStreamingValid:(BOOL)fold {
+    _streaming = NO;
+    [self msg:SCI_SETSCROLLWIDTH w:1 l:0];   // recompute horizontal extent for the final text
+    if (fold) [self msg:SCI_GOTOPOS w:0 l:0];
 }
 
 - (void)setEditable:(BOOL)editable {

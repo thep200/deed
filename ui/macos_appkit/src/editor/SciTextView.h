@@ -13,6 +13,14 @@
 // Free the text + undo buffers (LAZY_TREE §8.3): clear text then empty the undo buffer.
 // Call when switching/closing a request so old content isn't kept in RAM.
 - (void)clearContents;
+
+// --- Streaming render (SPEC_grpc_streaming §7) ---
+// beginStreaming: clear + enter streaming-write mode (follow-tail on). appendStreamChunk: programmatic
+// append (toggles read-only off/on around the write), auto-scrolls if the caret was following the tail.
+// endStreamingValid: leave streaming mode; fold=YES may fold/validate the now-complete JSON array.
+- (void)beginStreaming;
+- (void)appendStreamChunk:(NSString *)chunk;
+- (void)endStreamingValid:(BOOL)fold;
 // Safe teardown (CRASH_FIX_LIFECYCLE §2.2): resign input context + detach the Scintilla delegate
 // (unsafe_unretained) before destruction -> don't send notifications to a dead object. Idempotent;
 // also called automatically in dealloc.

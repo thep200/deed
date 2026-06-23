@@ -37,9 +37,12 @@
     cfg.cacheLimits.diskMaxMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MAX" def:0];
     cfg.cacheLimits.diskMinMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MIN" def:0];
     cfg.cacheLimits.thresholdKb = (int)[dc intFor:@"RAM_CACHE_THRESHOLD_KB" def:0];
+    // Stream ceilings from .env (SPEC_grpc_streaming §9; 0 -> sender default). MiB -> bytes for max bytes.
+    cfg.streamLimits.maxEvents = (uint64_t)[dc intFor:@"STREAM_MAX_EVENTS" def:0];
+    cfg.streamLimits.maxBytes = (uint64_t)[dc intFor:@"STREAM_MAX_BYTES_MB" def:0] * 1024ull * 1024ull;
     cfg.appDefaults = [self appDefaultsFromEnv];   // app-config defaults from .env
     _engine = std::make_unique<core::Engine>(cfg);
-    _bridge = std::make_unique<UiDelegateBridge>(self);
+    _bridge = std::make_unique<UiDelegateBridge>(self, (int)[dc intFor:@"STREAM_COALESCE_MS" def:50]);
     _envVC = [[EnvWindowController alloc] initWithEngine:_engine.get()];
     // Remember this folder in app-support so it reopens next time.
     try { core::AppConfig ac = _engine->appConfig().load(); ac.lastCollectionRoot = _root;

@@ -20,6 +20,9 @@ namespace core {
 
 class SenderRegistry; // fwd (internal)
 
+// Opaque handle to track/cancel an in-flight stream (SPEC_grpc_streaming §4). Empty -> no stream.
+struct StreamHandle { std::string streamId; };
+
 // Cache ceiling/floor at ENV layer (ops-level). 0 = "unset" -> Core falls back to getenv/default.
 // UI loads from .env file (DeedConfig) then passes in; Core does not read .env itself (stays pure C++).
 struct CacheLimits {
@@ -30,12 +33,19 @@ struct CacheLimits {
     int thresholdKb = 0;
 };
 
+// Streaming ceilings from .env (SPEC_grpc_streaming §9). 0 = unset -> sender falls back to its default.
+struct StreamLimits {
+    std::uint64_t maxEvents = 0;   // truncate after this many events
+    std::uint64_t maxBytes = 0;    // truncate after this many accumulated bytes
+};
+
 // Engine init config: collection dir + (optional) app-config path.
 struct EngineConfig {
     std::string collectionRoot;
     std::string appConfigPath; // empty -> use OS app-support default
     CacheLimits cacheLimits;   // cache ceiling/floor from .env (empty -> getenv/default)
     AppConfig appDefaults;     // app-config default values from .env (when config.json misses a key)
+    StreamLimits streamLimits; // stream ceilings from .env (empty -> sender default)
 };
 
 class Engine {
@@ -56,6 +66,18 @@ public:
     // --- Send (async, returns handle immediately) ---
     RequestHandle send(const RequestModel& model, IUiDelegate* delegate);
     void cancel(RequestHandle);
+
+    // --- Server-streaming (SPEC_grpc_streaming §4) ---
+    // UI chooses the path: interactionOf(model)==ServerStream ? openStream() : send().
+    // For gRPC this is derived from the method descriptor loaded when the RPC was picked (no round-trip).
+    InteractionKind interactionOf(const RequestModel& model) const;
+
+    // Open a stream; `sink` receives callbacks on a background thread (sink marshals to its UI thread).
+    // Returns an opaque handle to cancel. Empty streamId means the stream was not started.
+    StreamHandle openStream(const RequestModel& model, IStreamSink* sink);
+
+    // Cancel a running stream (idempotent; unknown/empty handle -> no-op).
+    void cancelStream(const StreamHandle& h);
 
     // --- Response cache (RESPONSE_CACHE.md). No-op when cache off (cacheResponses=false). ---
     // Store latest response/error for request id (overwrites old). resolvedRequestDump lives in resp.

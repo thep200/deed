@@ -10,18 +10,33 @@
     if (!_hasRequest || !_engine || _sending) return;
     [self parseUrlQueryIntoQueryTab];   // user typed query into URL -> split into Query tab before sync
     if (![self syncModelFromEditors:NO]) return;
-    if (_model.type == core::RequestType::Grpc && _model.grpc.methodType != "unary") {
-        [self toastWarn:StrToastUnaryOnly]; return;
-    }
+
+    // Route by interaction kind (SPEC_grpc_streaming §4). Methods that STREAM responses (server-streaming
+    // + bidi) -> openStream(); unary and client-streaming (one response) -> send().
+    core::InteractionKind kind = _engine->interactionOf(_model);
+    BOOL streamsResponses = (kind == core::InteractionKind::ServerStream ||
+                             kind == core::InteractionKind::BiDi);
+
     _sending = YES;
     [self startSendSpinner];           // spinning loading icon in place of the label
     _cancelButton.enabledState = YES;
     [self relayout];
     [self updateStatus:@""];
-    _currentHandle = _engine->send(_model, _bridge.get());
+
+    if (streamsResponses) {
+        _streaming = YES;
+        _streamHandle = _engine->openStream(_model, _bridge.get());
+    } else {
+        _streaming = NO;
+        _currentHandle = _engine->send(_model, _bridge.get());
+    }
 }
 
-- (void)cancelClicked:(id)sender { if (_sending && _engine) _engine->cancel(_currentHandle); }
+- (void)cancelClicked:(id)sender {
+    if (!_sending || !_engine) return;
+    if (_streaming) _engine->cancelStream(_streamHandle);   // Stop -> ctx.TryCancel via CancelToken (§6)
+    else _engine->cancel(_currentHandle);
+}
 
 - (void)onCoreResponse:(uint64_t)handle response:(const core::ApiResponse &)resp {
     if (handle != _currentHandle) return;
@@ -41,6 +56,83 @@
     [self displayErrorKind:err.kind message:N(err.message)];
     [self toastWarn:[NSString stringWithFormat:@"%@: %@", N(core::toString(err.kind)), N(err.message)]];
     [self cacheErrorAsync:err forId:_currentId];       // cache errors too, to restore the exact state (§7)
+}
+
+#pragma mark Streaming (SPEC_grpc_streaming §7)
+
+// '[' — reset the response pane into streaming-write mode. (transport arg is display/telemetry only — INV-1)
+- (void)onStreamOpenTransport:(int)transport {
+    (void)transport;
+    _hasResp = NO;
+    _streamEvents = 0;
+    _streamAccum = [NSMutableString stringWithString:@"["];
+    // Show the streaming text in the body tab (tab 0) and select it.
+    _activeRespTab = 0;
+    [self highlightActiveTab:_respTabButtons active:0];
+    [_respText beginStreaming];
+    [_respText appendStreamChunk:@"["];
+    _statusLabel.stringValue = StrStatusStreaming;
+    _statusLabel.textColor = [NSColor blackColor];
+}
+
+// Coalesced append (already comma-joined per Appendix A). Update the live counter.
+- (void)onStreamChunk:(NSString *)chunk events:(uint64_t)totalEvents {
+    if (!_streaming || !chunk.length) return;
+    [_respText appendStreamChunk:chunk];
+    [_streamAccum appendString:chunk];
+    _streamEvents = totalEvents;
+    _statusLabel.stringValue = [NSString stringWithFormat:@"%@ %llu", StrStatusStreaming,
+                                                          (unsigned long long)totalEvents];
+}
+
+// ']' + finalize status; swap the live text for the normal formatted buffers; cache the array (§8).
+- (void)onStreamClose:(core::StreamStatus)status code:(int)code message:(NSString *)message
+               events:(uint64_t)events elapsedMs:(long long)elapsedMs truncated:(BOOL)truncated {
+    NSString *tail = (events == 0) ? @"]" : @"\n]";   // empty stream -> "[]" (valid)
+    [_respText appendStreamChunk:tail];
+    [_streamAccum appendString:tail];
+    [_respText endStreamingValid:YES];
+
+    _streaming = NO;
+    [self finishSending];
+
+    // Build a neutral ApiResponse from the assembled array so the normal tab/cache pipeline takes over.
+    core::ApiResponse resp;
+    resp.statusCode = 0;
+    resp.statusText = "OK";
+    resp.body = std::string(_streamAccum.UTF8String);
+    resp.elapsedMs = (long)elapsedMs;
+    resp.sizeBytes = (std::int64_t)_streamAccum.length;
+    resp.wasStreamed = true;
+    resp.eventCount = events;
+    resp.partial = (status != core::StreamStatus::Ok);
+
+    _lastResp = resp;
+    _hasResp = YES;
+    [self rebuildResponseBuffers];   // reformat the captured array into the body/Request tabs
+
+    // Status line: Ok · N events · ms  /  Cancelled  /  Error <code> <msg>  (+ "(truncated)").
+    NSString *line;
+    NSColor *color;
+    NSString *trunc = truncated ? @" (truncated)" : @"";
+    if (status == core::StreamStatus::Ok) {
+        line = [NSString stringWithFormat:@"OK%@ · %llu events · %lldms", trunc,
+                                          (unsigned long long)events, elapsedMs];
+        color = [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1.0];
+    } else if (status == core::StreamStatus::Cancelled) {
+        line = [NSString stringWithFormat:@"%@ · %llu events", StrStatusCancelled,
+                                          (unsigned long long)events];
+        color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
+    } else {
+        NSString *kind = (status == core::StreamStatus::Timeout) ? @"Timeout" : @"Error";
+        line = [NSString stringWithFormat:@"%@ %d %@", kind, code, message ?: @""];
+        color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
+    }
+    _statusLabel.stringValue = line;
+    _statusLabel.textColor = color;
+
+    // Cache the assembled array (partial flagged for cancel/error) — keyed by request id (§8).
+    [self cacheResponseAsync:resp forId:_currentId];
 }
 
 // Display the error state in the response pane (shared by new errors and cached errors).

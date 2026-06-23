@@ -39,6 +39,28 @@ public:
         std::cout << "--- ERROR [" << toString(e.kind) << "] ---\n" << e.message << "\n";
         done(false);
     }
+
+    // --- Streaming (SPEC_grpc_streaming §3). The CLI prints the array form directly. ---
+    void onStreamOpen(const StreamMeta&) override {
+        std::lock_guard<std::mutex> lk(m_);
+        std::cout << "--- STREAM ---\n[";
+    }
+    void onStreamEvent(const StreamEvent& ev) override {
+        std::lock_guard<std::mutex> lk(m_);
+        std::cout << (ev.seq == 0 ? "\n  " : ",\n  ") << ev.payload;
+    }
+    void onStreamClose(const StreamEnd& end) override {
+        std::lock_guard<std::mutex> lk(m_);
+        const char* st = end.status == StreamStatus::Ok ? "Ok"
+                       : end.status == StreamStatus::Cancelled ? "Cancelled"
+                       : end.status == StreamStatus::Timeout ? "Timeout" : "Error";
+        std::cout << "\n]\n--- stream " << st << " code=" << end.statusCode
+                  << (end.statusMessage.empty() ? "" : (" msg=" + end.statusMessage)) << ", "
+                  << end.totalEvents << " events, " << end.elapsedMs << "ms"
+                  << (end.truncated ? " (truncated)" : "") << " ---\n";
+        done(end.status == StreamStatus::Ok);
+    }
+
     bool wait() {
         std::unique_lock<std::mutex> lk(m_);
         cv_.wait(lk, [this] { return finished_; });
@@ -99,12 +121,28 @@ int main(int argc, char** argv) {
             RequestModel m = engine.collection().loadRequest(argv[3]);
             std::cout << "Sending: " << m.name << " (" << toString(m.type) << ")\n";
             CliDelegate del;
-            engine.send(m, &del);
+            // Same routing the UI uses: methods that stream responses (server-streaming + bidi) ->
+            // openStream; unary + client-streaming (one response) -> send (§4).
+            InteractionKind kind = engine.interactionOf(m);
+            if (kind == InteractionKind::ServerStream || kind == InteractionKind::BiDi)
+                engine.openStream(m, &del);
+            else
+                engine.send(m, &del);
             return del.wait() ? 0 : 1;
         }
         if (cmd == "resolve" && argc >= 4) {
             Engine engine(EngineConfig{argv[2], ""});
             std::cout << engine.resolvePreview(joinArgs(argc, argv, 3)) << "\n";
+            return 0;
+        }
+        if (cmd == "grpc-list" && argc >= 3) {   // grpc-list <host:port> — reflection method dump
+            Engine engine(EngineConfig{".", ""});
+            GrpcRequest g; g.target = argv[2]; g.protoSource.mode = "reflection";
+            std::string err;
+            auto methods = engine.listGrpcMethods(g, err);
+            if (!err.empty()) { std::cerr << "reflection error: " << err << "\n"; return 1; }
+            for (const auto& m : methods)
+                std::cout << m.service << "/" << m.method << "  [" << m.methodType << "]\n";
             return 0;
         }
         if (cmd == "validate" && argc >= 3) {

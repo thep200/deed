@@ -117,6 +117,43 @@ struct GrpcRequest {
     GrpcSettings settings;
 };
 
+// ---- Streaming (SPEC_grpc_streaming) — transport-neutral stream DTOs ----
+// The UI only ever sees these; senders (gRPC/SSE/WS) converge on them (INV-1).
+enum class StreamTransport { Grpc, Sse, WebSocket };
+enum class StreamPayloadKind { Json, Text, Binary };   // Binary -> payload is base64
+enum class StreamStatus { Ok, Error, Cancelled, Timeout };
+
+// One neutral event — the shared unit of data for every transport.
+struct StreamEvent {
+    std::uint64_t seq = 0;       // 0-based, monotonic within one stream (UI appends in order)
+    StreamPayloadKind kind = StreamPayloadKind::Json;
+    std::string payload;         // text JSON expected for the response pane
+    std::string name;            // optional: gRPC "message" | SSE event name
+    std::string id;              // optional: SSE id (resume / Last-Event-ID later)
+    std::vector<KeyValue> metadata; // optional: per-event metadata
+    long long offsetMs = 0;      // ms since the stream opened
+};
+
+struct StreamMeta {              // emitted at onStreamOpen
+    std::string streamId;
+    StreamTransport transport = StreamTransport::Grpc; // display/telemetry ONLY — UI must NOT branch on it (INV-1)
+    std::vector<KeyValue> leading;     // gRPC leading metadata | SSE/HTTP headers
+    long long startedAtEpochMs = 0;
+};
+
+struct StreamEnd {               // emitted at onStreamClose
+    StreamStatus status = StreamStatus::Ok;
+    int statusCode = 0;          // gRPC status code | HTTP status
+    std::string statusMessage;
+    std::vector<KeyValue> trailing;    // gRPC trailing metadata
+    std::uint64_t totalEvents = 0;
+    std::uint64_t totalBytes = 0;
+    long long elapsedMs = 0;
+    bool truncated = false;      // true if a configured ceiling was hit (§9)
+};
+
+enum class InteractionKind { Unary, ServerStream, ClientStream, BiDi };
+
 // ---- Model of one request (envelope + per-type block) ----
 struct RequestModel {
     int schemaVersion = 1;
@@ -134,6 +171,10 @@ struct RequestModel {
 // Shares the same struct for brevity — sender only receives the resolved one.
 struct ResolvedRequest {
     RequestModel model;
+    std::string streamId;   // set by Engine::openStream so the sender can stamp StreamMeta (empty for unary)
+    // Stream ceilings (§9), stamped by Engine from EngineConfig. 0 -> sender default.
+    std::uint64_t streamMaxEvents = 0;
+    std::uint64_t streamMaxBytes = 0;
 };
 
 // ---- Call result ----
@@ -156,6 +197,10 @@ struct ApiResponse {
     long elapsedMs = 0;
     std::int64_t sizeBytes = 0;
     std::string resolvedRequestDump; // resolved request (Request tab for debugging)
+    // --- Streaming (SPEC_grpc_streaming §8): set when body is an assembled stream array ---
+    bool wasStreamed = false;        // true -> body is the captured [ … ] array
+    bool partial = false;            // true -> stream ended early (cancel/error) -> array incomplete
+    std::uint64_t eventCount = 0;    // number of events captured into the array
 };
 
 enum class ErrorKind { Network, Timeout, Tls, Cancelled, Parse, Unsupported, Unknown };

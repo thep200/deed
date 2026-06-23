@@ -349,7 +349,9 @@ json apiResponseToJson(const ApiResponse& r) {
                 {"headers", kvArray(r.headers)}, {"cookies", cookieArray(r.cookies)},
                 {"body", r.body}, {"elapsedMs", static_cast<long long>(r.elapsedMs)},
                 {"sizeBytes", static_cast<long long>(r.sizeBytes)},
-                {"resolvedRequestDump", r.resolvedRequestDump}};
+                {"resolvedRequestDump", r.resolvedRequestDump},
+                {"wasStreamed", r.wasStreamed}, {"partial", r.partial},
+                {"eventCount", static_cast<long long>(r.eventCount)}};
 }
 ApiResponse apiResponseFrom(const json& j) {
     ApiResponse r;
@@ -363,6 +365,10 @@ ApiResponse apiResponseFrom(const json& j) {
     if (auto it = j.find("sizeBytes"); it != j.end() && it->is_number())
         r.sizeBytes = it->get<std::int64_t>();
     r.resolvedRequestDump = getStr(j, "resolvedRequestDump");
+    r.wasStreamed = getBool(j, "wasStreamed", false);
+    r.partial = getBool(j, "partial", false);
+    if (auto it = j.find("eventCount"); it != j.end() && it->is_number())
+        r.eventCount = it->get<std::uint64_t>();
     return r;
 }
 } // namespace

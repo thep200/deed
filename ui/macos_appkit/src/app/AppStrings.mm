@@ -146,6 +146,7 @@ NSString *const StrToastRequestGone = @"Request no longer exists";
 NSString *const StrToastEnterGrpcHost = @"Enter gRPC host first (e.g. localhost:50051)";
 NSString *const StrStatusCancelled = @"Cancelled";
 NSString *const StrStatusNetworkError = @"NETWORK ERROR";
+NSString *const StrStatusStreaming = @"streaming…";
 NSString *const StrNoSetCookie = @"(no Set-Cookie)";
 NSString *const StrFmtToastEnv = @"ENV: %@";
 NSString *const StrFmtToastNotFound = @"Not found: %s (skipped)";

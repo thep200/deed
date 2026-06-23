@@ -161,6 +161,7 @@ extern NSString *const StrToastRequestGone;
 extern NSString *const StrToastEnterGrpcHost;
 extern NSString *const StrStatusCancelled;
 extern NSString *const StrStatusNetworkError;
+extern NSString *const StrStatusStreaming;       // streaming in progress
 extern NSString *const StrNoSetCookie;
 extern NSString *const StrFmtToastEnv;
 extern NSString *const StrFmtToastNotFound;

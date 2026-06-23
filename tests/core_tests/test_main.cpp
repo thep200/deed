@@ -21,6 +21,9 @@
 namespace fs = std::filesystem;
 using namespace core;
 
+// Defined in stream_sink_test.cpp — gatekeeper for INV-1 (SPEC_grpc_streaming AC-4). Returns #failures.
+int run_stream_sink_tests();
+
 static int g_pass = 0;
 static int g_fail = 0;
 
@@ -479,6 +482,18 @@ static void test_engine(const std::string& root) {
     std::vector<std::string> dupApplied;
     RequestModel dupOut = engine.aliasifyModel(dupReq, &dupApplied);
     CHECK_EQ(dupOut.http.url, std::string("{{zdup}}/p"), "duplicate value -> first-defined key wins");
+
+    // --- interactionOf: routing by gRPC method type (SPEC_grpc_streaming §4) ---
+    RequestModel un; un.type = RequestType::Grpc; un.grpc.methodType = "unary";
+    CHECK(engine.interactionOf(un) == InteractionKind::Unary, "unary -> Unary");
+    RequestModel ss; ss.type = RequestType::Grpc; ss.grpc.methodType = "server_streaming";
+    CHECK(engine.interactionOf(ss) == InteractionKind::ServerStream, "server_streaming -> ServerStream");
+    RequestModel cs; cs.type = RequestType::Grpc; cs.grpc.methodType = "client_streaming";
+    CHECK(engine.interactionOf(cs) == InteractionKind::ClientStream, "client_streaming -> ClientStream");
+    RequestModel bd; bd.type = RequestType::Grpc; bd.grpc.methodType = "bidi_streaming";
+    CHECK(engine.interactionOf(bd) == InteractionKind::BiDi, "bidi_streaming -> BiDi");
+    RequestModel hp; hp.type = RequestType::Http;
+    CHECK(engine.interactionOf(hp) == InteractionKind::Unary, "http -> Unary");
 }
 
 // ---------------- ResponseCache (RESPONSE_CACHE.md §10) ----------------
@@ -757,8 +772,10 @@ int main() {
     test_engine(root);
     test_importers();
 
+    int streamFail = run_stream_sink_tests();   // INV-1 gatekeeper (transport-free)
+
     fs::remove_all(root);
 
-    std::printf("\n==== %d passed, %d failed ====\n", g_pass, g_fail);
-    return g_fail == 0 ? 0 : 1;
+    std::printf("\n==== %d passed, %d failed (+%d stream failures) ====\n", g_pass, g_fail, streamFail);
+    return (g_fail == 0 && streamFail == 0) ? 0 : 1;
 }
