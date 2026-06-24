@@ -83,7 +83,9 @@ public:
     AppConfigStore& appConfig();
 
     // --- Send (async, returns handle immediately) ---
-    RequestHandle send(const RequestModel& model, IUiDelegate* delegate);
+    // The delegate/sink are held by shared_ptr so the worker keeps them alive for the whole call —
+    // closing the owning window/tab mid-flight can no longer free them under the worker (C1).
+    RequestHandle send(const RequestModel& model, std::shared_ptr<IUiDelegate> delegate);
     void cancel(RequestHandle);
 
     // --- Server-streaming (SPEC_grpc_streaming §4) ---
@@ -93,7 +95,7 @@ public:
 
     // Open a stream; `sink` receives callbacks on a background thread (sink marshals to its UI thread).
     // Returns an opaque handle to cancel. Empty streamId means the stream was not started.
-    StreamHandle openStream(const RequestModel& model, IStreamSink* sink);
+    StreamHandle openStream(const RequestModel& model, std::shared_ptr<IStreamSink> sink);
 
     // Cancel a running stream (idempotent; unknown/empty handle -> no-op).
     void cancelStream(const StreamHandle& h);
@@ -101,7 +103,7 @@ public:
     // --- Duplex session (SPEC_websocket §4) ---
     // Open a full-duplex session (WebSocket; gRPC bidi later). `inbound` receives frames on a background
     // thread (sink marshals to its UI thread); the returned handle's `channel` is the send side.
-    SessionHandle openSession(const RequestModel& model, IStreamSink* inbound);
+    SessionHandle openSession(const RequestModel& model, std::shared_ptr<IStreamSink> inbound);
 
     // Gracefully close a session (sends CLOSE, waits for the handshake). Idempotent.
     void closeSession(const SessionHandle& h, int code = 1000, const std::string& reason = "");
@@ -109,12 +111,13 @@ public:
     // --- Response cache (RESPONSE_CACHE.md). No-op when cache off (cacheResponses=false). ---
     // Store latest response/error for request id (overwrites old). resolvedRequestDump lives in resp.
     void putResponse(const std::string& id, const ApiResponse& resp);
+    void putResponse(const std::string& id, ApiResponse&& resp);   // move overload — hot path (M3)
     void putError(const std::string& id, const ApiError& err);
     // Get latest response (RAM first -> disk). nullopt if miss/cache off.
     std::optional<ResponseRecord> getResponse(const std::string& id);
     void removeResponse(const std::string& id);          // remove when request deleted
     void reloadCacheConfig();                            // call after Settings change
-    const CacheConfig& cacheConfig() const;              // current effective config
+    CacheConfig cacheConfig() const;                     // current effective config (by value — M4, race-free)
     ResponseCache* responseCache();                      // direct access (test/diagnostic), null if off
 
     // --- gRPC: list available service/methods (for RPC dropdown) ---
@@ -161,6 +164,10 @@ public:
                                std::vector<std::string>* applied = nullptr) const;
 
 private:
+    // Immutable merged-vars snapshot (Global <- active env), copy-on-rebuild. Hot paths (resolveRequest,
+    // resolvePreview) share this pointer instead of copying the whole map on every send (M2).
+    std::shared_ptr<const std::map<std::string, std::string>> activeVarsSnapshot() const;
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

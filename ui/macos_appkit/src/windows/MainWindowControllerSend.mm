@@ -29,10 +29,11 @@
 
     if (streamsResponses) {
         _streaming = YES;
-        _streamHandle = _engine->openStream(_model, _bridge.get());
+        _bridge->setStreamToken(++_streamToken);   // C2: stamp this stream so late callbacks from a prior one drop
+        _streamHandle = _engine->openStream(_model, _bridge);
     } else {
         _streaming = NO;
-        _currentHandle = _engine->send(_model, _bridge.get());
+        _currentHandle = _engine->send(_model, _bridge);
     }
 }
 
@@ -61,7 +62,8 @@
     _cancelButton.enabledState = YES;
     [self relayout];
     [self updateStatus:@""];
-    _wsSession = _engine->openSession(_model, _bridge.get());
+    _bridge->setStreamToken(++_streamToken);   // C2: stamp this session
+    _wsSession = _engine->openSession(_model, _bridge);
 }
 
 - (void)onCoreResponse:(uint64_t)handle response:(const core::ApiResponse &)resp {
@@ -90,11 +92,11 @@
 #pragma mark Streaming (SPEC_grpc_streaming §7)
 
 // '[' — reset the response pane into streaming-write mode. (transport arg is display/telemetry only — INV-1)
-- (void)onStreamOpenTransport:(int)transport {
+- (void)onStreamOpenTransport:(int)transport token:(uint64_t)token {
     (void)transport;
+    if (token != _streamToken) return;   // C2: a stale stream's open -> ignore
     _hasResp = NO;
     _streamEvents = 0;
-    _streamAccum = [NSMutableString stringWithString:@"["];
     // Show the streaming text in the body tab (tab 0) and select it.
     _activeRespTab = 0;
     [self highlightActiveTab:_respTabButtons active:0];
@@ -104,20 +106,21 @@
 }
 
 // Coalesced append (already comma-joined per Appendix A). Update the live counter.
-- (void)onStreamChunk:(NSString *)chunk events:(uint64_t)totalEvents {
-    if (!_streaming || !chunk.length) return;
-    [_respText insertStreamChunk:chunk];   // inserted before the trailing "]" -> stays valid live
-    [_streamAccum appendString:chunk];
+- (void)onStreamChunk:(NSString *)chunk events:(uint64_t)totalEvents token:(uint64_t)token {
+    if (token != _streamToken || !_streaming || !chunk.length) return;   // C2: drop a prior stream's chunk
+    [_respText insertStreamChunk:chunk];   // inserted before the trailing "]" -> stays valid live (doc is the array, H3)
     _streamEvents = totalEvents;
     _statusLabel.stringValue = [NSString stringWithFormat:StrFmtStreamReceived, (unsigned long long)totalEvents];
 }
 
 // ']' + finalize status; swap the live text for the normal formatted buffers; cache the array (§8).
 - (void)onStreamClose:(core::StreamStatus)status code:(int)code message:(NSString *)message
-               events:(uint64_t)events elapsedMs:(long long)elapsedMs truncated:(BOOL)truncated {
+               events:(uint64_t)events elapsedMs:(long long)elapsedMs truncated:(BOOL)truncated
+                token:(uint64_t)token {
+    if (token != _streamToken) return;   // C2: a stale stream's close must not touch the current request's panes
     // The pane already shows a closed, valid array (seeded "[\n]"; each event was inserted before the
-    // trailing "]"). Only close the cache accumulator, which was built by appending "[" + chunks.
-    [_streamAccum appendString:@"\n]"];
+    // trailing "]"). The Scintilla document IS the assembled array — read it back here instead of keeping
+    // a second NSMutableString copy growing alongside it during the stream (H3).
     [_respText endStreamingValid:YES];
 
     _streaming = NO;
@@ -128,9 +131,9 @@
     core::ApiResponse resp;
     resp.statusCode = 0;
     resp.statusText = "OK";
-    resp.body = std::string(_streamAccum.UTF8String);
+    resp.body = S(_respText.string);   // the live doc already holds the valid [ … ] array (H3)
     resp.elapsedMs = (long)elapsedMs;
-    resp.sizeBytes = (std::int64_t)_streamAccum.length;
+    resp.sizeBytes = (std::int64_t)resp.body.size();
     resp.wasStreamed = true;
     resp.eventCount = events;
     resp.partial = (status != core::StreamStatus::Ok);
@@ -141,7 +144,7 @@
 
     // Status line, fields separated by '|'. Size is shown for Ok AND Cancelled — so a stream stopped
     // mid-way still reports how much was received.
-    int64_t sz = (int64_t)_streamAccum.length;
+    int64_t sz = (int64_t)resp.body.size();
     NSString *sizeStr = (sz >= 1024) ? [NSString stringWithFormat:@"%.1fkb", sz / 1024.0]
                                      : [NSString stringWithFormat:@"%lldb", (long long)sz];
     NSString *line;
@@ -180,19 +183,19 @@
     for (NSUInteger i = 0; i < _respTabTitles.count; i++) [_respBuffers addObject:@""];
     if (_respBuffers.count) _respBuffers[0] = [NSString stringWithFormat:@"[%@] %@", k, msg ?: @""];
     _activeRespTab = 0;
-    _respText.string = _respBuffers[0];
+    _respText.string = _respBuffers.count ? _respBuffers[0] : @"";   // L1: guard empty buffers
     [self highlightActiveTab:_respTabButtons active:0];
 }
 
 // Write cache on a BACKGROUND thread (§6: put async, don't block UI). Engine is thread-safe.
 - (void)cacheResponseAsync:(const core::ApiResponse &)resp forId:(const std::string &)reqId {
     if (reqId.empty()) return;
-    core::ApiResponse copy = resp;
+    __block core::ApiResponse copy = resp;   // one copy to own it across the async hop; moved into cache below (M3)
     std::string id = reqId;
     __weak MainWindowController *ws = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         MainWindowController *s = ws;
-        if (s && s->_engine) s->_engine->putResponse(id, copy);
+        if (s && s->_engine) s->_engine->putResponse(id, std::move(copy));   // move overload, no second copy
     });
 }
 - (void)cacheErrorAsync:(const core::ApiError &)err forId:(const std::string &)reqId {
@@ -297,6 +300,9 @@
 
 // Time HH:mm:ss.SSS (millisecond precision) from epoch ms. <=0 -> placeholder.
 - (NSString *)clockFromEpochMs:(int64_t)ms {
+    // L2: NSDateFormatter is NOT thread-safe and this instance is shared. MAIN-THREAD ONLY — callers run on
+    // the main queue (status updates). Do NOT call from computeResponseBuffersFor: or any background worker.
+    NSAssert([NSThread isMainThread], @"clockFromEpochMs: must be called on the main thread (shared formatter)");
     if (ms <= 0) return @"--:--:--.---";
     static NSDateFormatter *fmt;
     static dispatch_once_t once;

@@ -189,9 +189,15 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
         return;
     }
 
-    CURL* curl = curl_easy_init();
+    // RAII (L13): the easy handle + header slist free themselves on EVERY return path, so a future early
+    // return between here and the end can't leak.
+    auto curlDel = [](CURL* c) { if (c) curl_easy_cleanup(c); };
+    std::unique_ptr<CURL, decltype(curlDel)> curlGuard(curl_easy_init(), curlDel);
+    CURL* curl = curlGuard.get();
     if (!curl) { sink.onStreamOpen(meta); closeWith(StreamStatus::Error, 0, "curl init failed"); return; }
 
+    auto slistDel = [](struct curl_slist* s) { if (s) curl_slist_free_all(s); };
+    std::unique_ptr<struct curl_slist, decltype(slistDel)> hdrsGuard(nullptr, slistDel);
     struct curl_slist* hdrs = nullptr;
     std::vector<KeyValue> headers = w.headers;
     applyAuthHeaders(w.auth, headers);   // bearer/basic/apikey -> handshake header (no per-message headers)
@@ -203,6 +209,7 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
         for (std::size_t i = 0; i < w.subprotocols.size(); ++i) sp += (i ? ", " : "") + w.subprotocols[i];
         hdrs = curl_slist_append(hdrs, sp.c_str());
     }
+    hdrsGuard.reset(hdrs);   // L13: guard owns the list now (curl_easy_setopt only borrows the pointer)
 
     curl_easy_setopt(curl, CURLOPT_URL, w.url.c_str());
     curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);             // WebSocket: handshake then hand back control
@@ -220,9 +227,7 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
     if (rc != CURLE_OK) {
         std::string msg = std::string("WebSocket handshake failed: ") + curl_easy_strerror(rc);
         if (httpCode) msg += " (HTTP " + std::to_string(httpCode) + ")";
-        if (hdrs) curl_slist_free_all(hdrs);
-        curl_easy_cleanup(curl);
-        closeWith(StreamStatus::Error, (int)httpCode, msg);
+        closeWith(StreamStatus::Error, (int)httpCode, msg);   // curl + hdrs freed by their RAII guards (L13)
         return;
     }
     session->open.store(true);
@@ -406,9 +411,7 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
     }
 
     (void)sentClose;
-    if (hdrs) curl_slist_free_all(hdrs);
-    curl_easy_cleanup(curl);
-    closeWith(endStatus, endCode, endMsg);
+    closeWith(endStatus, endCode, endMsg);   // curl + hdrs freed by their RAII guards on return (L13)
 }
 
 } // namespace core

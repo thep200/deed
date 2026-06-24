@@ -22,7 +22,7 @@ std::string lower(std::string s) {
 } // namespace
 
 bool GrpcImporter::canHandle(const std::string& input) const {
-    std::string t = lower(trim(input));
+    std::string t = lower(trim(input.substr(0, 16)));   // prefix only; avoid copying a huge paste (L8)
     if (t.rfind("grpcurl", 0) == 0) return true;                         // grpcurl command
     if (t.rfind("grpc://", 0) == 0 || t.rfind("grpcs://", 0) == 0) return true;  // explicit scheme
 

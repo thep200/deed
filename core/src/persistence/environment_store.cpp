@@ -45,7 +45,7 @@ Environment EnvironmentStore::load(const std::string& name) const {
     std::string txt;
     if (!fsutil::readFile(envFile(root_, name), txt))
         throw std::runtime_error("env not found: " + name);
-    Environment e = codec::envFromJson(codec::json::parse(txt));
+    Environment e = codec::envFromJson(codec::parseGuarded(txt));
     if (e.name.empty()) e.name = name;
     return e;
 }
@@ -103,8 +103,14 @@ bool EnvironmentStore::renameAlias(const std::string& oldAlias, const std::strin
         for (auto& k : e.keys) {
             if (k.key == oldAlias) { k.key = newAlias; changed = true; }
         }
-        if (changed) { save(e); changedAny = true; }
+        // M16: write directly (no per-env epoch bump) so a rename touching K envs does K writes but only
+        // ONE epoch bump + cache invalidation at the end, instead of K.
+        if (changed) {
+            fsutil::writeFileAtomic(envFile(root_, e.name), codec::toJson(e).dump(2));
+            changedAny = true;
+        }
     }
+    if (changedAny) epoch_.fetch_add(1, std::memory_order_relaxed);
     return changedAny;
 }
 
@@ -117,7 +123,7 @@ void EnvironmentStore::migrateLegacySecrets() {
     std::string txt;
     if (fsutil::readFile(secretsFile.string(), txt)) {
         try {
-            auto j = nlohmann::json::parse(txt);
+            auto j = codec::parseGuarded(txt);
             if (j.is_object()) {
                 // Old layout: { "<env>": { "<key>": "<value>" } }
                 for (auto it = j.begin(); it != j.end(); ++it) {

@@ -35,7 +35,7 @@ Session SessionStore::load() const {
     std::string txt;
     if (!fsutil::readFile(sessionPath(root_), txt)) return Session{};
     try {
-        return codec::sessionFromJson(codec::json::parse(txt));
+        return codec::sessionFromJson(codec::parseGuarded(txt));
     } catch (...) {
         return Session{}; // corrupt file -> start clean
     }

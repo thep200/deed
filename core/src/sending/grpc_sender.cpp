@@ -486,6 +486,9 @@ void GrpcSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
     auto channel = grpc::CreateCustomChannel(g.target, makeCreds(g.tls), streamChannelArgs());
     grpc::GenericStub stub(channel);
     grpc::ClientContext ctx;
+    // M10: for a stream this deadline is a MAX-DURATION cap, sourced from the per-request Config (timeout_ms,
+    // default 30 min) — no longer a hard 30s that silently kills healthy long streams. A user wanting an
+    // open-ended stream sets a large timeout_ms; cancel + the §9 event/byte ceilings also bound it.
     int deadlineMs = g.settings.deadlineMs > 0 ? g.settings.deadlineMs : 30000;
     ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadlineMs));
     for (const auto& md : g.metadata)
@@ -536,9 +539,13 @@ void GrpcSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
         return true;
     };
 
-    void* kTag = reinterpret_cast<void*>(1);
+    // Distinct tag constants (M9): StartCall/Finish never share a value with the in-loop write/read/wdone
+    // tags, so a delayed StartCall completion can't be misread as a write inside the bidi dispatch loop.
+    void* kTag = reinterpret_cast<void*>(1);          // server-streaming sequential ops (one outstanding)
+    void* kStartTag = reinterpret_cast<void*>(10);
+    void* kFinishTag = reinterpret_cast<void*>(11);
     bool startupFailed = false;
-    rw->StartCall(kTag);
+    rw->StartCall(kStartTag);
     if (pumpCq(cq, cancel, ctx) != 1) startupFailed = true;
 
     if (!startupFailed && !isBidi) {
@@ -562,7 +569,7 @@ void GrpcSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
         void* T_WDONE = reinterpret_cast<void*>(3);
         grpc::ByteBuffer writeBuf, readBuf;
         size_t widx = 0;
-        enum WState { WRITING, WDONE_PENDING, WDONE_DONE } wstate;
+        enum WState { WRITING, WDONE_PENDING, WDONE_DONE } wstate = WRITING;   // M9: never read uninitialized
 
         if (!wire.empty()) { writeBuf = makeBuf(wire[widx]); rw->Write(writeBuf, T_WRITE); wstate = WRITING; }
         else { rw->WritesDone(T_WDONE); wstate = WDONE_PENDING; }
@@ -598,7 +605,7 @@ void GrpcSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
 
     // Finish -> trailing status + metadata.
     grpc::Status status;
-    rw->Finish(&status, kTag);
+    rw->Finish(&status, kFinishTag);
     pumpCq(cq, cancel, ctx);
     cq.Shutdown();
     { void* t; bool o; while (cq.Next(&t, &o)) {} }   // drain remaining tags

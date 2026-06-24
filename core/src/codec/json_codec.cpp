@@ -1,6 +1,34 @@
 #include "codec/json_codec.hpp"
 
+#include <stdexcept>
+#include <string>
+
 namespace core::codec {
+
+json parseGuarded(const std::string& text, int maxDepth) {
+    // O(n) structural-depth pre-scan: count [ and { nesting OUTSIDE of string literals. Reject before the
+    // recursive parser can blow the stack (H5). String/escape handling so brackets inside strings don't count.
+    int depth = 0;
+    bool inStr = false, esc = false;
+    for (char c : text) {
+        if (inStr) {
+            if (esc) esc = false;
+            else if (c == '\\') esc = true;
+            else if (c == '"') inStr = false;
+            continue;
+        }
+        if (c == '"') inStr = true;
+        else if (c == '[' || c == '{') {
+            // std::runtime_error derives from std::exception, same as json::parse_error — every existing
+            // catch(const std::exception&)/catch(...) around these parse sites handles it identically.
+            if (++depth > maxDepth)
+                throw std::runtime_error("JSON nesting too deep (max " + std::to_string(maxDepth) + ")");
+        } else if (c == ']' || c == '}') {
+            if (depth > 0) --depth;
+        }
+    }
+    return json::parse(text);
+}
 
 namespace {
 

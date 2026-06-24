@@ -17,21 +17,28 @@ std::string shq(const std::string& s) {
     return out;
 }
 
-std::string applyPathVars(std::string url, const std::vector<KeyValue>& vars) {
-    for (const auto& v : vars) {
-        if (!v.enabled || v.key.empty()) continue;
-        std::string token = ":" + v.key;
-        size_t pos = 0;
-        while ((pos = url.find(token, pos)) != std::string::npos) {
-            size_t end = pos + token.size();
-            char nxt = end < url.size() ? url[end] : '/';
-            if (nxt == '/' || nxt == '?' || nxt == '&' || end == url.size()) {
-                url.replace(pos, token.size(), v.value);
-                pos += v.value.size();
-            } else pos = end;
+std::string applyPathVars(const std::string& url, const std::vector<KeyValue>& vars) {
+    if (vars.empty()) return url;
+    // Single left-to-right pass (M18): at each ':' try to match a path-var key (with a path boundary after)
+    // and substitute. One allocation, no repeated full-string find/replace + realloc.
+    std::string out;
+    out.reserve(url.size() + 16);
+    for (std::size_t i = 0; i < url.size();) {
+        bool replaced = false;
+        if (url[i] == ':') {
+            for (const auto& v : vars) {
+                if (!v.enabled || v.key.empty()) continue;
+                if (url.compare(i + 1, v.key.size(), v.key) != 0) continue;
+                std::size_t end = i + 1 + v.key.size();
+                char nxt = end < url.size() ? url[end] : '/';
+                if (nxt == '/' || nxt == '?' || nxt == '&' || end == url.size()) {
+                    out += v.value; i = end; replaced = true; break;
+                }
+            }
         }
+        if (!replaced) out += url[i++];
     }
-    return url;
+    return out;
 }
 
 std::string toLower(std::string s) { for (auto& c : s) c = (char)::tolower(c); return s; }

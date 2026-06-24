@@ -3,6 +3,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -13,6 +14,15 @@
 using namespace core;
 
 namespace {
+
+// The CLI's delegate/sink are stack objects that outlive the (blocking) call, so wrap them in
+// NON-OWNING shared_ptrs for the Engine's shared_ptr API (C1) — no deleter, no double-free.
+std::shared_ptr<IUiDelegate> borrow(IUiDelegate* d) {
+    return std::shared_ptr<IUiDelegate>(d, [](IUiDelegate*) {});
+}
+std::shared_ptr<IStreamSink> borrowSink(IStreamSink* s) {
+    return std::shared_ptr<IStreamSink>(s, [](IStreamSink*) {});
+}
 
 // Minimal duplex sink for the `ws` command: prints frames, signals on first inbound + on close.
 class CliWsSink : public IUiDelegate {
@@ -168,9 +178,9 @@ int main(int argc, char** argv) {
             // openStream; unary + client-streaming (one response) -> send (§4).
             InteractionKind kind = engine.interactionOf(m);
             if (kind == InteractionKind::ServerStream || kind == InteractionKind::BiDi)
-                engine.openStream(m, &del);
+                engine.openStream(m, borrowSink(&del));
             else
-                engine.send(m, &del);
+                engine.send(m, borrow(&del));
             return del.wait() ? 0 : 1;
         }
         if (cmd == "resolve" && argc >= 4) {
@@ -196,7 +206,7 @@ int main(int argc, char** argv) {
             m.graphql.query = joinArgs(argc, argv, 3);
             std::cout << "GraphQL: " << m.graphql.url << "\n";
             CliDelegate del;
-            engine.send(m, &del);   // query/mutation routes to HTTP under the hood
+            engine.send(m, borrow(&del));   // query/mutation routes to HTTP under the hood
             return del.wait() ? 0 : 1;
         }
         if (cmd == "sse" && argc >= 3) {   // sse <url> [seconds] — stream events, then Stop
@@ -209,7 +219,7 @@ int main(int argc, char** argv) {
             m.http.headers.push_back({"Accept", "text/event-stream", true});
             std::cout << "SSE: " << m.http.url << "\n";
             CliDelegate del;
-            StreamHandle h = engine.openStream(m, &del);
+            StreamHandle h = engine.openStream(m, borrowSink(&del));
             int secs = argc >= 4 ? std::atoi(argv[3]) : 4;
             std::this_thread::sleep_for(std::chrono::seconds(secs > 0 ? secs : 4));
             engine.cancelStream(h);   // SSE is open-ended -> Stop after a window
@@ -225,7 +235,7 @@ int main(int argc, char** argv) {
             if (!msg.empty()) m.ws.onOpenSend.push_back(msg);   // sent right after open
             std::cout << "Connecting: " << m.ws.url << "\n";
             CliWsSink sink;
-            SessionHandle h = engine.openSession(m, &sink);
+            SessionHandle h = engine.openSession(m, borrowSink(&sink));
             if (!msg.empty()) sink.waitInbound(1, std::chrono::milliseconds(8000));  // wait for the echo
             else sink.waitInbound(1, std::chrono::milliseconds(3000));
             engine.closeSession(h, 1000, "bye");

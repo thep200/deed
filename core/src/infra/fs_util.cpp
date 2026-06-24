@@ -1,11 +1,19 @@
 #include "infra/fs_util.hpp"
 
+#include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <string>
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -25,23 +33,74 @@ void writeFileAtomic(const std::string& path, const std::string& content) {
     if (target.has_parent_path()) {
         fs::create_directories(target.parent_path());
     }
+
+    // Unique temp name per writer (H6): two concurrent writers to the same path must not share a ".tmp"
+    // and clobber each other. pid + a process-local counter makes it unique.
+    static std::atomic<unsigned long long> ctr{0};
+    long long pid =
+#ifndef _WIN32
+        static_cast<long long>(::getpid());
+#else
+        0;
+#endif
     fs::path tmp = target;
-    tmp += ".tmp";
+    tmp += "." + std::to_string(pid) + "." + std::to_string(ctr.fetch_add(1)) + ".tmp";
+
+    auto cleanup = [&] { std::error_code e; fs::remove(tmp, e); };
+
+#ifndef _WIN32
+    // POSIX: write + fsync the data before rename, then fsync the parent dir so a crash after rename can't
+    // leave a zero-length/stale file (H6).
+    int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) throw std::runtime_error("cannot open temp file: " + tmp.string());
+    const char* p = content.data();
+    std::size_t left = content.size();
+    while (left > 0) {
+        ssize_t n = ::write(fd, p, left);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            ::close(fd); cleanup();
+            throw std::runtime_error("failed to write temp file: " + tmp.string());
+        }
+        p += n; left -= static_cast<std::size_t>(n);
+    }
+    if (::fsync(fd) != 0) { ::close(fd); cleanup(); throw std::runtime_error("fsync temp failed: " + tmp.string()); }
+    ::close(fd);
+
+    std::error_code ec;
+    fs::rename(tmp, target, ec);   // atomic on the same filesystem
+    if (ec) {
+        // Cross-FS (or other) failure: copy onto the target, then drop the temp. Clean up on every path (L6).
+        std::error_code ec2;
+        fs::copy_file(tmp, target, fs::copy_options::overwrite_existing, ec2);
+        cleanup();
+        if (ec2) throw std::runtime_error("atomic rename failed: " + ec.message());
+    }
+    if (target.has_parent_path()) {
+        int dfd = ::open(target.parent_path().c_str(), O_RDONLY
+#ifdef O_DIRECTORY
+                                                       | O_DIRECTORY
+#endif
+        );
+        if (dfd >= 0) { ::fsync(dfd); ::close(dfd); }   // make the new dirent durable
+    }
+#else
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
         if (!out) throw std::runtime_error("cannot open temp file: " + tmp.string());
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
         out.flush();
-        if (!out) throw std::runtime_error("failed to write temp file: " + tmp.string());
+        if (!out) { cleanup(); throw std::runtime_error("failed to write temp file: " + tmp.string()); }
     }
     std::error_code ec;
-    fs::rename(tmp, target, ec); // atomic on the same filesystem
+    fs::rename(tmp, target, ec);
     if (ec) {
-        // fallback: copy over then remove temp
-        fs::copy_file(tmp, target, fs::copy_options::overwrite_existing, ec);
-        fs::remove(tmp);
-        if (ec) throw std::runtime_error("atomic rename failed: " + ec.message());
+        std::error_code ec2;
+        fs::copy_file(tmp, target, fs::copy_options::overwrite_existing, ec2);
+        cleanup();
+        if (ec2) throw std::runtime_error("atomic rename failed: " + ec.message());
     }
+#endif
 }
 
 std::string slugify(const std::string& name) {

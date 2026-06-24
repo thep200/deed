@@ -40,6 +40,21 @@ bool isJsonLike(const std::string& s) {
     return !t.empty() && (t.front() == '{' || t.front() == '[');
 }
 
+// Well-formed base64? (M15) Non-empty, length multiple of 4, only alphabet/'=' (padding only at the end).
+// Guards against treating a garbled Basic token as valid credentials.
+bool looksBase64(const std::string& s) {
+    if (s.empty() || s.size() % 4 != 0) return false;
+    bool padding = false;
+    for (char ch : s) {
+        unsigned char c = (unsigned char)ch;
+        bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                  c == '+' || c == '/';
+        if (c == '=') { padding = true; continue; }
+        if (padding || !ok) return false;   // data char after padding, or stray char -> invalid
+    }
+    return true;
+}
+
 // Decode base64 (skip unknown chars/whitespace; stop at '='). Used to split Basic user:pass.
 std::string base64Decode(const std::string& in) {
     static const std::string chars =
@@ -68,7 +83,7 @@ void applyAuthHeader(HttpRequest& h, const std::string& rawValue) {
     if (scheme == "bearer") {
         h.auth.type = "bearer";
         h.auth.bearerToken = rest;
-    } else if (scheme == "basic") {
+    } else if (scheme == "basic" && looksBase64(rest)) {
         std::string decoded = base64Decode(rest);
         size_t c = decoded.find(':');
         h.auth.type = "basic";
@@ -85,7 +100,7 @@ void applyAuthHeader(HttpRequest& h, const std::string& rawValue) {
 } // namespace
 
 bool CurlImporter::canHandle(const std::string& input) const {
-    std::string t = lower(trim(input));
+    std::string t = lower(trim(input.substr(0, 16)));   // only need the prefix; don't copy a huge paste (L8)
     return t.rfind("curl", 0) == 0;
 }
 
@@ -117,12 +132,13 @@ ImportResult CurlImporter::parse(const std::string& input) const {
         const std::string& tk = tokens[i];
         std::string flag = tk;
         std::string inlineVal;
+        bool hasInline = false;   // M14: track presence, not emptiness (so `--data=` -> empty value, not next token)
         // support --flag=value
         if (tk.rfind("--", 0) == 0) {
             size_t eq = tk.find('=');
-            if (eq != std::string::npos) { flag = tk.substr(0, eq); inlineVal = tk.substr(eq + 1); }
+            if (eq != std::string::npos) { flag = tk.substr(0, eq); inlineVal = tk.substr(eq + 1); hasInline = true; }
         }
-        auto val = [&](size_t& idx) { return !inlineVal.empty() ? inlineVal : nextArg(idx); };
+        auto val = [&](size_t& idx) { return hasInline ? inlineVal : nextArg(idx); };
 
         if (flag == "-X" || flag == "--request") {
             h.method = val(i); explicitMethod = true;

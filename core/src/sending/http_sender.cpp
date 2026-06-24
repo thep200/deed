@@ -264,9 +264,9 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
     ApiResponse resp;
     resp.statusCode = static_cast<int>(r.status_code);
     resp.statusText = r.reason;
-    resp.body = r.text;
-    resp.elapsedMs = static_cast<long>(elapsed);
     resp.sizeBytes = static_cast<std::int64_t>(r.text.size());
+    resp.body = std::move(r.text);   // r is a local cpr::Response -> move the (possibly large) body (L10)
+    resp.elapsedMs = static_cast<long>(elapsed);
     for (const auto& kv : r.header) {
         resp.headers.push_back({kv.first, kv.second, true});
         std::string k = kv.first;
@@ -302,6 +302,10 @@ void HttpSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
     const int kRetryDefaultMs = 3000;
     const int kMaxRetries = 10;
     const std::uint64_t kMaxEventBytes = req.streamMaxBytes ? req.streamMaxBytes : 8ull * 1024 * 1024;
+    // Total ceilings (M11/H4): mirror the gRPC path so a long-lived/reconnecting stream — or a misclassified
+    // infinite non-SSE response under Auto — can't grow RAM without bound. Hitting either stops with truncated.
+    const std::uint64_t kMaxEvents = req.streamMaxEvents ? req.streamMaxEvents : 100000;
+    const std::uint64_t kMaxTotalBytes = req.streamMaxBytes ? req.streamMaxBytes : 64ull * 1024 * 1024;
 
     StreamMeta meta;
     meta.streamId = req.streamId;
@@ -309,6 +313,7 @@ void HttpSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
     meta.startedAtEpochMs = epochMs();
 
     bool opened = false;
+    bool truncated = false;   // a total ceiling was hit -> stop the transfer (H4/M11)
     std::uint64_t seq = 0, bytes = 0;
     std::string lastEventId;
     long retryMs = kRetryDefaultMs;
@@ -399,19 +404,29 @@ void HttpSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
         session.SetWriteCallback(cpr::WriteCallback{
             [&, st](std::string_view data, intptr_t) -> bool {
                 if (cancel && cancel->cancelled()) return false;   // abort perform
+                if (truncated) return false;                       // ceiling already hit -> stop
                 if (!st->decided) {
                     st->decided = true;
                     st->isSse = httpForcesSse(h) ||
                                 (st->ctype.find("text/event-stream") != std::string::npos);
                     if (!opened) { meta.leading = st->leading; sink.onStreamOpen(meta); opened = true; }
                 }
-                if (st->isSse) parser.feed(data.data(), data.size(), onEvent);
-                else unaryBody.append(data);
+                if (st->isSse) {
+                    parser.feed(data.data(), data.size(), onEvent);
+                    if (seq >= kMaxEvents || bytes >= kMaxTotalBytes) { truncated = true; return false; }
+                } else {
+                    // H4: bound the gathered body — never append past the byte ceiling.
+                    if (unaryBody.size() >= kMaxTotalBytes) { truncated = true; return false; }
+                    std::size_t room = static_cast<std::size_t>(kMaxTotalBytes - unaryBody.size());
+                    unaryBody.append(data.substr(0, room));
+                    if (unaryBody.size() >= kMaxTotalBytes) { truncated = true; return false; }
+                }
                 return true;
             }});
 
         cpr::Response r = runVerb(session, h.method);
         if (!opened) { meta.leading = st->leading; sink.onStreamOpen(meta); opened = true; }
+        if (st->decided && st->isSse && !truncated) parser.finish(onEvent);   // M12: flush a final unterminated event
         if (parser.retryMs() >= 0) retryMs = parser.retryMs();   // server-provided backoff
 
         if (cancel && cancel->cancelled()) { endStatus = StreamStatus::Cancelled; endCode = st->status; break; }
@@ -430,6 +445,10 @@ void HttpSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
             endCode = (int)r.status_code;
             break;
         }
+
+        // SSE total ceiling hit (H4/M11) -> stop cleanly; do NOT treat the write-callback abort as a
+        // network error and reconnect.
+        if (truncated) { endStatus = StreamStatus::Ok; endCode = (int)r.status_code; break; }
 
         // Fatal HTTP for SSE: 204 / 4xx / 5xx / explicit-Sse-but-wrong-content-type -> no reconnect (§7).
         bool fatalHttp = (st->status == 204) || (st->status >= 400) ||
@@ -471,6 +490,7 @@ void HttpSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
     end.totalEvents = seq;
     end.totalBytes = bytes;
     end.elapsedMs = offsetMs();
+    end.truncated = truncated;
     sink.onStreamClose(end);
 }
 

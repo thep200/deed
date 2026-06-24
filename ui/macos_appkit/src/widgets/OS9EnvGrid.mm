@@ -158,6 +158,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     BOOL _autoFitCols;                   // YES: distribute env columns evenly over available width
     NSInteger _hoverRow;
     NSInteger _hoverEnvCol;              // env column hovered in header (-1 = none) -> shows × delete
+    NSArray<NSArray<NSString *> *> *_cellCache;   // H8: value matrix [row][col], rebuilt on reloadData
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -268,7 +269,22 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 
 - (void)reloadData {
     if (_selectedRow >= (NSInteger)_aliases.count) _selectedRow = -1;
+    [self rebuildCellCache];   // H8: query the delegate ONCE per data change, not once per repaint
     [self layout];
+}
+
+// H8: snapshot every (alias, env) value so drawBodyIn reads a cached matrix instead of calling the
+// delegate (which builds a stringWithFormat dictionary key) for every visible cell on every repaint —
+// the hot path during resize-drag (displayIfNeeded per mouse-move).
+- (void)rebuildCellCache {
+    NSMutableArray<NSArray<NSString *> *> *rows = [NSMutableArray arrayWithCapacity:_aliases.count];
+    for (NSString *alias in _aliases) {
+        NSMutableArray<NSString *> *cols = [NSMutableArray arrayWithCapacity:_envNames.count];
+        for (NSString *env in _envNames)
+            [cols addObject:([self.delegate envGrid:self valueForAlias:alias env:env] ?: @"")];
+        [rows addObject:cols];
+    }
+    _cellCache = rows;
 }
 
 - (void)setEnvNames:(NSArray<NSString *> *)e {
@@ -399,8 +415,9 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         DrawCellText(_aliases[row], aliasCell, fg);
         if (row == _hoverRow || sel)
             DrawClose([self closeBoxInAliasRowAtY:y], sel ? [NSColor whiteColor] : [OS9Theme shadow]);
+        NSArray<NSString *> *rowVals = (row < (NSInteger)_cellCache.count) ? _cellCache[row] : nil;  // H8: cached
         for (NSInteger e = 0; e < nCols; e++) {
-            NSString *val = [self.delegate envGrid:self valueForAlias:_aliases[row] env:_envNames[e]] ?: @"";
+            NSString *val = (rowVals && e < (NSInteger)rowVals.count) ? rowVals[e] : @"";
             DrawCellText(val, NSMakeRect([self envContentX:e], y, [self envWidth:e], kRowH), fg);
         }
     }
@@ -531,6 +548,8 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         if (target == -2) _aliasW = w;
         else if (target < (NSInteger)_colW.count) _colW[target] = @(w);
         [self layout];
+        // L3: per-frame layout + redraw in this modal drag loop is acceptable for a config screen — and with
+        // the H8 value-matrix cache the redraw no longer re-queries the delegate per cell.
         [_body displayIfNeeded];     // modal loop: draw immediately, avoid ghosting of old text
         [_header displayIfNeeded];
         if (ev.type == NSEventTypeLeftMouseUp) break;

@@ -11,6 +11,16 @@ namespace core::codec {
 
 using json = nlohmann::json;
 
+// Maximum JSON nesting depth accepted by parseGuarded (H5).
+inline constexpr int kMaxJsonDepth = 200;
+
+// Parse JSON with a nesting-depth guard (H5). nlohmann's recursive descent parser can overflow the stack
+// on pathologically deep input (e.g. thousands of "[[[…") — a crash that a try/catch around json::parse
+// CANNOT recover. This pre-scans structural depth (cheap, O(n), ignores brackets inside strings) and throws
+// a catchable nlohmann::json::parse_error before handing off to json::parse. Use for ALL untrusted/on-disk
+// text (imported/pasted requests, cached files, env/collection files).
+json parseGuarded(const std::string& text, int maxDepth = kMaxJsonDepth);
+
 // RequestModel
 json toJson(const RequestModel&);
 RequestModel requestFromJson(const json&);

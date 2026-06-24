@@ -48,7 +48,7 @@
     cfg.appDefaults = [self appDefaultsFromEnv];   // app-config defaults from .env
     _engine = std::make_unique<core::Engine>(cfg);
     // coalesce cadence + UI buffer high-water mark (backpressure valve, perf spec §2.2/§10).
-    _bridge = std::make_unique<UiDelegateBridge>(self,
+    _bridge = std::make_shared<UiDelegateBridge>(self,
                                                  (int)[dc intFor:@"STREAM_COALESCE_MS" def:50],
                                                  (int)[dc intFor:@"STREAM_UI_BUFFER_MAX_KB" def:8192]);
     _envVC = [[EnvWindowController alloc] initWithEngine:_engine.get()];
@@ -84,6 +84,10 @@
 }
 
 // Load a folder's children on demand (one readdir of that level — §3). No recursion.
+// M13: this runs synchronously on the main thread, but it scans ONLY the expanded level (lazy, never the
+// whole tree), so the cost is bounded to one directory's entries — acceptable for the expected collection
+// size. If a single folder is ever expected to hold thousands of requests, move this scan to a background
+// queue with a placeholder row + async reload (a larger rearchitecture).
 - (void)loadChildrenOf:(TreeItem *)folder {
     if (!folder || folder.childrenLoaded || !_engine) return;
     [folder.children removeAllObjects];

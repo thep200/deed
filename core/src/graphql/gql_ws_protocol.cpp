@@ -100,7 +100,9 @@ void GraphQlWsProtocol::onFrame(const std::string& text) {
         return;
     }
     if (type == "complete") {                   // server finished this subscription
-        if (msg.value("id", "") != id_ && msg.contains("id")) return;
+        // L9: only a complete carrying OUR id closes us. A missing id is malformed per graphql-transport-ws
+        // and must NOT terminate the subscription (was a premature Ok close).
+        if (msg.value("id", "") != id_) return;
         closeOnce(StreamStatus::Ok, 1000, "");
         return;
     }

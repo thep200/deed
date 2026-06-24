@@ -4,6 +4,17 @@
 
 namespace core {
 
+namespace {
+// Real RAM footprint of one entry is more than its payload: the ResponseRecord struct, the map node, the
+// LRU list node, and the id stored twice (map key + LRU list), plus std::string capacity rounding. Charge a
+// fixed overhead + the duplicated key so `used_` tracks the true footprint and the cap isn't blown by many
+// tiny entries (M1). This also acts as the secondary entry-count bound: cost >= overhead per entry.
+constexpr std::uint64_t kEntryOverheadBytes = 256;
+std::uint64_t effBytesFor(const std::string& id, std::uint64_t payload) {
+    return payload + kEntryOverheadBytes + 2 * static_cast<std::uint64_t>(id.size());
+}
+} // namespace
+
 void RamCacheDriver::touch(const std::string& id) {
     auto it = map_.find(id);
     if (it == map_.end()) return;
@@ -37,8 +48,9 @@ std::optional<ResponseRecord> RamCacheDriver::get(const std::string& id) {
 template <class R>
 bool RamCacheDriver::putImpl(const std::string& id, R&& r, std::uint64_t bytes) {
     std::lock_guard<std::mutex> lk(mu_);
+    const std::uint64_t eff = effBytesFor(id, bytes);   // payload + real per-entry overhead (M1)
     // Single record larger than cap -> don't cache in RAM (caller uses disk). §5.
-    if (bytes > cap_) {
+    if (eff > cap_) {
         // if an old entry with the same id is held -> drop it to keep accounting consistent.
         auto old = map_.find(id);
         if (old != map_.end()) { used_ -= old->second.bytes; lru_.erase(old->second.lru); map_.erase(old); }
@@ -53,9 +65,9 @@ bool RamCacheDriver::putImpl(const std::string& id, R&& r, std::uint64_t bytes) 
     lru_.push_front(id);
     Entry e;
     e.rec = std::forward<R>(r);      // move if caller passes an rvalue -> avoid copying a large body
-    e.bytes = bytes;
+    e.bytes = eff;                   // charge the effective footprint, not just the payload
     e.lru = lru_.begin();
-    used_ += bytes;
+    used_ += eff;
     map_.emplace(id, std::move(e));
     evictToFit();                    // bound: evict LRU until within cap
     return true;

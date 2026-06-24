@@ -545,7 +545,14 @@
         [_window close];
     }
 }
-- (BOOL)windowShouldClose:(NSWindow *)sender { [self autosaveCurrent]; return YES; } // autosave, no prompt
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    [self autosaveCurrent];
+    // M19: stop the spinner + clear the sending flag on EVERY close path (not just the OS9 close button),
+    // so closing mid-send doesn't leave a live timer / stuck _sending state.
+    [_spinTimer invalidate]; _spinTimer = nil;
+    _sending = NO;
+    return YES;
+}
 - (void)windowDidResize:(NSNotification *)note { [self relayout]; }
 - (void)windowDidBecomeKey:(NSNotification *)note { [_titleBar setNeedsDisplay:YES]; }
 - (void)windowDidResignKey:(NSNotification *)note { [_titleBar setNeedsDisplay:YES]; }

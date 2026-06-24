@@ -44,6 +44,9 @@ std::optional<ResponseRecord> ResponseCache::get(const std::string& id) {
     if (l2_) {
         if (auto r = l2_->get(id)) {                 // L2 hit
             std::uint64_t b = r->bytes ? r->bytes : estimateBytes(*r);
+            // M7: promotion to L1 isn't atomic with a concurrent remove() on L2. A remove between this read
+            // and the put could leave the entry in L1 after L2 dropped it — transient L1/L2 divergence that
+            // self-heals (a later get re-reads L2, a later remove clears both). Accepted for a response cache.
             if (b < ramThresholdBytes_) l1_->put(id, *r, b);  // promote to RAM if small
             return r;
         }

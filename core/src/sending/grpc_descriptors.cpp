@@ -1,5 +1,6 @@
 #include "sending/grpc_descriptors.hpp"
 
+#include <chrono>
 #include <mutex>
 #include <unordered_set>
 
@@ -29,6 +30,10 @@ public:
 
     ~ReflectionDescriptorDatabase() override {
         if (stream_) {
+            // TryCancel first (H7): a half-open/hung reflection server would otherwise make Finish() block
+            // forever, hanging DescriptorContext teardown and the whole send. The deadline on ctx_ (set in
+            // stream()) is the second backstop.
+            if (ctx_) ctx_->TryCancel();
             stream_->WritesDone();
             grpc::Status s = stream_->Finish();
             (void)s;
@@ -85,6 +90,8 @@ private:
     Stream* stream() {
         if (!stream_) {
             ctx_ = std::make_unique<grpc::ClientContext>();
+            // Cap total reflection time (H7) so a silent/hung server can't block the call indefinitely.
+            ctx_->set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
             stream_ = stub_->ServerReflectionInfo(ctx_.get());
         }
         return stream_.get();

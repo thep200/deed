@@ -24,6 +24,10 @@ public:
     void feed(const char* data, std::size_t n, const Emit& emit);
     void feed(const std::string& s, const Emit& emit) { feed(s.data(), s.size(), emit); }
 
+    // Flush on clean EOF (M12): the transport calls this when the server closes so a final line/event left
+    // in the buffer (no trailing newline, or ending on a lone '\r') is still processed and dispatched.
+    void finish(const Emit& emit);
+
     const std::string& lastEventId() const { return lastEventId_; }   // for Last-Event-ID on reconnect
     long retryMs() const { return retryMs_; }                          // server `retry:` (-1 if unset)
 

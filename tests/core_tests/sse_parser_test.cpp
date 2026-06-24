@@ -111,6 +111,25 @@ void test_max_bytes() {
     ECHECK(p.truncated(), "truncated flag set");
 }
 
+void test_finish_flush() {   // M12 — final event with no trailing blank line is flushed on EOF
+    std::printf("[sse: finish flush on EOF]\n");
+    core::SseParser p;
+    std::vector<core::SseEvent> out;
+    auto emit = [&](const core::SseEvent& e) { out.push_back(e); };
+    p.feed("data: tail", emit);   // no terminating blank line -> nothing dispatched yet
+    ECHECK(out.empty(), "no event before finish");
+    p.finish(emit);               // clean EOF -> flush the buffered final event
+    ECHECK(out.size() == 1, "finish dispatches the final event");
+    ECHECK(!out.empty() && out[0].data == "tail", "final event data preserved");
+
+    // A trailing lone '\r' deferred by feed() must also be flushed at EOF.
+    core::SseParser p2;
+    out.clear();
+    p2.feed("data: x\r", emit);   // trailing CR deferred (could be CRLF)
+    p2.finish(emit);
+    ECHECK(out.size() == 1 && out[0].data == "x", "deferred-CR final event flushed");
+}
+
 } // namespace
 
 // Called from test_main.cpp. Returns the number of failed checks.
@@ -123,6 +142,7 @@ int run_sse_parser_tests() {
     test_id_and_retry();
     test_bom();
     test_max_bytes();
+    test_finish_flush();
     std::printf("[sse_parser] %d passed, %d failed\n", g_pass, g_fail);
     return g_fail;
 }

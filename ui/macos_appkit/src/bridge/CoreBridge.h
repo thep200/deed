@@ -8,8 +8,10 @@
 // consumer (controller) only ever sees neutral DTO-derived data — never a transport type (INV-1).
 #import <Cocoa/Cocoa.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -22,14 +24,17 @@
 - (void)onCoreResponse:(uint64_t)handle response:(const core::ApiResponse &)resp;
 - (void)onCoreError:(uint64_t)handle error:(const core::ApiError &)err;
 // --- streaming (all delivered on the main thread) ---
-- (void)onStreamOpenTransport:(int)transport;                          // reset pane, print '['
-- (void)onStreamChunk:(NSString *)chunk events:(uint64_t)totalEvents;  // coalesced append
+// `token` identifies which stream the callback belongs to (C2): the controller stamps each stream via
+// setStreamToken and drops callbacks whose token != the active one (late callbacks from a cancelled stream).
+- (void)onStreamOpenTransport:(int)transport token:(uint64_t)token;                  // reset pane, print '['
+- (void)onStreamChunk:(NSString *)chunk events:(uint64_t)totalEvents token:(uint64_t)token;  // coalesced append
 - (void)onStreamClose:(core::StreamStatus)status
                  code:(int)code
               message:(NSString *)message
                events:(uint64_t)events
             elapsedMs:(long long)elapsedMs
-            truncated:(BOOL)truncated;
+            truncated:(BOOL)truncated
+                token:(uint64_t)token;
 @end
 
 // Bridge lives alongside the controller; holds a weak back-pointer to avoid a retain cycle.
@@ -43,6 +48,10 @@ public:
         : sink_(sink), coalesceMs_(coalesceMs > 0 ? coalesceMs : 50),
           maxBufferBytes_(maxBufferKB > 0 ? static_cast<size_t>(maxBufferKB) * 1024 : 0),
           coal_(std::make_shared<Coalescer>()) {}
+
+    // C2: the controller stamps the next stream's token here (main thread) before calling openStream/
+    // openSession. onStreamOpen latches it into the coalescer so every callback for THIS stream carries it.
+    void setStreamToken(uint64_t t) { token_.store(t, std::memory_order_relaxed); }
 
     void onResponse(core::RequestHandle h, const core::ApiResponse &r) override {
         core::ApiResponse copy = r;            // copy the neutral POD off the background thread
@@ -63,6 +72,7 @@ public:
 
     // --- IStreamSink (SPEC_grpc_streaming §3) ---
     void onStreamOpen(const core::StreamMeta &meta) override {
+        uint64_t token = token_.load(std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> lk(coal_->mu);
             coal_->buf.clear();
@@ -70,12 +80,13 @@ public:
             coal_->events = 0;
             coal_->flushScheduled = false;
             coal_->closed = false;
+            coal_->token = token;   // latch this stream's identity (C2)
         }
         int transport = static_cast<int>(meta.transport);
         __weak id<CoreResponseSink> weakSink = sink_;
         dispatch_async(dispatch_get_main_queue(), ^{
             id<CoreResponseSink> s = weakSink;
-            if (s) [s onStreamOpenTransport:transport];
+            if (s) [s onStreamOpenTransport:transport token:token];
         });
     }
 
@@ -118,22 +129,25 @@ public:
             if (!s) return;
             std::string chunk;
             uint64_t cnt = 0;
+            uint64_t token = 0;
             {
                 std::lock_guard<std::mutex> lk(coal->mu);
                 chunk.swap(coal->buf);     // drain whatever is still pending
                 cnt = coal->events;
+                token = coal->token;
                 coal->flushScheduled = false;
                 coal->closed = true;       // release any backpressured producer (defensive)
             }
             coal->cv.notify_all();
             if (!chunk.empty())
-                [s onStreamChunk:[NSString stringWithUTF8String:chunk.c_str()] events:cnt];
+                [s onStreamChunk:[NSString stringWithUTF8String:chunk.c_str()] events:cnt token:token];
             [s onStreamClose:status
                         code:code
                      message:[NSString stringWithUTF8String:msg.c_str()]
                       events:events
                    elapsedMs:elapsed
-                   truncated:truncated];
+                   truncated:truncated
+                       token:token];
         });
     }
 
@@ -147,6 +161,7 @@ private:
         bool flushScheduled = false;
         bool closed = false;          // stream ended -> never block the producer again
         uint64_t events = 0;
+        uint64_t token = 0;           // identity of the stream that owns this coalescer state (C2)
     };
 
     void scheduleFlush() {
@@ -156,21 +171,24 @@ private:
                        dispatch_get_main_queue(), ^{
             std::string chunk;
             uint64_t cnt = 0;
+            uint64_t token = 0;
             {
                 std::lock_guard<std::mutex> lk(coal->mu);
                 chunk.swap(coal->buf);
                 cnt = coal->events;
+                token = coal->token;
                 coal->flushScheduled = false;
             }
             coal->cv.notify_all();   // buffer drained -> wake any backpressured producer (§2.2)
             id<CoreResponseSink> s = weakSink;
             if (s && !chunk.empty())
-                [s onStreamChunk:[NSString stringWithUTF8String:chunk.c_str()] events:cnt];
+                [s onStreamChunk:[NSString stringWithUTF8String:chunk.c_str()] events:cnt token:token];
         });
     }
 
     __weak id<CoreResponseSink> sink_;
     int coalesceMs_;
     size_t maxBufferBytes_;
+    std::atomic<uint64_t> token_{0};   // next stream's identity (set by controller before openStream) (C2)
     std::shared_ptr<Coalescer> coal_;
 };

@@ -65,7 +65,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 @protected
     // Core
     std::unique_ptr<core::Engine> _engine;
-    std::unique_ptr<UiDelegateBridge> _bridge;
+    std::shared_ptr<UiDelegateBridge> _bridge;   // shared so the Engine worker keeps it alive across a call (C1)
     core::RequestModel _model;
     std::string _root;
     std::string _currentRel;
@@ -77,8 +77,8 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     BOOL _streaming;                       // a server-stream is in flight (Stop replaces Send)
     core::StreamHandle _streamHandle;      // handle to cancel the active stream
     core::SessionHandle _wsSession;        // active WebSocket session (SPEC_websocket §4); channel = send side
-    NSMutableString *_streamAccum;         // assembled "[ … ]" array, cached on close
     uint64_t _streamEvents;                // events received so far (status line)
+    uint64_t _streamToken;                 // C2: identity of the current stream; bumped on each open, stale callbacks drop
     std::vector<core::GrpcMethodInfo> _grpcMethods; // parallel to _servicePopup items (ONLY the current request's)
     uint64_t _grpcMethodsReqSeq;  // race guard: apply only the latest listGrpcMethods result
     BOOL _grpcMethodsFetched;     // true once fetched for THIS request -> reuse, don't re-fetch (until invalidated)

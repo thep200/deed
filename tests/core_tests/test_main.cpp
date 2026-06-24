@@ -772,6 +772,45 @@ static void test_curl_export() {
     CHECK(gc.find("pkg.Svc/M") != std::string::npos, "has service/method");
 }
 
+// Regression tests for the audit remediation (AUDIT_REMEDIATION_SPEC.md).
+static void test_audit_fixes() {
+    std::printf("[audit_fixes]\n");
+
+    // H5: pathologically deep JSON is rejected by the depth guard (returns false, does NOT crash).
+    {
+        std::string deep(500, '[');   // 500 levels, well past kMaxJsonDepth
+        std::vector<KeyValue> kv; std::string err;
+        CHECK(!fieldcodec::jsonToKeyValues(deep, kv, err), "H5: deep JSON rejected, no stack overflow");
+        CHECK(fieldcodec::jsonToKeyValues("[]", kv, err), "H5: shallow JSON still parses");
+    }
+
+    CurlImporter curl;
+    // M15: valid Basic decodes; malformed Basic is NOT silently accepted as credentials.
+    {
+        auto good = curl.parse("curl -H 'Authorization: Basic dXNlcjpwYXNz' http://x.test");  // user:pass
+        CHECK(good.ok && good.model.http.auth.type == "basic" &&
+              good.model.http.auth.basicUsername == "user", "M15: valid Basic -> basic creds");
+        auto bad = curl.parse("curl -H 'Authorization: Basic not_base64!!' http://x.test");
+        CHECK(bad.ok && bad.model.http.auth.type == "apikey",
+              "M15: malformed Basic -> apikey (not garbled creds)");
+    }
+    // M14: an empty inline value (--data=) must not swallow the next token as data.
+    {
+        auto d = curl.parse("curl --data= http://x.test");
+        CHECK(d.ok && d.model.http.url.find("x.test") != std::string::npos,
+              "M14: empty --data= keeps the URL");
+    }
+
+    // Per-request config: grpc import carries TLS intent into RequestConfig.tls.
+    {
+        GrpcImporter g;
+        auto plain = g.parse("grpcurl -plaintext localhost:50051 pkg.Svc/M");
+        CHECK(plain.ok && plain.model.config.tls == false, "config.tls follows -plaintext (off)");
+        auto secure = g.parse("grpcs://localhost:50051/pkg.Svc/M");
+        CHECK(secure.ok && secure.model.config.tls == true, "config.tls follows grpcs:// (on)");
+    }
+}
+
 int main() {
     std::string root = makeTempRoot();
     std::printf("Temp root: %s\n", root.c_str());
@@ -791,6 +830,7 @@ int main() {
     test_secret_migration(root);
     test_engine(root);
     test_importers();
+    test_audit_fixes();
 
     int streamFail = run_stream_sink_tests();   // INV-1 gatekeeper (transport-free)
     int wsFail = run_ws_session_tests();        // INV-1 duplex gatekeeper (transport-free)

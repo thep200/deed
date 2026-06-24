@@ -2,6 +2,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstddef>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -13,7 +14,10 @@ namespace core {
 
 class ThreadPool {
 public:
-    explicit ThreadPool(unsigned n = 0) {
+    // maxQueue bounds the backlog (H1a): submit() refuses tasks past this so a runaway producer can't
+    // grow memory without bound. 0 -> unbounded. Streams/sessions no longer run here (they get dedicated
+    // threads) so this pool only carries short unary sends.
+    explicit ThreadPool(unsigned n = 0, std::size_t maxQueue = 1024) : maxQueue_(maxQueue) {
         if (n == 0) n = std::max(2u, std::thread::hardware_concurrency());
         for (unsigned i = 0; i < n; ++i)
             workers_.emplace_back([this] { workerLoop(); });
@@ -30,12 +34,16 @@ public:
     ThreadPool(const ThreadPool&) = delete;
     ThreadPool& operator=(const ThreadPool&) = delete;
 
-    void submit(std::function<void()> task) {
+    // Returns false if shutting down or the queue is full (caller decides the fallback).
+    bool submit(std::function<void()> task) {
         {
             std::lock_guard<std::mutex> lk(m_);
+            if (stop_) return false;
+            if (maxQueue_ && tasks_.size() >= maxQueue_) return false;
             tasks_.push(std::move(task));
         }
         cv_.notify_one();
+        return true;
     }
 
 private:
@@ -58,6 +66,7 @@ private:
     std::mutex m_;
     std::condition_variable cv_;
     bool stop_ = false;
+    std::size_t maxQueue_ = 0;
 };
 
 } // namespace core

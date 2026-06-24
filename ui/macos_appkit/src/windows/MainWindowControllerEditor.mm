@@ -478,10 +478,15 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     if (!isGraphql && !isCurl && !isGrpc) return;
     // cURL + grpcurl: auto-import immediately (toast, NO popup). GraphQL: confirm via popup first.
     // Defer: avoid processing RIGHT inside the text-change callback (the field editor is busy).
+    // M20: stamp with the current load token; if the user switches request before this runs, drop the import.
+    uint64_t seq = _loadReqSeq;
+    __weak MainWindowController *ws = self;
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (isCurl) [self importNow:text kind:0];
-        else if (isGrpc) [self importNow:text kind:1];
-        else [self offerImport:text kind:2];
+        MainWindowController *s = ws;
+        if (!s || s->_loadReqSeq != seq) return;
+        if (isCurl) [s importNow:text kind:0];
+        else if (isGrpc) [s importNow:text kind:1];
+        else [s offerImport:text kind:2];
     });
 }
 

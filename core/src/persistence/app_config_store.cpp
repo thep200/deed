@@ -15,7 +15,7 @@ AppConfig AppConfigStore::load() const {
     std::string txt;
     if (!fsutil::readFile(path_, txt)) return defaults_;   // no file yet -> defaults (.env)
     try {
-        return codec::appConfigFromJson(nlohmann::json::parse(txt), defaults_);
+        return codec::appConfigFromJson(codec::parseGuarded(txt), defaults_);
     } catch (...) {
         return defaults_;
     }

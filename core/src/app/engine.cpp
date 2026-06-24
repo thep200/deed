@@ -8,9 +8,11 @@
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <set>
+#include <thread>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -101,6 +103,16 @@ std::string revisionOf(const std::string& resolvedDump) {
     return std::to_string(std::hash<std::string>{}(resolvedDump));
 }
 
+// Neutral transport for StreamMeta on setup-failure paths (M8: don't hard-code gRPC). Display/telemetry only.
+StreamTransport transportOf(RequestType t) {
+    switch (t) {
+        case RequestType::WebSocket: return StreamTransport::WebSocket;
+        case RequestType::Http:      return StreamTransport::Sse;   // HTTP stream path is SSE
+        case RequestType::GraphQL:   return StreamTransport::Sse;   // subscription over WS/SSE
+        default:                     return StreamTransport::Grpc;
+    }
+}
+
 } // namespace
 
 struct Engine::Impl {
@@ -155,7 +167,7 @@ struct Engine::Impl {
     // -> auto-rebuild (never reuse stale vars). activeVars may run on main (send) and background
     // (listGrpcMethods via reflection) -> guarded by varsMu.
     std::mutex varsMu;
-    std::map<std::string, std::string> varsCache;
+    std::shared_ptr<const std::map<std::string, std::string>> varsCache;   // immutable snapshot (M2)
     std::string varsCacheEnv;
     std::uint64_t varsCacheEpoch = 0;
     bool varsCacheValid = false;
@@ -188,6 +200,49 @@ struct Engine::Impl {
     std::shared_ptr<SessionReg> sessions = std::make_shared<SessionReg>();
     std::atomic<std::uint64_t> nextSessionId{1};
 
+    // Drain barrier for detached stream/session threads (H1b/M6). Streams & sessions run on their OWN
+    // threads (not the bounded pool) so a few long-lived streams can't starve unary sends, and a wedged
+    // stream can't block the pool join. Each tracked thread ++active on start, --active + notify on finish;
+    // ~Impl cancels everything then waits for active==0. Held by shared_ptr so detached threads that
+    // outlast the backstop still decrement safely (they capture this, never impl_).
+    struct Runners {
+        std::mutex mu;
+        std::condition_variable cv;
+        int active = 0;
+        bool draining = false;   // shutdown started -> reject new spawns
+    };
+    std::shared_ptr<Runners> runners = std::make_shared<Runners>();
+
+    // Spawn a detached, drain-tracked worker. false -> shutting down (caller delivers an error instead).
+    bool spawnTracked(std::function<void()> fn) {
+        auto r = runners;
+        {
+            std::lock_guard<std::mutex> lk(r->mu);
+            if (r->draining) return false;
+            ++r->active;
+        }
+        std::thread([r, fn = std::move(fn)]() mutable {
+            fn();
+            std::lock_guard<std::mutex> lk(r->mu);
+            if (--r->active == 0) r->cv.notify_all();
+        }).detach();
+        return true;
+    }
+
+    // (M6/H1c) Stop all in-flight work BEFORE members destruct: cancel unary sends + streams, close
+    // sessions, then wait for the detached stream/session threads to drain. The pool (declared last)
+    // destructs after this body and joins its unary-send workers, which exit promptly once cancelled.
+    ~Impl() {
+        { std::lock_guard<std::mutex> lk(inflight->mu); for (auto& kv : inflight->map) if (kv.second) kv.second->cancel(); }
+        { std::lock_guard<std::mutex> lk(streams->mu);  for (auto& kv : streams->map)  if (kv.second) kv.second->cancel(); }
+        { std::lock_guard<std::mutex> lk(sessions->mu); for (auto& kv : sessions->map) if (kv.second) wsRequestClose(kv.second, 1001, "shutdown"); }
+        std::unique_lock<std::mutex> lk(runners->mu);
+        runners->draining = true;
+        // Backstop: a detached thread stuck in a blocking handshake is safe to outlive us (it captures
+        // only shared_ptrs), so we don't wait forever.
+        runners->cv.wait_for(lk, std::chrono::seconds(10), [this] { return runners->active == 0; });
+    }
+
     // pool DECLARED LAST -> destructor runs FIRST (reverse order): join all workers
     // before registry/inflight are destroyed, ensuring senders stay alive throughout sending.
     ThreadPool pool;
@@ -213,33 +268,38 @@ SessionStore& Engine::session() { return impl_->session; }
 EnvironmentStore& Engine::environments() { return impl_->environments; }
 AppConfigStore& Engine::appConfig() { return impl_->appConfig; }
 
-std::map<std::string, std::string> Engine::activeVars() const {
+std::shared_ptr<const std::map<std::string, std::string>> Engine::activeVarsSnapshot() const {
     std::string active = impl_->session.getActiveEnv();
     std::uint64_t epoch = impl_->environments.epoch();
-    {   // Cache hit: (active env + epoch) unchanged -> return a copy, NO disk read.
+    {   // Cache hit: (active env + epoch) unchanged -> share the snapshot pointer, NO copy, NO disk read.
         std::lock_guard<std::mutex> lk(impl_->varsMu);
         if (impl_->varsCacheValid && impl_->varsCacheEnv == active && impl_->varsCacheEpoch == epoch)
             return impl_->varsCache;
     }
     // Miss: rebuild OUTSIDE the lock (read + parse env from disk).
-    std::map<std::string, std::string> vars;
+    auto vars = std::make_shared<std::map<std::string, std::string>>();
     auto merge = [&](const std::string& name) {
         try {
             Environment e = impl_->environments.load(name);
             for (const auto& k : e.keys)
-                if (k.enabled) vars[k.key] = k.value;
+                if (k.enabled) (*vars)[k.key] = k.value;
         } catch (...) { /* env does not exist -> skip */ }
     };
     merge("Global");                         // base
     if (!active.empty() && active != "Global") merge(active); // override
+    std::shared_ptr<const std::map<std::string, std::string>> snap = vars;
     {
         std::lock_guard<std::mutex> lk(impl_->varsMu);
-        impl_->varsCache = vars;
+        impl_->varsCache = snap;
         impl_->varsCacheEnv = active;
         impl_->varsCacheEpoch = epoch;
         impl_->varsCacheValid = true;
     }
-    return vars;
+    return snap;
+}
+
+std::map<std::string, std::string> Engine::activeVars() const {
+    return *activeVarsSnapshot();   // public API: one copy (callers that need a mutable map)
 }
 
 std::vector<std::pair<std::string, std::string>> Engine::activeVarsOrdered() const {
@@ -277,7 +337,8 @@ static void applyRequestConfig(RequestModel& m) {
 }
 
 ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
-    auto vars = activeVars();
+    auto varsPtr = activeVarsSnapshot();   // shared snapshot, no per-send map copy (M2)
+    const auto& vars = *varsPtr;
     ResolvedRequest rr;
     rr.model = model;
 
@@ -330,7 +391,8 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
 }
 
 std::vector<std::string> Engine::missingVars(const RequestModel& model) const {
-    auto vars = activeVars();
+    auto varsPtr = activeVarsSnapshot();   // shared snapshot (M2)
+    const auto& vars = *varsPtr;
     std::vector<std::string> miss;
     std::set<std::string> seen;
     auto scan = [&](const std::string& s) {
@@ -420,7 +482,7 @@ std::vector<GrpcMethodInfo> Engine::listGrpcMethods(const GrpcRequest& grpc,
     return grpcdesc::listMethods(ctx);
 }
 
-RequestHandle Engine::send(const RequestModel& model, IUiDelegate* delegate) {
+RequestHandle Engine::send(const RequestModel& model, std::shared_ptr<IUiDelegate> delegate) {
     RequestHandle handle = impl_->nextHandle.fetch_add(1);
     auto cancel = std::make_shared<CancelToken>();
     auto inflight = impl_->inflight; // shared_ptr — worker keeps its own reference
@@ -450,8 +512,10 @@ RequestHandle Engine::send(const RequestModel& model, IUiDelegate* delegate) {
         immediateError = std::make_shared<ApiError>(ApiError{ErrorKind::Unknown, e.what()});
     }
 
-    // Worker only touches captured vars (sender stays alive via pool-destroyed-first; inflight is a shared_ptr).
-    impl_->pool.submit([handle, delegate, cancel, inflight, sender, rr, immediateError]() {
+    // Worker only touches captured vars: the delegate is held by shared_ptr (C1 — stays alive across the
+    // whole call even if the owning window closes), inflight is a shared_ptr, the sender outlives the worker
+    // (drained/joined in ~Impl before the registry destructs).
+    auto task = [handle, delegate, cancel, inflight, sender, rr, immediateError]() {
         if (delegate) {
             if (immediateError) {
                 delegate->onError(handle, *immediateError);
@@ -465,7 +529,10 @@ RequestHandle Engine::send(const RequestModel& model, IUiDelegate* delegate) {
         }
         std::lock_guard<std::mutex> lk(inflight->mu);
         inflight->map.erase(handle);
-    });
+    };
+    // Prefer the bounded pool; if it's full (or shutting down) fall back to a dedicated tracked thread so
+    // the send still runs and stays drainable at shutdown.
+    if (!impl_->pool.submit(task)) impl_->spawnTracked(std::move(task));
     return handle;
 }
 
@@ -499,7 +566,7 @@ InteractionKind Engine::interactionOf(const RequestModel& model) const {
     return InteractionKind::Unary;
 }
 
-StreamHandle Engine::openStream(const RequestModel& model, IStreamSink* sink) {
+StreamHandle Engine::openStream(const RequestModel& model, std::shared_ptr<IStreamSink> sink) {
     StreamHandle h;
     if (!sink) return h;
     h.streamId = "stream-" + std::to_string(impl_->nextStreamId.fetch_add(1));
@@ -528,11 +595,14 @@ StreamHandle Engine::openStream(const RequestModel& model, IStreamSink* sink) {
     }
 
     const std::string sid = h.streamId;
-    impl_->pool.submit([sid, sink, cancel, streams, sender, rr, immediateError]() {
+    const StreamTransport transport = transportOf(model.type);   // M8: report the real transport, not always gRPC
+    // Streams run on a DEDICATED thread (H1b): a long stream no longer pins a pool worker, and the sink is
+    // held by shared_ptr (C1) so it can't be freed under the worker. Drained at shutdown (M6).
+    auto task = [sid, sink, cancel, streams, sender, rr, immediateError, transport]() {
         try {
             if (immediateError) {
                 // Honor the §3 contract even on a setup failure: open then close(Error).
-                sink->onStreamOpen(StreamMeta{sid, StreamTransport::Grpc, {}, 0});
+                sink->onStreamOpen(StreamMeta{sid, transport, {}, 0});
                 StreamEnd end;
                 end.status = StreamStatus::Error;
                 end.statusMessage = *immediateError;
@@ -548,7 +618,15 @@ StreamHandle Engine::openStream(const RequestModel& model, IStreamSink* sink) {
         }
         std::lock_guard<std::mutex> lk(streams->mu);
         streams->map.erase(sid);
-    });
+    };
+    if (!impl_->spawnTracked(std::move(task))) {
+        // Shutting down — honor the §3 contract synchronously so the caller still sees open+close.
+        sink->onStreamOpen(StreamMeta{sid, transport, {}, 0});
+        StreamEnd end; end.status = StreamStatus::Error; end.statusMessage = "engine shutting down";
+        sink->onStreamClose(end);
+        std::lock_guard<std::mutex> lk(streams->mu);
+        streams->map.erase(sid);
+    }
     return h;
 }
 
@@ -562,7 +640,7 @@ void Engine::cancelStream(const StreamHandle& h) {
 
 // --- Duplex session (SPEC_websocket §4) ---
 
-SessionHandle Engine::openSession(const RequestModel& model, IStreamSink* inbound) {
+SessionHandle Engine::openSession(const RequestModel& model, std::shared_ptr<IStreamSink> inbound) {
     SessionHandle h;
     if (!inbound) return h;
 
@@ -595,7 +673,9 @@ SessionHandle Engine::openSession(const RequestModel& model, IStreamSink* inboun
     }
 
     const std::string sid = h.sessionId;
-    impl_->pool.submit([rr, inbound, session, sid, sessions, immediateError]() {
+    // Sessions run on a DEDICATED thread (H1b) and the sink is held by shared_ptr (C1). On shutdown ~Impl
+    // calls wsRequestClose on every live session then drains these threads (H2/M6).
+    auto task = [rr, inbound, session, sid, sessions, immediateError]() {
         try {
             if (immediateError) {
                 inbound->onStreamOpen(StreamMeta{sid, StreamTransport::WebSocket, {}, 0});
@@ -614,7 +694,14 @@ SessionHandle Engine::openSession(const RequestModel& model, IStreamSink* inboun
         }
         std::lock_guard<std::mutex> lk(sessions->mu);
         sessions->map.erase(sid);
-    });
+    };
+    if (!impl_->spawnTracked(std::move(task))) {
+        inbound->onStreamOpen(StreamMeta{sid, StreamTransport::WebSocket, {}, 0});
+        StreamEnd end; end.status = StreamStatus::Error; end.statusMessage = "engine shutting down";
+        inbound->onStreamClose(end);
+        std::lock_guard<std::mutex> lk(sessions->mu);
+        sessions->map.erase(sid);
+    }
     return h;
 }
 
@@ -633,17 +720,21 @@ void Engine::closeSession(const SessionHandle& h, int code, const std::string& r
 // --- Response cache ---
 // Common pattern: copy the cache shared_ptr OUTSIDE the lock (hold cacheMu only in the braces), then do I/O
 // on the copy. The old cache instance lives until all shared_ptrs are released -> concurrent rebuild is safe (§1.3).
-void Engine::putResponse(const std::string& id, const ApiResponse& resp) {
+void Engine::putResponse(const std::string& id, ApiResponse&& resp) {
     if (id.empty()) return;
     std::shared_ptr<ResponseCache> c;
     { std::lock_guard<std::mutex> lk(impl_->cacheMu); c = impl_->cache; }
     if (!c) return;
     ResponseRecord rec;
     rec.isError = false;
-    rec.response = resp;
+    rec.requestRevision = revisionOf(resp.resolvedRequestDump);   // read before the move
+    rec.response = std::move(resp);                               // move the (possibly large) body (M3)
     rec.receivedAt = nowEpochMs();
-    rec.requestRevision = revisionOf(resp.resolvedRequestDump);
     c->put(id, std::move(rec));
+}
+
+void Engine::putResponse(const std::string& id, const ApiResponse& resp) {
+    putResponse(id, ApiResponse(resp));   // single copy here; the move overload owns the hot path
 }
 
 void Engine::putError(const std::string& id, const ApiError& err) {
@@ -686,12 +777,20 @@ void Engine::reloadCacheConfig() {
             c = impl_->cache;            // copy the pointer; call onConfigChanged OUTSIDE the lock (disk evict)
         }
     }
+    // M5: onConfigChanged (cap + threshold) runs OUTSIDE the lock on purpose — it does disk eviction and
+    // must not hold cacheMu across I/O. The brief window where a get/put sees the new threshold but the
+    // driver still has the old cap is benign (eventual consistency) and accepted.
     if (c) { c->onConfigChanged(fresh); return; }
     // Toggle cache or change persist (attach/detach L2) -> rebuild.
     impl_->rebuildCache();
 }
 
-const CacheConfig& Engine::cacheConfig() const { return impl_->cacheCfg; }
+CacheConfig Engine::cacheConfig() const {
+    // Return BY VALUE under the lock (M4): handing out a reference let a concurrent reloadCacheConfig/
+    // rebuildCache mutation tear the struct under a reader.
+    std::lock_guard<std::mutex> lk(impl_->cacheMu);
+    return impl_->cacheCfg;
+}
 ResponseCache* Engine::responseCache() { return impl_->cache.get(); }
 
 // Import: pure (stateless) importers -> just delegate. Does NOT write files (UI creates via CollectionStore).

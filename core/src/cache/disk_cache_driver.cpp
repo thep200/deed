@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -24,12 +26,19 @@ const int kIndexFlushEvery = 8;
 
 std::string DiskCacheDriver::safeId(const std::string& id) {
     std::string out;
-    out.reserve(id.size());
+    out.reserve(id.size() + 17);
     for (unsigned char c : id) {
         if (std::isalnum(c) || c == '_' || c == '-') out += static_cast<char>(c);
         else out += '_';
     }
     if (out.empty()) out = "_";
+    // L5: append a short hash of the ORIGINAL id so ids that sanitize to the same string (e.g. "a/b",
+    // "a_b", "a b" all -> "a_b") map to DIFFERENT files instead of silently overwriting each other.
+    char buf[17];
+    std::snprintf(buf, sizeof(buf), "%016llx",
+                  static_cast<unsigned long long>(std::hash<std::string>{}(id)));
+    out += '-';
+    out += buf;
     return out;
 }
 
@@ -63,8 +72,8 @@ void DiskCacheDriver::loadIndex() {
             ie.bytes = e.value("bytes", (std::uint64_t)0);
             ie.receivedAt = e.value("receivedAt", (std::int64_t)0);
             ie.atime = e.value("atime", (std::int64_t)0);
-            // Skip entries whose file has vanished (stay in sync with disk).
-            if (!fs::exists(fileFor(id))) continue;
+            // L7: trust the index — don't stat every entry at startup (O(n) syscalls). A missing file
+            // self-heals lazily in get() (readFile fails -> entry dropped), so a stale entry is harmless.
             used_ += ie.bytes;
             index_[id] = ie;
         }
@@ -188,14 +197,14 @@ void DiskCacheDriver::clear() {
     index_.clear();
     lru_.clear();
     used_ = 0;
-    persistIndex();
+    dirty_ = true; unflushed_ = 0;   // H9: defer the index write (files already removed; dtor flushes)
 }
 
 void DiskCacheDriver::setCapBytes(std::uint64_t cap) {
     std::lock_guard<std::mutex> lk(mu_);
     cap_ = cap;
-    evictToFit();
-    persistIndex();
+    evictToFit();                    // eviction removes files immediately; the index write can batch
+    dirty_ = true;                   // H9: don't force a full index rewrite on every cap change (dtor flushes)
 }
 
 std::uint64_t DiskCacheDriver::usedBytes() const {

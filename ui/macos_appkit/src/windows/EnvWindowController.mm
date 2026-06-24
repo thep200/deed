@@ -233,9 +233,13 @@ static NSString *Key(NSString *env, NSString *alias) {
     NSWindow *win = _grid.window;
     if (!win) return;
     NSString *msg = [NSString stringWithFormat:StrFmtVarRenamed, oldAlias];
+    NSView *cv = win.contentView;
+    // L4: cap the toast stack — drop any existing toast before adding a new one (rapid alias renames must
+    // not pile up dozens of overlapping subviews).
+    for (NSView *sub in [cv.subviews copy])
+        if ([sub isKindOfClass:[OS9Toast class]]) [sub removeFromSuperview];
     OS9Toast *t = [[OS9Toast alloc] initWithMessage:msg kind:0];
     NSSize sz = [OS9Toast sizeForMessage:msg];
-    NSView *cv = win.contentView;
     t.frame = NSMakeRect((cv.bounds.size.width - sz.width) / 2, 24, sz.width, sz.height);
     t.autoresizingMask = NSViewMinXMargin | NSViewMaxXMargin | NSViewMaxYMargin;
     __weak OS9Toast *wt = t;

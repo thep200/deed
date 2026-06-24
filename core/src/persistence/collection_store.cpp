@@ -94,7 +94,7 @@ TreeNode buildRequestLeaf(const fs::path& fullPath, const std::string& relPath) 
         if (leaf.id.empty()) {                // OLD file with no id in name -> read once for content id
             std::string txt;
             if (fsutil::readFile(fullPath.string(), txt)) {
-                try { leaf.id = codec::json::parse(txt).value("id", std::string()); } catch (...) {}
+                try { leaf.id = codec::parseGuarded(txt).value("id", std::string()); } catch (...) {}
             }
         }
         return leaf;
@@ -105,7 +105,7 @@ TreeNode buildRequestLeaf(const fs::path& fullPath, const std::string& relPath) 
     std::string txt;
     if (fsutil::readFile(fullPath.string(), txt)) {
         try {
-            auto j = codec::json::parse(txt);
+            auto j = codec::parseGuarded(txt);
             if (j.contains("name") && j["name"].is_string())
                 leaf.name = j["name"].get<std::string>();
             leaf.id = j.value("id", std::string());
@@ -181,7 +181,7 @@ RequestModel CollectionStore::loadRequest(const std::string& relPath) const {
     std::string txt;
     if (!fsutil::readFile(fsutil::join(root_, relPath), txt))
         throw std::runtime_error("cannot read request: " + relPath);
-    RequestModel m = codec::requestFromJson(codec::json::parse(txt));
+    RequestModel m = codec::requestFromJson(codec::parseGuarded(txt));
     // id must be valid to embed in the FILENAME ([a-z0-9], no '_'). Empty/legacy "req_..." content
     // -> do NOT write to disk here (loadRequest is a pure READ — avoid write-storm on open/browse).
     // Prefer the id FROM THE FILENAME (stable after migrateAddIdToFilenames); only generate a temp
@@ -214,7 +214,7 @@ void CollectionStore::buildIdIndexLocked() const {
                 if (id.empty()) {                    // legacy file with no id in name -> read content
                     std::string txt;
                     if (fsutil::readFile(e.path().string(), txt)) {
-                        try { id = codec::json::parse(txt).value("id", std::string()); } catch (...) {}
+                        try { id = codec::parseGuarded(txt).value("id", std::string()); } catch (...) {}
                     }
                 }
                 if (!id.empty()) idIndex_.emplace(id, childRel);  // first id wins (stable)

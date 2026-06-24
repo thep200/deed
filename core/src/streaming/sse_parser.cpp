@@ -40,6 +40,18 @@ void SseParser::feed(const char* data, std::size_t n, const Emit& emit) {
     buf_.erase(0, lineStart);
 }
 
+void SseParser::finish(const Emit& emit) {
+    // EOF: process whatever is left as the final line (M12). feed() defers a trailing '\r' (it could be the
+    // CR of a CRLF split across chunks) — at a clean EOF that ambiguity is resolved, so strip it and emit.
+    if (!buf_.empty()) {
+        std::string line = buf_;
+        if (line.back() == '\r') line.pop_back();
+        if (!line.empty()) onLine(line, emit);
+        buf_.clear();
+    }
+    dispatch(emit);   // flush a final event that had no terminating blank line
+}
+
 void SseParser::onLine(const std::string& line, const Emit& emit) {
     if (line.empty()) { dispatch(emit); return; }   // blank line -> dispatch
     if (line[0] == ':') return;                      // comment / heartbeat -> ignore (idle reset is upstream)
@@ -72,7 +84,12 @@ void SseParser::onLine(const std::string& line, const Emit& emit) {
     } else if (field == "retry") {
         bool allDigit = !value.empty();
         for (char c : value) if (c < '0' || c > '9') { allDigit = false; break; }
-        if (allDigit) { try { retryMs_ = std::stol(value); } catch (...) {} }
+        // Clamp to a sane ceiling (M11): a hostile/huge `retry:` must not make the I/O thread sleep for
+        // days (cancel latency) — overflow from stol also lands on the max.
+        if (allDigit) {
+            try { long v = std::stol(value); retryMs_ = v < 0 ? 0 : (v > 60000 ? 60000 : v); }
+            catch (...) { retryMs_ = 60000; }
+        }
     }
     // unknown field -> ignore (spec)
 }

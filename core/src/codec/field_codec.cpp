@@ -2,6 +2,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "codec/json_codec.hpp"
+
 using json = nlohmann::json;
 
 namespace core::fieldcodec {
@@ -29,7 +31,7 @@ std::string keyValuesToJson(const std::vector<KeyValue>& kvs) {
 
 bool jsonToKeyValues(const std::string& text, std::vector<KeyValue>& out, std::string& err) {
     try {
-        auto j = json::parse(text.empty() ? "[]" : text);
+        auto j = core::codec::parseGuarded(text.empty() ? "[]" : text);
         if (!j.is_array()) { err = "must be a JSON array"; return false; }
         out.clear();
         for (const auto& e : j) {
@@ -67,7 +69,7 @@ std::string bodyToJson(const Body& b) {
 
 bool jsonToBody(const std::string& text, Body& b, std::string& err) {
     try {
-        auto j = json::parse(text.empty() ? "{\"mode\":\"none\"}" : text);
+        auto j = core::codec::parseGuarded(text.empty() ? "{\"mode\":\"none\"}" : text);
         if (!j.is_object()) { err = "must be a JSON object"; return false; }
         b = Body{};
         b.mode = gs(j, "mode", "none");
@@ -107,7 +109,7 @@ std::string authToJson(const Auth& a) {
 
 bool jsonToAuth(const std::string& text, Auth& a, std::string& err) {
     try {
-        auto j = json::parse(text.empty() ? "{\"type\":\"none\"}" : text);
+        auto j = core::codec::parseGuarded(text.empty() ? "{\"type\":\"none\"}" : text);
         if (!j.is_object()) { err = "must be a JSON object"; return false; }
         a = Auth{};
         a.type = gs(j, "type", "none");
@@ -133,7 +135,7 @@ std::string configToJson(const RequestConfig& c) {
 
 bool jsonToConfig(const std::string& text, RequestConfig& c, std::string& err) {
     try {
-        auto j = json::parse(text.empty() ? "{}" : text);
+        auto j = core::codec::parseGuarded(text.empty() ? "{}" : text);
         if (!j.is_object()) { err = "must be a JSON object"; return false; }
         RequestConfig def;
         if (auto it = j.find("timeout_ms"); it != j.end() && it->is_number())
@@ -147,7 +149,7 @@ bool jsonToConfig(const std::string& text, RequestConfig& c, std::string& err) {
 
 std::string formatJson(const std::string& text, bool pretty) {
     try {
-        auto j = json::parse(text);
+        auto j = core::codec::parseGuarded(text);
         return pretty ? j.dump(2) : j.dump();
     } catch (...) {
         return text; // not JSON -> leave unchanged
@@ -161,7 +163,7 @@ std::string jsonEncodeString(const std::string& text) {
 
 std::string jsonDecodeString(const std::string& text) {
     try {
-        auto j = json::parse(text);
+        auto j = core::codec::parseGuarded(text);
         if (j.is_string()) return j.get<std::string>();
         return text;
     } catch (...) {
