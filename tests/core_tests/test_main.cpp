@@ -477,6 +477,21 @@ static void test_engine(const std::string& root) {
     CHECK(applied2.empty(), "aliasify is idempotent");
     CHECK_EQ(ax2.http.url, std::string("{{baseUrl}}/users"), "url stable on second pass");
 
+    // aliasify also covers WebSocket + GraphQL (import alias-replace) — env baseUrl=http://global active.
+    RequestModel wq; wq.type = RequestType::WebSocket;
+    wq.ws.url = "http://global/socket";
+    wq.ws.auth.type = "bearer"; wq.ws.auth.bearerToken = "http://global";   // whole-value match
+    RequestModel wqx = engine.aliasifyModel(wq);
+    CHECK_EQ(wqx.ws.url, std::string("{{baseUrl}}/socket"), "ws url aliasified");
+    CHECK_EQ(wqx.ws.auth.bearerToken, std::string("{{baseUrl}}"), "ws auth aliasified");
+
+    RequestModel gq; gq.type = RequestType::GraphQL;
+    gq.graphql.url = "http://global/graphql";
+    gq.graphql.headers.push_back({"X-Base", "http://global", true});
+    RequestModel gqx = engine.aliasifyModel(gq);
+    CHECK_EQ(gqx.graphql.url, std::string("{{baseUrl}}/graphql"), "graphql url aliasified");
+    CHECK_EQ(gqx.graphql.headers[0].value, std::string("{{baseUrl}}"), "graphql header aliasified");
+
     // env definition order decides the alias on duplicate values: "zdup" is defined BEFORE "adup"
     // (sorts later) -> the first-defined key wins, not the lexicographically smallest.
     Environment go; go.name = "Global";
@@ -645,7 +660,6 @@ static void test_app_config_defaults(const std::string& root) {
     ec.collectionRoot = (fs::path(root) / "defs_root").string();
     ec.appConfigPath = cfgPath;
     ec.appDefaults.defaultTimeoutMs = 12345;
-    ec.appDefaults.verifyTls = false;
     ec.appDefaults.fontName = "Courier";
     ec.appDefaults.fontSize = 17;
     ec.appDefaults.ramCacheSizeMb = 33;
@@ -657,7 +671,6 @@ static void test_app_config_defaults(const std::string& root) {
     // No config.json yet -> load returns defaults (.env).
     AppConfig c = eng.appConfig().load();
     CHECK_EQ(c.defaultTimeoutMs, 12345, "default_timeout_ms from .env when no config");
-    CHECK(!c.verifyTls, "verify_tls default from .env");
     CHECK_EQ(c.fontName, std::string("Courier"), "font_name default from .env");
     CHECK_EQ(c.fontSize, 17, "font_size default from .env");
     CHECK_EQ(c.ramCacheSizeMb, 33, "ram_cache_size default from .env");
@@ -711,15 +724,17 @@ static void test_importers() {
                       "localhost:50051 user.v1.UserService/GetUser");
     CHECK(gr.ok, "parse grpcurl ok");
     CHECK_EQ(gr.model.grpc.target, std::string("localhost:50051"), "target");
-    CHECK_EQ(gr.model.grpc.service, std::string("user.v1.UserService"), "service");
-    CHECK_EQ(gr.model.grpc.method, std::string("GetUser"), "method");
+    // Import intentionally SKIPS the RPC (Service/Method) — only target/message/metadata/tls are imported.
+    CHECK(gr.model.grpc.service.empty(), "service skipped on import");
+    CHECK(gr.model.grpc.method.empty(), "method skipped on import");
     CHECK_EQ(gr.model.grpc.tls.enabled, false, "-plaintext -> tls off");
     CHECK_EQ(gr.model.grpc.metadata.size(), size_t(1), "1 metadata");
 
     auto gr2 = g.parse("grpcs://localhost:50051/pkg.Service/Method");
     CHECK(gr2.ok, "parse compact string ok");
     CHECK_EQ(gr2.model.grpc.tls.enabled, true, "grpcs -> tls on");
-    CHECK_EQ(gr2.model.grpc.service, std::string("pkg.Service"), "service from compact string");
+    CHECK_EQ(gr2.model.grpc.target, std::string("localhost:50051"), "target from compact string");
+    CHECK(gr2.model.grpc.service.empty(), "compact: service skipped on import");
 }
 
 static void test_field_codec() {

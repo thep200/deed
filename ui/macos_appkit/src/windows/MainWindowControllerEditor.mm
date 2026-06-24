@@ -130,12 +130,14 @@
         // Message tab = the frame to send (persisted as onOpenSend[0]); Headers tab = handshake headers.
         [_reqBuffers addObject:N(w.onOpenSend.empty() ? std::string() : w.onOpenSend[0])];  // 0 = Message
         [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(w.headers))];                   // 1 = Headers
+        [_reqBuffers addObject:N(fieldcodec::authToJson(w.auth))];                           // 2 = Auth
         _urlField.stringValue = N(w.url); _urlPrevLen = _urlField.stringValue.length;
     } else if (_model.type == RequestType::GraphQL) {
         const GraphQlRequest &g = _model.graphql;
         [_reqBuffers addObject:N(g.query)];                                          // 0 = Query document
         [_reqBuffers addObject:N(g.variablesJson.empty() ? "{}" : g.variablesJson)]; // 1 = Variables (JSON)
         [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(g.headers))];           // 2 = Headers
+        [_reqBuffers addObject:N(fieldcodec::authToJson(g.auth))];                   // 3 = Auth
         _urlField.stringValue = N(g.url); _urlPrevLen = _urlField.stringValue.length;
     } else {
         const GrpcRequest &g = _model.grpc;
@@ -201,12 +203,14 @@
         w.onOpenSend.clear();
         if (!frame.empty()) w.onOpenSend.push_back(frame);   // sent on connect; also the Send-frame source
         if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[1]), w.headers, err)) return fail(1, err);
+        if (!fieldcodec::jsonToAuth(S(_reqBuffers[2]), w.auth, err)) return fail(2, err);
     } else if (_model.type == RequestType::GraphQL) {
         GraphQlRequest &g = _model.graphql;
         g.url = _urlField.stringValue.UTF8String;
         g.query = S(_reqBuffers[0]);
         g.variablesJson = S(_reqBuffers[1]);                 // free-form JSON (validated at send by core)
         if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[2]), g.headers, err)) return fail(2, err);
+        if (!fieldcodec::jsonToAuth(S(_reqBuffers[3]), g.auth, err)) return fail(3, err);
     } else {
         GrpcRequest &g = _model.grpc;
         g.target = _urlField.stringValue.UTF8String;
@@ -462,33 +466,44 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     NSUInteger prev = _urlPrevLen;
     _urlPrevLen = len;
     if (!_engine || len < prev + 8) return;            // not a paste -> ignore
-    BOOL isCurl = _engine->looksLikeCurl(text.UTF8String);
-    BOOL isGrpc = !isCurl && _engine->looksLikeGrpcurl(text.UTF8String);
-    if (!isCurl && !isGrpc) return;
-    // cURL: auto-import + create request immediately (toast only, NO popup). grpcurl: still confirm via popup.
+    // GraphQL first (it also recognizes a cURL whose body is a GraphQL document), then cURL, then grpcurl.
+    BOOL isGraphql = _engine->looksLikeGraphql(text.UTF8String);
+    BOOL isCurl = !isGraphql && _engine->looksLikeCurl(text.UTF8String);
+    BOOL isGrpc = !isGraphql && !isCurl && _engine->looksLikeGrpcurl(text.UTF8String);
+    if (!isGraphql && !isCurl && !isGrpc) return;
+    // cURL + grpcurl: auto-import immediately (toast, NO popup). GraphQL: confirm via popup first.
     // Defer: avoid processing RIGHT inside the text-change callback (the field editor is busy).
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (isCurl) [self importNow:text grpc:NO];
-        else        [self offerImport:text grpc:YES];
+        if (isCurl) [self importNow:text kind:0];
+        else if (isGrpc) [self importNow:text kind:1];
+        else [self offerImport:text kind:2];
     });
 }
 
+// Run the importer for `kind` (0=cURL, 1=grpcurl, 2=GraphQL).
+static core::ImportResult GqlRunImport(core::Engine *e, NSInteger kind, const char *t) {
+    if (kind == 1) return e->importFromGrpc(t);
+    if (kind == 2) return e->importFromGraphql(t);
+    return e->importFromCurl(t);
+}
+static NSString *GqlImportLabel(NSInteger kind) {
+    return kind == 1 ? @"grpcurl" : kind == 2 ? @"GraphQL" : @"cURL";
+}
+
 // Import + create request immediately, no prompt; report result via toast.
-// §A3: parse curl/grpcurl (possibly large) in BACKGROUND -> doesn't block main; marshal result to main.
-- (void)importNow:(NSString *)text grpc:(BOOL)isGrpc {
+// §A3: parse (possibly large) in BACKGROUND -> doesn't block main; marshal result to main.
+- (void)importNow:(NSString *)text kind:(NSInteger)kind {
     if (!_engine) return;
     NSString *t = [text copy];
     __weak MainWindowController *ws = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         MainWindowController *s = ws; if (!s || !s->_engine) return;
-        core::ImportResult r = isGrpc ? s->_engine->importFromGrpc(t.UTF8String)
-                                      : s->_engine->importFromCurl(t.UTF8String);
-        __block core::ImportResult rb = std::move(r);
+        __block core::ImportResult rb = GqlRunImport(s->_engine.get(), kind, t.UTF8String);
         dispatch_async(dispatch_get_main_queue(), ^{
             MainWindowController *s2 = ws; if (!s2) return;
             if (!rb.ok) {
                 [s2 toastWarn:[NSString stringWithFormat:StrFmtToastImportFailed,
-                               isGrpc ? @"grpcurl" : @"cURL", rb.error.c_str()]];
+                               GqlImportLabel(kind), rb.error.c_str()]];
                 [s2 restoreUrlField];
                 return;
             }
@@ -499,26 +514,24 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 
 // Show a confirmation preview; if OK -> create a new request in the tree + open the editor.
 // §A3: parse in BACKGROUND; dialog + applyImport on main.
-- (void)offerImport:(NSString *)text grpc:(BOOL)isGrpc {
+- (void)offerImport:(NSString *)text kind:(NSInteger)kind {
     if (!_engine) return;
     NSString *t = [text copy];
     __weak MainWindowController *ws = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         MainWindowController *s = ws; if (!s || !s->_engine) return;
-        core::ImportResult r = isGrpc ? s->_engine->importFromGrpc(t.UTF8String)
-                                      : s->_engine->importFromCurl(t.UTF8String);
-        __block core::ImportResult rb = std::move(r);
+        __block core::ImportResult rb = GqlRunImport(s->_engine.get(), kind, t.UTF8String);
         dispatch_async(dispatch_get_main_queue(), ^{
             MainWindowController *s2 = ws; if (!s2) return;
             if (!rb.ok) {
                 [s2 toastWarn:[NSString stringWithFormat:StrFmtToastImportFailed,
-                               isGrpc ? @"grpcurl" : @"cURL", rb.error.c_str()]];
+                               GqlImportLabel(kind), rb.error.c_str()]];
                 return;
             }
             NSString *primary = s2->_hasRequest ? StrBtnReplaceCurrent : StrBtnCreateRequest;
-            NSString *body = [NSString stringWithFormat:@"%@\n\n%@",
-                              isGrpc ? StrGrpcurlDetected : StrCurlDetected,
-                              [s2 importSummary:rb.model unknown:rb.unknown grpc:isGrpc]];
+            NSString *detected = kind == 1 ? StrGrpcurlDetected : kind == 2 ? StrGraphqlDetected : StrCurlDetected;
+            NSString *body = [NSString stringWithFormat:@"%@\n\n%@", detected,
+                              [s2 importSummary:rb.model unknown:rb.unknown kind:kind]];
             NSInteger choice = [OS9Dialog confirmWithTitle:StrDlgImportTitle
                                                    message:body
                                                    buttons:@[ StrCancel, primary ]
@@ -531,12 +544,20 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     });
 }
 
-- (NSString *)importSummary:(const core::RequestModel &)m unknown:(const std::vector<std::string> &)unknown grpc:(BOOL)isGrpc {
+- (NSString *)importSummary:(const core::RequestModel &)m unknown:(const std::vector<std::string> &)unknown kind:(NSInteger)kind {
     NSMutableString *s = [NSMutableString string];
-    if (isGrpc) {
+    if (kind == 2) {
+        const core::GraphQlRequest &g = m.graphql;
+        if (!g.url.empty()) [s appendFormat:@"endpoint: %s\n", g.url.c_str()];
+        NSString *firstLine = [N(g.query) componentsSeparatedByString:@"\n"].firstObject ?: @"";
+        [s appendFormat:@"%@\n", firstLine];
+        [s appendFormat:@"headers: %lu · auth: %s", (unsigned long)g.headers.size(), g.auth.type.c_str()];
+    } else if (kind == 1) {
         const core::GrpcRequest &g = m.grpc;
         [s appendFormat:@"target: %s\n", g.target.c_str()];
-        [s appendFormat:@"%s / %s\n", g.service.c_str(), g.method.c_str()];
+        [s appendFormat:@"%s / %s\n",
+            g.service.empty() ? "(pick RPC)" : g.service.c_str(),
+            g.method.empty() ? "" : g.method.c_str()];
         [s appendFormat:@"TLS: %@ · metadata: %lu · proto: %s",
             g.tls.enabled ? @"secure" : @"plaintext",
             (unsigned long)g.metadata.size(), g.protoSource.mode.c_str()];
@@ -557,6 +578,8 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 - (NSString *)deriveImportName:(const core::RequestModel &)m {
     if (m.type == core::RequestType::Grpc)
         return m.grpc.method.empty() ? StrImportedGrpc : N(m.grpc.method);
+    if (m.type == core::RequestType::GraphQL)
+        return m.graphql.operationName.empty() ? N(m.name) : N(m.graphql.operationName);
     NSString *url = N(m.http.url);
     NSString *path = url;
     NSRange q = [path rangeOfString:@"?"]; if (q.location != NSNotFound) path = [path substringToIndex:q.location];

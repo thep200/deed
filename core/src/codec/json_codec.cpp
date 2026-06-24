@@ -225,6 +225,7 @@ json wsToJson(const WsRequest& w) {
     j["subprotocols"] = w.subprotocols;
     j["onOpenSend"] = w.onOpenSend;
     j["defaultSendKind"] = (w.defaultSendKind == WsSendKind::Binary) ? "binary" : "text";
+    j["auth"] = authToJson(w.auth);
     return j;
 }
 
@@ -239,6 +240,7 @@ WsRequest wsFrom(const json& j) {
         for (const auto& e : *it) if (e.is_string()) w.onOpenSend.push_back(e.get<std::string>());
     w.defaultSendKind = (getStr(j, "defaultSendKind", "text") == "binary") ? WsSendKind::Binary
                                                                            : WsSendKind::Text;
+    if (auto it = j.find("auth"); it != j.end()) w.auth = authFrom(*it);
     return w;
 }
 
@@ -263,6 +265,7 @@ json gqlToJson(const GraphQlRequest& g) {
     if (!g.connectionInitPayloadJson.empty()) j["connectionInitPayload"] = g.connectionInitPayloadJson;
     j["headers"] = kvArray(g.headers);
     if (g.useGetForQuery) j["useGetForQuery"] = true;
+    j["auth"] = authToJson(g.auth);
     return j;
 }
 GraphQlRequest gqlFrom(const json& j) {
@@ -283,6 +286,7 @@ GraphQlRequest gqlFrom(const json& j) {
     g.connectionInitPayloadJson = getStr(j, "connectionInitPayload");
     if (auto it = j.find("headers"); it != j.end()) g.headers = kvFrom(*it);
     g.useGetForQuery = getBool(j, "useGetForQuery", false);
+    if (auto it = j.find("auth"); it != j.end()) g.auth = authFrom(*it);
     return g;
 }
 
@@ -354,7 +358,6 @@ Environment envFromJson(const json& j) {
 // snake_case keys (app config). cacheResponses/cachePersist NOT exposed to user -> always default true.
 json toJson(const AppConfig& c) {
     return json{{"default_timeout_ms", c.defaultTimeoutMs},
-                {"verify_tls", c.verifyTls},
                 {"last_collection_root", c.lastCollectionRoot},
                 {"font_name", c.fontName},
                 {"font_size", c.fontSize},
@@ -373,17 +376,12 @@ std::string getStrCompat(const json& j, const char* snake, const char* camel,
     if (j.find(camel) != j.end()) return getStr(j, camel);
     return def;
 }
-bool getBoolCompat(const json& j, const char* snake, const char* camel, bool def) {
-    if (j.find(snake) != j.end()) return getBool(j, snake, def);
-    return getBool(j, camel, def);
-}
 } // namespace
 AppConfig appConfigFromJson(const json& j) { return appConfigFromJson(j, AppConfig{}); }
 
 AppConfig appConfigFromJson(const json& j, const AppConfig& def) {
     AppConfig c = def;   // missing key -> keep the default value (from .env)
     c.defaultTimeoutMs = getIntCompat(j, "default_timeout_ms", "defaultTimeoutMs", def.defaultTimeoutMs);
-    c.verifyTls = getBoolCompat(j, "verify_tls", "verifyTls", def.verifyTls);
     c.lastCollectionRoot = getStrCompat(j, "last_collection_root", "lastCollectionRoot", def.lastCollectionRoot);
     c.fontName = getStrCompat(j, "font_name", "fontName", def.fontName);
     c.fontSize = getIntCompat(j, "font_size", "fontSize", def.fontSize);

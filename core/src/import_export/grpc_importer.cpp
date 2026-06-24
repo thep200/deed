@@ -19,15 +19,6 @@ std::string lower(std::string s) {
     return s;
 }
 
-// Split "pkg.Service/Method" -> service, method.
-bool splitServiceMethod(const std::string& sm, std::string& service, std::string& method) {
-    size_t slash = sm.rfind('/');
-    if (slash == std::string::npos || slash == 0 || slash + 1 >= sm.size()) return false;
-    service = sm.substr(0, slash);
-    method = sm.substr(slash + 1);
-    return true;
-}
-
 } // namespace
 
 bool GrpcImporter::canHandle(const std::string& input) const {
@@ -99,14 +90,9 @@ ImportResult GrpcImporter::parse(const std::string& input) const {
                 positionals.push_back(tk);
             }
         }
-        // positionals: host:port  pkg.Service/Method
+        // positionals: host:port  [pkg.Service/Method]. The RPC (Service/Method) is INTENTIONALLY skipped
+        // on import — we only import target/message/metadata/tls; the user picks the RPC from the dropdown.
         if (positionals.size() >= 1) g.target = positionals[0];
-        if (positionals.size() >= 2) {
-            if (!splitServiceMethod(positionals[1], g.service, g.method)) {
-                res.error = "cannot parse Service/Method from: " + positionals[1];
-                return res;
-            }
-        }
         g.tls.enabled = tlsSeen ? !plaintext : true; // grpcurl defaults to TLS unless -plaintext
         if (g.message.empty()) g.message = "{}";
     } else {
@@ -123,17 +109,12 @@ ImportResult GrpcImporter::parse(const std::string& input) const {
             res.error = "missing Service/Method (format host:port/pkg.Service/Method)";
             return res;
         }
-        g.target = s.substr(0, slash);
-        std::string sm = s.substr(slash + 1);
-        if (!splitServiceMethod(sm, g.service, g.method)) {
-            res.error = "cannot parse Service/Method from: " + sm;
-            return res;
-        }
+        g.target = s.substr(0, slash);   // host:port only; Service/Method skipped (picked after import)
         g.message = "{}";
     }
 
-    if (g.target.empty() || g.service.empty() || g.method.empty()) {
-        res.error = "missing target/service/method";
+    if (g.target.empty()) {   // only the target is required; Service/Method are picked after import
+        res.error = "missing target (host:port)";
         return res;
     }
     res.ok = true;

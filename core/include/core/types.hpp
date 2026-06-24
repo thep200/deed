@@ -58,6 +58,11 @@ struct Auth {
   std::string apikeyIn = "header"; // header | query
 };
 
+// Apply an Auth to a header list (bearer -> Authorization: Bearer; basic -> Authorization: Basic base64;
+// apikey "in header" -> the named header). Used by transports without per-message headers (WS / GraphQL
+// subscription handshake). apikey "in query" is left to the URL layer.
+void applyAuthHeaders(const Auth &auth, std::vector<KeyValue> &headers);
+
 struct HttpSettings {
   int timeoutMs = 30000;
   bool followRedirects = true;
@@ -214,6 +219,7 @@ struct WsRequest {
   std::vector<std::string> onOpenSend; // optional: messages to send right after
                                        // open (e.g. subscribe)
   WsSendKind defaultSendKind = WsSendKind::Text;
+  Auth auth; // applied to the handshake (Authorization header / apikey)
 };
 
 // ---- GraphQL (SPEC_graphql) — an application layer over HTTP (query/mutation)
@@ -247,6 +253,7 @@ struct GraphQlRequest {
 
   std::vector<KeyValue> headers; // reused HTTP headers (Authorization, …)
   bool useGetForQuery = false;   // optional GET for query
+  Auth auth; // applied to query/mutation (HTTP) and subscription handshake
 };
 
 // ---- Model of one request (envelope + per-type block) ----
@@ -361,7 +368,6 @@ struct Environment {
 // ---- App-global config (README §12.1) ----
 struct AppConfig {
   int defaultTimeoutMs = 30000;
-  bool verifyTls = true;
   std::string lastCollectionRoot; // most recently opened collection dir
                                   // (reopened at startup)
   std::string fontName; // display font (empty = default); from Settings

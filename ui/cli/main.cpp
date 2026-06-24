@@ -123,6 +123,7 @@ int usage() {
         "  apicli validate <jsonText>\n"
         "  apicli import-curl <curl command...>\n"
         "  apicli import-grpc <grpc spec...>\n"
+        "  apicli import-graphql <query | curl...>\n"
         "  apicli ws <url> [message]\n"
         "  apicli sse <url> [seconds]\n"
         "  apicli gql <url> <query...>\n";
@@ -255,6 +256,15 @@ int main(int argc, char** argv) {
             if (!r.ok) { std::cerr << "Import error: " << r.error << "\n"; return 1; }
             std::cout << "Imported gRPC OK: " << r.model.grpc.service << "/" << r.model.grpc.method
                       << " @ " << r.model.grpc.target << "\n";
+            return 0;
+        }
+        if (cmd == "import-graphql" && argc >= 3) {
+            GraphQlImporter imp;
+            auto r = imp.parse(joinArgs(argc, argv, 2));
+            if (!r.ok) { std::cerr << "Import error: " << r.error << "\n"; return 1; }
+            const GraphQlRequest& g = r.model.graphql;
+            std::cout << "Imported GraphQL OK: url=" << g.url << " op=" << (int)g.operation
+                      << " vars=" << g.variablesJson << " auth=" << g.auth.type << "\n  query: " << g.query << "\n";
             return 0;
         }
     } catch (const std::exception& e) {

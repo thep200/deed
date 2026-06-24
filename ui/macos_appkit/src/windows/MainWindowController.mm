@@ -244,6 +244,10 @@
                                                  target:self action:@selector(protoModeChanged:)];
     _protoPopup.toolTip = StrTipProtoSource;
 
+    // gRPC: retro slide switch to toggle TLS on/off for the connection before sending.
+    _tlsToggle = [[OS9Toggle alloc] initWithLabel:StrTls target:self action:@selector(toggleTls:)];
+    _tlsToggle.toolTip = StrTipGrpcTls;
+
     // gRPC: pick the service/RPC the server provides (placed before the Send button).
     _servicePopup = [[OS9PopupButton alloc] initWithItems:@[ StrNoRpc ]
                                                    target:self action:@selector(serviceMethodChanged:)];
@@ -279,7 +283,7 @@
     _urlField.delegate = self;   // controlTextDidChange: -> detect cURL/grpcurl paste
     [_urlInset addSubview:_urlField];
 
-    for (NSView *v in @[ _settingButton, _envButton, _sendButton, _cancelButton, _protoPopup, _servicePopup, _methodPopup, _urlInset ])
+    for (NSView *v in @[ _settingButton, _envButton, _sendButton, _cancelButton, _protoPopup, _servicePopup, _methodPopup, _tlsToggle, _urlInset ])
         [_mainPane addSubview:v];
 }
 
@@ -368,9 +372,12 @@
     _divTree.frame = NSMakeRect(divTreeX, statusY, dw, panesBottom - statusY);
     _divResp.frame = NSMakeRect(divRespX, panesY, dw, panesBottom - panesY);
 
-    // (3) LEFT pane GROUP = request tabs + cURL (same row, evenly spread) + editor
+    // (3) LEFT pane GROUP = request tabs + cURL (same row, evenly spread) + editor.
+    // WebSocket and GraphQL have no cURL equivalent -> hide the button for those types.
+    BOOL showCurl = (_model.type == core::RequestType::Http || _model.type == core::RequestType::Grpc);
+    _curlButton.hidden = !showCurl;
     NSMutableArray<OS9BevelButton *> *leftTabGroup = [_reqTabButtons mutableCopy];
-    if (_curlButton) [leftTabGroup addObject:_curlButton];
+    if (_curlButton && showCurl) [leftTabGroup addObject:_curlButton];
     [self layoutTabButtons:leftTabGroup atX:reqX y:top width:_reqW height:tabH extra:0];
     _reqInset.frame = NSMakeRect(reqX, panesY, _reqW, panesBottom - panesY);
     _reqText.frame = NSInsetRect(_reqInset.bounds, 2, 2);
@@ -393,7 +400,7 @@
     CGFloat wSetting = [cfg floatFor:@"BTN_SETTING_W" def:26];   // icon-only, compact -> gear hugs left edge
     CGFloat wEnv = [cfg floatFor:@"BTN_ENV_W" def:120];
     CGFloat wMethod = [cfg floatFor:@"BTN_METHOD_W" def:92];
-    CGFloat wProto = [cfg floatFor:@"BTN_PROTO_W" def:120];
+    CGFloat wProto = [cfg floatFor:@"BTN_PROTO_W" def:104];   // just wider than "Reflection"
     CGFloat wService = [cfg floatFor:@"BTN_SERVICE_W" def:200];
     CGFloat wSend = [cfg floatFor:@"BTN_SEND_W" def:54];
     CGFloat wCancel = [cfg floatFor:@"BTN_CANCEL_W" def:64];
@@ -409,6 +416,15 @@
     _protoPopup.hidden = !grpc;
     // WS/GraphQL have no leading popup; HTTP advances by method width, gRPC by proto width.
     x += (grpc ? wProto : (noPopup ? 0 : wMethod)) + 6;
+
+    // gRPC TLS slide switch (after the proto popup). Reflects the model's TLS state.
+    CGFloat wTls = [_tlsToggle preferredWidth];   // snug: knob just fits "TLS", no wide margin
+    _tlsToggle.hidden = !grpc;
+    if (grpc) {
+        _tlsToggle.on = _model.grpc.tls.enabled;
+        _tlsToggle.frame = NSMakeRect(x, ty, wTls, btnH);
+        x += wTls + 6;
+    }
 
     _cancelButton.hidden = !_sending;
     _servicePopup.hidden = !grpc;
@@ -458,13 +474,13 @@
         _reqTabTitles = @[ StrTabBody, StrTabQuery, StrTabHeaders, StrTabAuth ];  // "Query" (avoid confusion with path params); Body leftmost
         _respTabTitles = @[ StrTabResponse, StrTabHeaders, StrTabRequest, StrTabCookie ];
     } else if (t == core::RequestType::WebSocket) {
-        // WS: Message = frame to send (also auto-sent on connect); Headers = handshake headers.
+        // WS: Message = frame to send (also auto-sent on connect); Headers = handshake headers; Auth.
         // Response pane = the in/out frame log array (reuses the streaming render).
-        _reqTabTitles = @[ StrTabMessage, StrTabHeaders ];
+        _reqTabTitles = @[ StrTabMessage, StrTabHeaders, StrTabAuth ];
         _respTabTitles = @[ StrTabMessage, StrTabRequest ];
     } else if (t == core::RequestType::GraphQL) {
-        // GraphQL: Query document + Variables (JSON) + Headers. query/mutation -> normal response pane.
-        _reqTabTitles = @[ StrTabGqlQuery, StrTabVariables, StrTabHeaders ];
+        // GraphQL: Query document + Variables (JSON) + Headers + Auth. query/mutation -> normal response pane.
+        _reqTabTitles = @[ StrTabGqlQuery, StrTabVariables, StrTabHeaders, StrTabAuth ];
         _respTabTitles = @[ StrTabResponse, StrTabRequest ];
     } else {
         _reqTabTitles = @[ StrTabMessage, StrTabMetadata, StrTabAuth ];

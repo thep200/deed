@@ -45,6 +45,7 @@ add_library(core STATIC
   src/import_export/curl_importer.cpp
   src/import_export/curl_export.cpp
   src/import_export/grpc_importer.cpp
+  src/import_export/graphql_importer.cpp
   ${REFL_GEN_DIR}/reflection.pb.cc
   ${REFL_GEN_DIR}/reflection.grpc.pb.cc
 )

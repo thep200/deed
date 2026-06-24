@@ -38,6 +38,7 @@ NSString *const StrTipCurl = @"Copy current request as cURL";
 NSString *const StrTipSettings = @"Settings";
 NSString *const StrTipSend = @"Send  ⌘↩";
 NSString *const StrTipProtoSource = @"Proto source: Reflection (ask server) or load a .proto file";
+NSString *const StrTipGrpcTls = @"Toggle TLS for this gRPC connection";
 NSString *const StrTipPretty = @"Pretty/Raw/Encode/Decode — applies to the focused pane";
 
 #pragma mark - Placeholder
@@ -53,6 +54,7 @@ NSString *const StrViewDecode = @"Decode";
 #pragma mark - Proto source (gRPC)
 NSString *const StrProtoReflection = @"Reflection";
 NSString *const StrProtoFile = @".proto";
+NSString *const StrTls = @"TLS";
 
 #pragma mark - HTTP method
 NSString *const StrMethodGet = @"GET";
@@ -113,6 +115,7 @@ NSString *const StrBtnReplaceCurrent = @"Replace current";
 NSString *const StrBtnCreateRequest = @"Create request";
 NSString *const StrCurlDetected = @"cURL command detected";
 NSString *const StrGrpcurlDetected = @"grpcurl command detected";
+NSString *const StrGraphqlDetected = @"GraphQL request detected";
 
 #pragma mark - Dialog: delete (confirm)
 NSString *const StrDlgDeleteEnv = @"Delete environment";

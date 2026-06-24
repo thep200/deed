@@ -29,6 +29,34 @@ bool httpForcesSse(const HttpRequest& h) {
     return h.streamMode == HttpStreamMode::Sse || hasAcceptEventStream(h.headers);
 }
 
+namespace {
+std::string base64(const std::string& in) {
+    static const char* T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((in.size() + 2) / 3 * 4);
+    for (std::size_t i = 0; i < in.size(); i += 3) {
+        unsigned v = (unsigned char)in[i] << 16;
+        if (i + 1 < in.size()) v |= (unsigned char)in[i + 1] << 8;
+        if (i + 2 < in.size()) v |= (unsigned char)in[i + 2];
+        out.push_back(T[(v >> 18) & 0x3F]);
+        out.push_back(T[(v >> 12) & 0x3F]);
+        out.push_back(i + 1 < in.size() ? T[(v >> 6) & 0x3F] : '=');
+        out.push_back(i + 2 < in.size() ? T[v & 0x3F] : '=');
+    }
+    return out;
+}
+} // namespace
+
+void applyAuthHeaders(const Auth& auth, std::vector<KeyValue>& headers) {
+    if (auth.type == "bearer" && !auth.bearerToken.empty()) {
+        headers.push_back({"Authorization", "Bearer " + auth.bearerToken, true});
+    } else if (auth.type == "basic") {
+        headers.push_back({"Authorization", "Basic " + base64(auth.basicUsername + ":" + auth.basicPassword), true});
+    } else if (auth.type == "apikey" && auth.apikeyIn != "query" && !auth.apikeyKey.empty()) {
+        headers.push_back({auth.apikeyKey, auth.apikeyValue, true});
+    }
+}
+
 std::string toString(RequestType t) {
     switch (t) {
         case RequestType::Grpc: return "grpc";

@@ -17,7 +17,6 @@
     DeedConfig *dc = [DeedConfig shared];
     core::AppConfig d;
     d.defaultTimeoutMs = (int)[dc intFor:@"DEFAULT_TIMEOUT_MS" def:30000];
-    d.verifyTls = [dc boolFor:@"VERIFY_TLS" def:YES];
     d.fontName = S([dc stringFor:@"FONT_NAME" def:@""]);
     d.fontSize = (int)[dc intFor:@"FONT_SIZE" def:11];
     d.ramCacheSizeMb = (int)[dc intFor:@"RAM_CACHE_SIZE" def:64];

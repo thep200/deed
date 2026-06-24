@@ -21,9 +21,12 @@ std::vector<std::string> shellTokenize(const std::string& input) {
             continue;
         }
         if (c == '\\') {
-            // '\' + newline -> line continuation (drop both); otherwise escape next char.
-            if (i + 1 < n && (input[i + 1] == '\n' || input[i + 1] == '\r')) {
-                i += 2;
+            // '\' + whitespace -> line continuation: drop the backslash, let the whitespace separate.
+            // (A pasted multi-line command flattened by a single-line field turns "\\\n" into "\ ", so a
+            // backslash before any space/tab/newline is always a continuation here, never an escaped space.)
+            if (i + 1 < n && (input[i + 1] == '\n' || input[i + 1] == '\r' ||
+                              input[i + 1] == ' ' || input[i + 1] == '\t')) {
+                ++i;          // drop only the backslash; the whitespace is handled as a separator next
                 continue;
             }
             if (i + 1 < n) { cur += input[i + 1]; inTok = true; i += 2; continue; }

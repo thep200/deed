@@ -23,7 +23,7 @@ struct WsConfig {
     std::uint64_t maxFrameBytes = 16ull * 1024 * 1024;     // cap one reassembled inbound frame
     std::size_t sendQueueMaxFrames = 1024;                 // backpressure: max queued outbound frames
     std::uint64_t sendQueueMaxBytes = 32ull * 1024 * 1024; // backpressure: max queued outbound bytes
-    bool verifyTls = true;          // wss:// cert verification (from AppConfig)
+    bool verifyTls = true;          // wss:// cert verification (always on; no app-global toggle)
 };
 
 // Shared duplex state between the UI-facing channel and the I/O thread. Opaque (defined in the .cpp).

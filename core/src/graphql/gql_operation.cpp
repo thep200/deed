@@ -38,6 +38,7 @@ RequestModel buildHttpModel(const RequestModel& model) {
     HttpRequest& h = m.http = HttpRequest{};
     h.url = g.url;
     h.headers = g.headers;   // carry Authorization etc.
+    h.auth = g.auth;         // HttpSender applies bearer/basic/apikey (SPEC_graphql §9 Auth)
 
     auto hasHeader = [&](const char* name) {
         for (const auto& kv : h.headers) {

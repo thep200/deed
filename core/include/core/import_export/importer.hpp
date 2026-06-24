@@ -41,4 +41,12 @@ public:
     ImportResult parse(const std::string& input) const override;
 };
 
+// GraphQL: (a) a raw document starting with query/mutation/subscription, or
+//          (b) a cURL command whose JSON body carries a "query" field (-> type=graphql).
+class GraphQlImporter : public IImporter {
+public:
+    bool canHandle(const std::string& input) const override;
+    ImportResult parse(const std::string& input) const override;
+};
+
 } // namespace core

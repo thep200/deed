@@ -126,8 +126,10 @@ public:
     // Classify text pasted into URL box; then parse into RequestModel (does NOT write file).
     bool looksLikeCurl(const std::string& text) const;
     bool looksLikeGrpcurl(const std::string& text) const;
+    bool looksLikeGraphql(const std::string& text) const;
     ImportResult importFromCurl(const std::string& text) const;   // type=http
     ImportResult importFromGrpc(const std::string& text) const;   // type=grpc
+    ImportResult importFromGraphql(const std::string& text) const; // type=graphql
 
     // --- Synchronous helpers for UI ---
     ValidationResult validateJson(const std::string& text) const;

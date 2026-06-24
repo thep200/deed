@@ -61,9 +61,9 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
         _settingInset.hidden = NO;
         core::AppConfig c = _engine->appConfig().load();
         _settingEditor.string = [NSString stringWithFormat:
-            @"{\n  \"default_timeout_ms\": %d,\n  \"verify_tls\": %@,\n  \"font_name\": \"%s\",\n  \"font_size\": %d,\n"
+            @"{\n  \"default_timeout_ms\": %d,\n  \"font_name\": \"%s\",\n  \"font_size\": %d,\n"
              "  \"ram_cache_size\": %d,\n  \"disk_cache_size\": %d\n}",
-            c.defaultTimeoutMs, c.verifyTls ? @"true" : @"false", c.fontName.c_str(), c.fontSize,
+            c.defaultTimeoutMs, c.fontName.c_str(), c.fontSize,
             c.ramCacheSizeMb, c.diskCacheSizeMb];
     }
     _configMode = YES;
@@ -87,7 +87,6 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
             if (dict) {
                 core::AppConfig c = _engine->appConfig().load();
                 if (dict[@"default_timeout_ms"]) c.defaultTimeoutMs = [dict[@"default_timeout_ms"] intValue];
-                if (dict[@"verify_tls"]) c.verifyTls = [dict[@"verify_tls"] boolValue];
                 if (dict[@"font_name"]) c.fontName = [dict[@"font_name"] UTF8String];
                 if (dict[@"font_size"]) c.fontSize = [dict[@"font_size"] intValue];
                 if (dict[@"ram_cache_size"]) c.ramCacheSizeMb = [dict[@"ram_cache_size"] intValue];
@@ -135,6 +134,13 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
         _model.grpc.protoSource.mode = "reflection";
     }
     [self reloadGrpcMethods];
+}
+
+// gRPC: the TLS slide switch flipped itself -> mirror its state into the model + persist.
+- (void)toggleTls:(id)sender {
+    if (_model.type != core::RequestType::Grpc) return;
+    _model.grpc.tls.enabled = _tlsToggle.on;
+    [self autosaveCurrent];
 }
 
 #pragma mark RPC picker (gRPC)

@@ -53,6 +53,7 @@ extern NSString *const StrTipCurl;
 extern NSString *const StrTipSettings;
 extern NSString *const StrTipSend;
 extern NSString *const StrTipProtoSource;
+extern NSString *const StrTipGrpcTls;
 extern NSString *const StrTipPretty;
 
 #pragma mark - Placeholder
@@ -68,6 +69,7 @@ extern NSString *const StrViewDecode;
 #pragma mark - Proto source (gRPC)
 extern NSString *const StrProtoReflection;
 extern NSString *const StrProtoFile;
+extern NSString *const StrTls;
 
 #pragma mark - HTTP method
 extern NSString *const StrMethodGet;
@@ -128,6 +130,7 @@ extern NSString *const StrBtnReplaceCurrent;
 extern NSString *const StrBtnCreateRequest;
 extern NSString *const StrCurlDetected;
 extern NSString *const StrGrpcurlDetected;
+extern NSString *const StrGraphqlDetected;
 
 #pragma mark - Dialog: delete (confirm)
 extern NSString *const StrDlgDeleteEnv;            // delete-environment dialog title

@@ -37,6 +37,7 @@ add_executable(deed MACOSX_BUNDLE
   src/widgets/OS9InsetView.mm
   src/widgets/OS9SerratedInset.mm
   src/widgets/OS9Toast.mm
+  src/widgets/OS9Toggle.mm
   src/widgets/OS9Label.mm
   src/widgets/OS9StyleMenu.mm
   src/widgets/OS9Dropdown.mm

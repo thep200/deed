@@ -32,6 +32,7 @@
 #import "widgets/OS9SerratedInset.h"
 #import "widgets/OS9TitleBar.h"
 #import "widgets/OS9Toast.h"
+#import "widgets/OS9Toggle.h"
 #import "widgets/OS9Window.h"
 #import "editor/SciTextView.h"
 
@@ -134,6 +135,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     OS9BevelButton *_sendButton;
     OS9BevelButton *_cancelButton;
     OS9PopupButton *_protoPopup;     // gRPC: pick proto source (Reflection | .proto)
+    OS9Toggle *_tlsToggle;           // gRPC: retro slide switch to toggle TLS before sending
     OS9PopupButton *_servicePopup;   // gRPC: pick service/RPC (before the Send button)
     OS9PopupButton *_methodPopup;
     OS9SerratedInset *_urlInset; // retro serrated input frame wrapping the URL field
@@ -249,9 +251,10 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)collapseToggle:(id)sender;
 - (void)applyConfiguredFontAndRefresh;
 - (void)controlTextDidChange:(NSNotification *)note;
-- (void)importNow:(NSString *)text grpc:(BOOL)isGrpc;
-- (void)offerImport:(NSString *)text grpc:(BOOL)isGrpc;
-- (NSString *)importSummary:(const core::RequestModel &)m unknown:(const std::vector<std::string> &)unknown grpc:(BOOL)isGrpc;
+// import kind: 0 = cURL, 1 = grpcurl, 2 = GraphQL.
+- (void)importNow:(NSString *)text kind:(NSInteger)kind;
+- (void)offerImport:(NSString *)text kind:(NSInteger)kind;
+- (NSString *)importSummary:(const core::RequestModel &)m unknown:(const std::vector<std::string> &)unknown kind:(NSInteger)kind;
 - (NSString *)deriveImportName:(const core::RequestModel &)m;
 - (void)applyImport:(const core::RequestModel &)m;
 - (void)restoreUrlField;
@@ -291,6 +294,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)enterConfig:(NSInteger)kind;
 - (void)exitConfig:(id)sender;
 - (void)protoModeChanged:(id)sender;
+- (void)toggleTls:(id)sender;
 - (void)showSavedGrpcMethodLabel;
 - (void)reloadGrpcMethods;
 - (void)fetchGrpcMethodsThenOpen:(BOOL)openWhenDone;

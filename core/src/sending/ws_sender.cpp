@@ -193,7 +193,9 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
     if (!curl) { sink.onStreamOpen(meta); closeWith(StreamStatus::Error, 0, "curl init failed"); return; }
 
     struct curl_slist* hdrs = nullptr;
-    for (const auto& kv : w.headers)
+    std::vector<KeyValue> headers = w.headers;
+    applyAuthHeaders(w.auth, headers);   // bearer/basic/apikey -> handshake header (no per-message headers)
+    for (const auto& kv : headers)
         if (kv.enabled && !kv.key.empty())
             hdrs = curl_slist_append(hdrs, (kv.key + ": " + kv.value).c_str());
     if (!w.subprotocols.empty()) {

@@ -273,8 +273,7 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
     if (model.type == RequestType::Http) {
         auto& s = rr.model.http.settings;
         if (!s.timeoutMsSet) { s.timeoutMs = app.defaultTimeoutMs; }
-        if (!s.verifyTlsSet) { s.verifyTls = app.verifyTls; }
-        // followRedirects: keep default true if unset.
+        // verifyTls/followRedirects: keep the per-request default (TLS verify on) when unset.
     }
 
     // --- Resolve {{var}} in all string fields ---
@@ -299,12 +298,20 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
         ws.url = resolveStr(ws.url, vars);
         resolveKv(ws.headers, vars);
         for (auto& m : ws.onOpenSend) m = resolveStr(m, vars);
+        ws.auth.bearerToken = resolveStr(ws.auth.bearerToken, vars);
+        ws.auth.basicUsername = resolveStr(ws.auth.basicUsername, vars);
+        ws.auth.basicPassword = resolveStr(ws.auth.basicPassword, vars);
+        ws.auth.apikeyValue = resolveStr(ws.auth.apikeyValue, vars);
     } else if (rr.model.type == RequestType::GraphQL) {
         auto& g = rr.model.graphql;
         g.url = resolveStr(g.url, vars);
         resolveKv(g.headers, vars);
         g.variablesJson = resolveStr(g.variablesJson, vars);
         g.connectionInitPayloadJson = resolveStr(g.connectionInitPayloadJson, vars);
+        g.auth.bearerToken = resolveStr(g.auth.bearerToken, vars);
+        g.auth.basicUsername = resolveStr(g.auth.basicUsername, vars);
+        g.auth.basicPassword = resolveStr(g.auth.basicPassword, vars);
+        g.auth.apikeyValue = resolveStr(g.auth.apikeyValue, vars);
     } else {
         auto& g = rr.model.grpc;
         g.target = resolveStr(g.target, vars);
@@ -359,16 +366,29 @@ RequestModel Engine::aliasifyModel(const RequestModel& model,
     auto wholeKv = [&](std::vector<KeyValue>& kvs) {
         for (auto& kv : kvs) if (kv.enabled) whole(kv.value);
     };
+    auto aliasAuth = [&](Auth& a) {
+        whole(a.bearerToken);
+        whole(a.basicUsername);
+        whole(a.basicPassword);
+        whole(a.apikeyValue);
+    };
     if (m.type == RequestType::Http) {
         auto& h = m.http;
         prefix(h.url);              // url: baseUrl-style prefix
         wholeKv(h.pathVariables);
         wholeKv(h.params);          // query
         wholeKv(h.headers);         // header
-        whole(h.auth.bearerToken);  // auth (fields hold the bare secret -> exact match)
-        whole(h.auth.basicUsername);
-        whole(h.auth.basicPassword);
-        whole(h.auth.apikeyValue);
+        aliasAuth(h.auth);          // auth (fields hold the bare secret -> exact match)
+    } else if (m.type == RequestType::WebSocket) {
+        auto& w = m.ws;
+        prefix(w.url);
+        wholeKv(w.headers);
+        aliasAuth(w.auth);
+    } else if (m.type == RequestType::GraphQL) {
+        auto& g = m.graphql;
+        prefix(g.url);
+        wholeKv(g.headers);
+        aliasAuth(g.auth);
     } else {
         auto& g = m.grpc;
         prefix(g.target);
@@ -546,7 +566,7 @@ SessionHandle Engine::openSession(const RequestModel& model, IStreamSink* inboun
     if (wl.maxFrameBytes > 0) cfg.maxFrameBytes = static_cast<std::uint64_t>(wl.maxFrameBytes);
     if (wl.sendQueueMaxFrames > 0) cfg.sendQueueMaxFrames = static_cast<std::size_t>(wl.sendQueueMaxFrames);
     if (wl.sendQueueMaxBytes > 0) cfg.sendQueueMaxBytes = static_cast<std::uint64_t>(wl.sendQueueMaxBytes);
-    cfg.verifyTls = impl_->appConfig.load().verifyTls;
+    // wss:// cert verification stays on (WsConfig default); no app-global verify_tls toggle anymore.
 
     h.sessionId = "ws-" + std::to_string(impl_->nextSessionId.fetch_add(1));
     auto session = wsMakeSession(cfg);
@@ -666,8 +686,10 @@ ResponseCache* Engine::responseCache() { return impl_->cache.get(); }
 // Import: pure (stateless) importers -> just delegate. Does NOT write files (UI creates via CollectionStore).
 bool Engine::looksLikeCurl(const std::string& text) const { return CurlImporter{}.canHandle(text); }
 bool Engine::looksLikeGrpcurl(const std::string& text) const { return GrpcImporter{}.canHandle(text); }
+bool Engine::looksLikeGraphql(const std::string& text) const { return GraphQlImporter{}.canHandle(text); }
 ImportResult Engine::importFromCurl(const std::string& text) const { return CurlImporter{}.parse(text); }
 ImportResult Engine::importFromGrpc(const std::string& text) const { return GrpcImporter{}.parse(text); }
+ImportResult Engine::importFromGraphql(const std::string& text) const { return GraphQlImporter{}.parse(text); }
 
 ValidationResult Engine::validateJson(const std::string& text) const {
     try {
