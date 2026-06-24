@@ -125,6 +125,12 @@
         _urlField.stringValue = N(h.url); _urlPrevLen = _urlField.stringValue.length;
         _bodyMode = N(h.body.mode);
         [self updateBodyButtonLabel];
+    } else if (_model.type == RequestType::WebSocket) {
+        const WsRequest &w = _model.ws;
+        // Message tab = the frame to send (persisted as onOpenSend[0]); Headers tab = handshake headers.
+        [_reqBuffers addObject:N(w.onOpenSend.empty() ? std::string() : w.onOpenSend[0])];  // 0 = Message
+        [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(w.headers))];                   // 1 = Headers
+        _urlField.stringValue = N(w.url); _urlPrevLen = _urlField.stringValue.length;
     } else {
         const GrpcRequest &g = _model.grpc;
         [_reqBuffers addObject:N(g.message.empty() ? "{}" : g.message)];
@@ -182,6 +188,13 @@
         if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[1]), h.params, err)) return fail(1, err);
         if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[2]), h.headers, err)) return fail(2, err);
         if (!fieldcodec::jsonToAuth(S(_reqBuffers[3]), h.auth, err)) return fail(3, err);
+    } else if (_model.type == RequestType::WebSocket) {
+        WsRequest &w = _model.ws;
+        w.url = _urlField.stringValue.UTF8String;
+        std::string frame = S(_reqBuffers[0]);
+        w.onOpenSend.clear();
+        if (!frame.empty()) w.onOpenSend.push_back(frame);   // sent on connect; also the Send-frame source
+        if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[1]), w.headers, err)) return fail(1, err);
     } else {
         GrpcRequest &g = _model.grpc;
         g.target = _urlField.stringValue.UTF8String;
@@ -582,7 +595,9 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 // Restore the URL field to the open request's URL/target (avoid saving the command text by mistake).
 - (void)restoreUrlField {
     if (!_hasRequest) { _urlField.stringValue = @""; _urlPrevLen = 0; return; }
-    NSString *u = (_model.type == core::RequestType::Grpc) ? N(_model.grpc.target) : N(_model.http.url);
+    NSString *u = (_model.type == core::RequestType::Grpc)      ? N(_model.grpc.target)
+                  : (_model.type == core::RequestType::WebSocket) ? N(_model.ws.url)
+                                                                  : N(_model.http.url);
     _urlField.stringValue = u;
     _urlPrevLen = u.length;
 }

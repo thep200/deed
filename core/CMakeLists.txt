@@ -36,6 +36,7 @@ add_library(core STATIC
   src/sending/http_sender.cpp
   src/sending/grpc_sender.cpp
   src/sending/grpc_descriptors.cpp
+  src/sending/ws_sender.cpp
   src/app/engine.cpp
   src/import_export/shell_tokenize.cpp
   src/import_export/curl_importer.cpp
@@ -57,6 +58,7 @@ target_link_libraries(core
     nlohmann_json::nlohmann_json   # used in codec (internal header); public DTOs do not leak it
   PRIVATE
     cpr::cpr                       # REST (libcurl)
+    CURL::libcurl                  # WebSocket (curl_ws_send/recv — SPEC_websocket §3)
     gRPC::grpc++                   # gRPC C++
     protobuf::libprotobuf          # descriptor / dynamic_message / json_util
     protobuf::libprotoc            # compiler::Importer / DiskSourceTree (load .proto at runtime)

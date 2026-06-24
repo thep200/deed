@@ -33,6 +33,7 @@ endif()
 
 # --- Libraries from vcpkg (manifest mode auto-installs at configure time) ---
 find_package(cpr CONFIG REQUIRED)
+find_package(CURL REQUIRED)                 # WebSocket transport (curl_ws_* — SPEC_websocket §3)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(protobuf CONFIG REQUIRED)

@@ -321,6 +321,8 @@ std::string CollectionStore::createRequest(const std::string& folderRel, Request
         m.http.headers.push_back({"Accept-Encoding", "gzip, deflate, br", false});
         m.http.headers.push_back({"Connection", "keep-alive", false});
         m.http.body.mode = "none";
+    } else if (type == RequestType::WebSocket) {
+        m.ws.defaultSendKind = WsSendKind::Text;   // url filled in by the user (ws:// or wss://)
     } else {
         m.grpc.methodType = "unary";
         m.grpc.protoSource.mode = "reflection";

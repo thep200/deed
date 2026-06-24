@@ -3,12 +3,17 @@
 namespace core {
 
 std::string toString(RequestType t) {
-    return t == RequestType::Grpc ? "grpc" : "http";
+    switch (t) {
+        case RequestType::Grpc: return "grpc";
+        case RequestType::WebSocket: return "ws";
+        default: return "http";
+    }
 }
 
 bool parseRequestType(const std::string& s, RequestType& out) {
     if (s == "http") { out = RequestType::Http; return true; }
     if (s == "grpc") { out = RequestType::Grpc; return true; }
+    if (s == "ws") { out = RequestType::WebSocket; return true; }
     return false;
 }
 

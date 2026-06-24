@@ -14,6 +14,7 @@
 #include "core/i_ui_delegate.hpp"
 #include "core/import_export/importer.hpp"
 #include "core/persistence/stores.hpp"
+#include "core/streaming/i_stream_channel.hpp"
 #include "core/types.hpp"
 
 namespace core {
@@ -22,6 +23,13 @@ class SenderRegistry; // fwd (internal)
 
 // Opaque handle to track/cancel an in-flight stream (SPEC_grpc_streaming §4). Empty -> no stream.
 struct StreamHandle { std::string streamId; };
+
+// Handle to a duplex session (SPEC_websocket §4). `channel` is the SEND side held by the UI; empty
+// sessionId means the session was not started.
+struct SessionHandle {
+    std::string sessionId;
+    std::shared_ptr<IStreamChannel> channel;
+};
 
 // Cache ceiling/floor at ENV layer (ops-level). 0 = "unset" -> Core falls back to getenv/default.
 // UI loads from .env file (DeedConfig) then passes in; Core does not read .env itself (stays pure C++).
@@ -39,6 +47,16 @@ struct StreamLimits {
     std::uint64_t maxBytes = 0;    // truncate after this many accumulated bytes
 };
 
+// WebSocket tunables from .env (SPEC_websocket §9). 0 = unset -> WsSender default.
+struct WsLimits {
+    int pingIntervalMs = 0;
+    int idleTimeoutMs = 0;
+    int closeTimeoutMs = 0;
+    int maxFrameBytes = 0;       // bytes (0 -> default 16 MiB)
+    int sendQueueMaxFrames = 0;
+    int sendQueueMaxBytes = 0;   // bytes
+};
+
 // Engine init config: collection dir + (optional) app-config path.
 struct EngineConfig {
     std::string collectionRoot;
@@ -46,6 +64,7 @@ struct EngineConfig {
     CacheLimits cacheLimits;   // cache ceiling/floor from .env (empty -> getenv/default)
     AppConfig appDefaults;     // app-config default values from .env (when config.json misses a key)
     StreamLimits streamLimits; // stream ceilings from .env (empty -> sender default)
+    WsLimits wsLimits;         // WebSocket tunables from .env (empty -> WsSender default)
 };
 
 class Engine {
@@ -78,6 +97,14 @@ public:
 
     // Cancel a running stream (idempotent; unknown/empty handle -> no-op).
     void cancelStream(const StreamHandle& h);
+
+    // --- Duplex session (SPEC_websocket §4) ---
+    // Open a full-duplex session (WebSocket; gRPC bidi later). `inbound` receives frames on a background
+    // thread (sink marshals to its UI thread); the returned handle's `channel` is the send side.
+    SessionHandle openSession(const RequestModel& model, IStreamSink* inbound);
+
+    // Gracefully close a session (sends CLOSE, waits for the handshake). Idempotent.
+    void closeSession(const SessionHandle& h, int code = 1000, const std::string& reason = "");
 
     // --- Response cache (RESPONSE_CACHE.md). No-op when cache off (cacheResponses=false). ---
     // Store latest response/error for request id (overwrites old). resolvedRequestDump lives in resp.

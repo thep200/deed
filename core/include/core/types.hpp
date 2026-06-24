@@ -10,7 +10,7 @@
 namespace core {
 
 // ---- Protocol classification (matches the "type" field in the request file) ----
-enum class RequestType { Http, Grpc };
+enum class RequestType { Http, Grpc, WebSocket };
 
 std::string toString(RequestType);
 bool parseRequestType(const std::string&, RequestType& out);
@@ -123,9 +123,16 @@ enum class StreamTransport { Grpc, Sse, WebSocket };
 enum class StreamPayloadKind { Json, Text, Binary };   // Binary -> payload is base64
 enum class StreamStatus { Ok, Error, Cancelled, Timeout };
 
+// SPEC_websocket §2.1 — duplex deltas. Defaults keep gRPC server-streaming (spec 1) unchanged:
+// direction defaults Inbound, frameType defaults Message.
+enum class StreamDirection { Inbound, Outbound };
+enum class StreamFrameType { Text, Binary, Ping, Pong, Close, Message /*gRPC*/ };
+
 // One neutral event — the shared unit of data for every transport.
 struct StreamEvent {
     std::uint64_t seq = 0;       // 0-based, monotonic within one stream (UI appends in order)
+    StreamDirection direction = StreamDirection::Inbound;     // WS: Inbound | Outbound (others: Inbound)
+    StreamFrameType frameType = StreamFrameType::Message;     // WS frame kind; gRPC: Message
     StreamPayloadKind kind = StreamPayloadKind::Json;
     std::string payload;         // text JSON expected for the response pane
     std::string name;            // optional: gRPC "message" | SSE event name
@@ -152,7 +159,18 @@ struct StreamEnd {               // emitted at onStreamClose
     bool truncated = false;      // true if a configured ceiling was hit (§9)
 };
 
-enum class InteractionKind { Unary, ServerStream, ClientStream, BiDi };
+enum class InteractionKind { Unary, ServerStream, ClientStream, BiDi, Duplex /* WebSocket session */ };
+
+// ---- WebSocket (SPEC_websocket §1) ----
+enum class WsSendKind { Text, Binary };
+
+struct WsRequest {
+    std::string url;                          // ws:// or wss://
+    std::vector<KeyValue> headers;            // handshake headers (Authorization, …)
+    std::vector<std::string> subprotocols;    // Sec-WebSocket-Protocol
+    std::vector<std::string> onOpenSend;      // optional: messages to send right after open (e.g. subscribe)
+    WsSendKind defaultSendKind = WsSendKind::Text;
+};
 
 // ---- Model of one request (envelope + per-type block) ----
 struct RequestModel {
@@ -165,6 +183,7 @@ struct RequestModel {
 
     HttpRequest http;   // used when type == Http
     GrpcRequest grpc;   // used when type == Grpc
+    WsRequest ws;       // used when type == WebSocket
 };
 
 // ResolvedRequest: RequestModel after resolving {{var}} + applying auth. (README §8.1)

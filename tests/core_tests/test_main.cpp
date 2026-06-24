@@ -23,6 +23,8 @@ using namespace core;
 
 // Defined in stream_sink_test.cpp — gatekeeper for INV-1 (SPEC_grpc_streaming AC-4). Returns #failures.
 int run_stream_sink_tests();
+// Defined in ws_session_test.cpp — gatekeeper for INV-1 duplex (SPEC_websocket AC-6/AC-7). Returns #failures.
+int run_ws_session_tests();
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -773,9 +775,11 @@ int main() {
     test_importers();
 
     int streamFail = run_stream_sink_tests();   // INV-1 gatekeeper (transport-free)
+    int wsFail = run_ws_session_tests();        // INV-1 duplex gatekeeper (transport-free)
 
     fs::remove_all(root);
 
-    std::printf("\n==== %d passed, %d failed (+%d stream failures) ====\n", g_pass, g_fail, streamFail);
-    return (g_fail == 0 && streamFail == 0) ? 0 : 1;
+    std::printf("\n==== %d passed, %d failed (+%d stream, +%d ws failures) ====\n",
+                g_pass, g_fail, streamFail, wsFail);
+    return (g_fail == 0 && streamFail == 0 && wsFail == 0) ? 0 : 1;
 }

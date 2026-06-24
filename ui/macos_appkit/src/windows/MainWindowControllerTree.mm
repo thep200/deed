@@ -40,6 +40,13 @@
     // Stream ceilings from .env (SPEC_grpc_streaming §9; 0 -> sender default). MiB -> bytes for max bytes.
     cfg.streamLimits.maxEvents = (uint64_t)[dc intFor:@"STREAM_MAX_EVENTS" def:0];
     cfg.streamLimits.maxBytes = (uint64_t)[dc intFor:@"STREAM_MAX_BYTES_MB" def:0] * 1024ull * 1024ull;
+    // WebSocket tunables from .env (SPEC_websocket §9; 0 -> WsSender default).
+    cfg.wsLimits.pingIntervalMs = (int)[dc intFor:@"WS_PING_INTERVAL_MS" def:0];
+    cfg.wsLimits.idleTimeoutMs = (int)[dc intFor:@"WS_IDLE_TIMEOUT_MS" def:0];
+    cfg.wsLimits.closeTimeoutMs = (int)[dc intFor:@"WS_CLOSE_TIMEOUT_MS" def:0];
+    cfg.wsLimits.maxFrameBytes = (int)[dc intFor:@"WS_MAX_FRAME_MB" def:0] * 1024 * 1024;
+    cfg.wsLimits.sendQueueMaxFrames = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_FRAMES" def:0];
+    cfg.wsLimits.sendQueueMaxBytes = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_MB" def:0] * 1024 * 1024;
     cfg.appDefaults = [self appDefaultsFromEnv];   // app-config defaults from .env
     _engine = std::make_unique<core::Engine>(cfg);
     // coalesce cadence + UI buffer high-water mark (backpressure valve, perf spec §2.2/§10).
@@ -434,6 +441,7 @@
         // Empty area or folder -> add request/folder.
         [[m addItemWithTitle:StrMenuNewHttp action:@selector(newHttp:) keyEquivalent:@""] setTarget:self];
         [[m addItemWithTitle:StrMenuNewGrpc action:@selector(newGrpc:) keyEquivalent:@""] setTarget:self];
+        [[m addItemWithTitle:StrMenuNewWs action:@selector(newWs:) keyEquivalent:@""] setTarget:self];
         [[m addItemWithTitle:StrNewFolder action:@selector(newFolder:) keyEquivalent:@""] setTarget:self];
         if (t != nil) { // folder also allows rename/dup/delete
             [m addItem:[NSMenuItem separatorItem]];
@@ -502,6 +510,7 @@
 }
 - (void)newHttp:(id)s { [self createRequest:core::RequestType::Http name:StrDefaultRequestName]; }
 - (void)newGrpc:(id)s { [self createRequest:core::RequestType::Grpc name:StrDefaultRpcName]; }
+- (void)newWs:(id)s { [self createRequest:core::RequestType::WebSocket name:StrDefaultWsName]; }
 // Default name, NO popup. Rename later via inline-rename in the tree. loadRequestAtRel
 // autosaves the open request before switching.
 - (void)createRequest:(core::RequestType)t name:(NSString *)name {

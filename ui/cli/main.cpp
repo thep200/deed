@@ -1,5 +1,6 @@
 // ui/cli — headless adapter to run Core without a GUI (README §3, Phase 1).
 // Used for dev/CI and to exercise the full send → response flow.
+#include <chrono>
 #include <condition_variable>
 #include <iostream>
 #include <mutex>
@@ -11,6 +12,43 @@
 using namespace core;
 
 namespace {
+
+// Minimal duplex sink for the `ws` command: prints frames, signals on first inbound + on close.
+class CliWsSink : public IUiDelegate {
+public:
+    void onResponse(RequestHandle, const ApiResponse&) override {}
+    void onError(RequestHandle, const ApiError&) override {}
+    void onStreamOpen(const StreamMeta& m) override {
+        std::lock_guard<std::mutex> lk(m_);
+        std::cout << "--- WS OPEN (" << m.streamId << ") ---\n[";
+    }
+    void onStreamEvent(const StreamEvent& ev) override {
+        std::lock_guard<std::mutex> lk(m_);
+        std::cout << (printed_++ == 0 ? "\n  " : ",\n  ") << ev.payload;
+        std::cout.flush();
+        if (ev.direction == StreamDirection::Inbound) { ++inbound_; cv_.notify_all(); }
+    }
+    void onStreamClose(const StreamEnd& end) override {
+        std::lock_guard<std::mutex> lk(m_);
+        std::cout << "\n]\n--- WS CLOSE code=" << end.statusCode
+                  << (end.statusMessage.empty() ? "" : (" reason=" + end.statusMessage))
+                  << ", " << end.totalEvents << " frames, " << end.elapsedMs << "ms ---\n";
+        closed_ = true; cv_.notify_all();
+    }
+    bool waitInbound(int n, std::chrono::milliseconds to) {
+        std::unique_lock<std::mutex> lk(m_);
+        return cv_.wait_for(lk, to, [&] { return inbound_ >= n || closed_; });
+    }
+    void waitClosed(std::chrono::milliseconds to) {
+        std::unique_lock<std::mutex> lk(m_);
+        cv_.wait_for(lk, to, [&] { return closed_; });
+    }
+private:
+    std::mutex m_;
+    std::condition_variable cv_;
+    int printed_ = 0, inbound_ = 0;
+    bool closed_ = false;
+};
 
 // Synchronizing delegate: wait for the terminal callback, then print.
 class CliDelegate : public IUiDelegate {
@@ -83,7 +121,8 @@ int usage() {
         "  apicli resolve <root> <template>\n"
         "  apicli validate <jsonText>\n"
         "  apicli import-curl <curl command...>\n"
-        "  apicli import-grpc <grpc spec...>\n";
+        "  apicli import-grpc <grpc spec...>\n"
+        "  apicli ws <url> [message]\n";
     return 2;
 }
 
@@ -143,6 +182,22 @@ int main(int argc, char** argv) {
             if (!err.empty()) { std::cerr << "reflection error: " << err << "\n"; return 1; }
             for (const auto& m : methods)
                 std::cout << m.service << "/" << m.method << "  [" << m.methodType << "]\n";
+            return 0;
+        }
+        if (cmd == "ws" && argc >= 3) {   // ws <url> [message] — connect, (send), echo, close
+            Engine engine(EngineConfig{".", ""});
+            RequestModel m;
+            m.type = RequestType::WebSocket;
+            m.ws.url = argv[2];
+            std::string msg = argc >= 4 ? joinArgs(argc, argv, 3) : std::string();
+            if (!msg.empty()) m.ws.onOpenSend.push_back(msg);   // sent right after open
+            std::cout << "Connecting: " << m.ws.url << "\n";
+            CliWsSink sink;
+            SessionHandle h = engine.openSession(m, &sink);
+            if (!msg.empty()) sink.waitInbound(1, std::chrono::milliseconds(8000));  // wait for the echo
+            else sink.waitInbound(1, std::chrono::milliseconds(3000));
+            engine.closeSession(h, 1000, "bye");
+            sink.waitClosed(std::chrono::milliseconds(4000));
             return 0;
         }
         if (cmd == "validate" && argc >= 3) {

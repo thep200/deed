@@ -105,12 +105,14 @@ extern NSString *const StrTitleEnvironments;
 #pragma mark - Tree context menu
 extern NSString *const StrMenuNewHttp;
 extern NSString *const StrMenuNewGrpc;
+extern NSString *const StrMenuNewWs;
 extern NSString *const StrNewFolder;     // menu + default folder name
 extern NSString *const StrFmtDeleteItems;
 
 #pragma mark - Default names
 extern NSString *const StrDefaultRequestName;
 extern NSString *const StrDefaultRpcName;
+extern NSString *const StrDefaultWsName;
 extern NSString *const StrDefaultImportName;   // fallback when a name cannot be inferred
 extern NSString *const StrImportedGrpc;
 
@@ -151,6 +153,8 @@ extern NSString *const StrFmtEnvExists;     // duplicate-env dialog (with name)
 #pragma mark - Toast / status
 extern NSString *const StrToastOpenFolderFirst;
 extern NSString *const StrToastUnaryOnly;
+extern NSString *const StrToastWsEmptyFrame;
+extern NSString *const StrToastWsQueueFull;
 extern NSString *const StrToastCopiedCurl;
 extern NSString *const StrToastSaved;
 extern NSString *const StrToastRenamed;

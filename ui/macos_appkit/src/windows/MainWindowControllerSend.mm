@@ -7,7 +7,10 @@
 - (void)sendRequest:(id)sender {
     // Hot path: do ONLY what's needed to send (no env reads / aliasify / persistence here —
     // alias substitution is an import-time concern, §9.5). Keep this lean for performance.
-    if (!_hasRequest || !_engine || _sending) return;
+    if (!_hasRequest || !_engine) return;
+    // WebSocket is a session, not a one-shot send: the action toggles Connect / Send-frame (SPEC_websocket §6).
+    if (_model.type == core::RequestType::WebSocket) { [self wsSendOrConnect]; return; }
+    if (_sending) return;
     [self parseUrlQueryIntoQueryTab];   // user typed query into URL -> split into Query tab before sync
     if (![self syncModelFromEditors:NO]) return;
 
@@ -34,8 +37,30 @@
 
 - (void)cancelClicked:(id)sender {
     if (!_sending || !_engine) return;
+    if (_model.type == core::RequestType::WebSocket) { _engine->closeSession(_wsSession, 1000, "bye"); return; }
     if (_streaming) _engine->cancelStream(_streamHandle);   // Stop -> ctx.TryCancel via CancelToken (§6)
     else _engine->cancel(_currentHandle);
+}
+
+// WebSocket action button: connect if idle; otherwise send the current Message editor as a frame (§6).
+- (void)wsSendOrConnect {
+    if (_sending && _wsSession.channel) {
+        // Connected -> send the current Message tab content as a frame.
+        [self stashActiveReqBuffer];
+        std::string frame = _reqBuffers.count ? S(_reqBuffers[0]) : std::string();
+        if (frame.empty()) { [self toastWarn:StrToastWsEmptyFrame]; return; }
+        if (!_wsSession.channel->sendText(frame)) [self toastWarn:StrToastWsQueueFull];
+        return;
+    }
+    if (_sending) return;   // connecting in progress
+    if (![self syncModelFromEditors:NO]) return;
+    _sending = YES;
+    _streaming = YES;       // reuse the streaming UI state (Cancel = Disconnect, log render)
+    [self startSendSpinner];
+    _cancelButton.enabledState = YES;
+    [self relayout];
+    [self updateStatus:@""];
+    _wsSession = _engine->openSession(_model, _bridge.get());
 }
 
 - (void)onCoreResponse:(uint64_t)handle response:(const core::ApiResponse &)resp {
@@ -92,6 +117,7 @@
     [_respText endStreamingValid:YES];
 
     _streaming = NO;
+    _wsSession = core::SessionHandle{};   // release the WS channel/session (no-op for gRPC streams)
     [self finishSending];
 
     // Build a neutral ApiResponse from the assembled array so the normal tab/cache pipeline takes over.

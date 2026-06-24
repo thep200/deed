@@ -4,6 +4,7 @@
   "description": "Lightweight REST + gRPC API client (Core C++ + macOS AppKit adapter)",
   "dependencies": [
     "cpr",
+    { "name": "curl", "features": ["websockets"] },
     "nlohmann-json",
     "grpc"
   ]

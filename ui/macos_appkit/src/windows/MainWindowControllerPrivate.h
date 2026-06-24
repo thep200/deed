@@ -75,6 +75,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     // streaming (SPEC_grpc_streaming §7/§10)
     BOOL _streaming;                       // a server-stream is in flight (Stop replaces Send)
     core::StreamHandle _streamHandle;      // handle to cancel the active stream
+    core::SessionHandle _wsSession;        // active WebSocket session (SPEC_websocket §4); channel = send side
     NSMutableString *_streamAccum;         // assembled "[ … ]" array, cached on close
     uint64_t _streamEvents;                // events received so far (status line)
     std::vector<core::GrpcMethodInfo> _grpcMethods; // parallel to _servicePopup items
@@ -302,6 +303,8 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (std::string)selectedFolderRel;
 - (void)newHttp:(id)s;
 - (void)newGrpc:(id)s;
+- (void)newWs:(id)s;
+- (void)wsSendOrConnect;
 - (void)createRequest:(core::RequestType)t name:(NSString *)name;
 - (void)newFolder:(id)s;
 - (void)renameSel:(id)s;

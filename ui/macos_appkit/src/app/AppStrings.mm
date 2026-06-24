@@ -90,12 +90,14 @@ NSString *const StrTitleEnvironments = @"Environments";
 #pragma mark - Tree context menu
 NSString *const StrMenuNewHttp = @"New HTTP Request";
 NSString *const StrMenuNewGrpc = @"New gRPC Request";
+NSString *const StrMenuNewWs = @"New WebSocket";
 NSString *const StrNewFolder = @"New Folder";
 NSString *const StrFmtDeleteItems = @"Delete %lu items";
 
 #pragma mark - Default names
 NSString *const StrDefaultRequestName = @"New Request";
 NSString *const StrDefaultRpcName = @"New RPC";
+NSString *const StrDefaultWsName = @"New Socket";
 NSString *const StrDefaultImportName = @"request";
 NSString *const StrImportedGrpc = @"Imported gRPC";
 
@@ -136,6 +138,8 @@ NSString *const StrFmtEnvExists = @"Environment \"%@\" already exists.";
 #pragma mark - Toast / status
 NSString *const StrToastOpenFolderFirst = @"Open a collection folder first";
 NSString *const StrToastUnaryOnly = @"POC supports unary gRPC only";
+NSString *const StrToastWsEmptyFrame = @"Type a message to send";
+NSString *const StrToastWsQueueFull = @"WebSocket send queue is full";
 NSString *const StrToastCopiedCurl = @"Copied as cURL";
 NSString *const StrToastSaved = @"Saved";
 NSString *const StrToastRenamed = @"Renamed";

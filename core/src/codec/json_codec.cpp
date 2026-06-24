@@ -212,6 +212,30 @@ GrpcRequest grpcFrom(const json& j) {
     return g;
 }
 
+json wsToJson(const WsRequest& w) {
+    json j;
+    j["url"] = w.url;
+    j["headers"] = kvArray(w.headers);
+    j["subprotocols"] = w.subprotocols;
+    j["onOpenSend"] = w.onOpenSend;
+    j["defaultSendKind"] = (w.defaultSendKind == WsSendKind::Binary) ? "binary" : "text";
+    return j;
+}
+
+WsRequest wsFrom(const json& j) {
+    WsRequest w;
+    if (!j.is_object()) return w;
+    w.url = getStr(j, "url");
+    if (auto it = j.find("headers"); it != j.end()) w.headers = kvFrom(*it);
+    if (auto it = j.find("subprotocols"); it != j.end() && it->is_array())
+        for (const auto& e : *it) if (e.is_string()) w.subprotocols.push_back(e.get<std::string>());
+    if (auto it = j.find("onOpenSend"); it != j.end() && it->is_array())
+        for (const auto& e : *it) if (e.is_string()) w.onOpenSend.push_back(e.get<std::string>());
+    w.defaultSendKind = (getStr(j, "defaultSendKind", "text") == "binary") ? WsSendKind::Binary
+                                                                           : WsSendKind::Text;
+    return w;
+}
+
 } // namespace
 
 json toJson(const RequestModel& m) {
@@ -223,6 +247,7 @@ json toJson(const RequestModel& m) {
     j["type"] = toString(m.type);
     j["seq"] = m.seq;
     if (m.type == RequestType::Http) j["http"] = httpToJson(m.http);
+    else if (m.type == RequestType::WebSocket) j["ws"] = wsToJson(m.ws);
     else j["grpc"] = grpcToJson(m.grpc);
     return j;
 }
@@ -238,6 +263,8 @@ RequestModel requestFromJson(const json& j) {
     m.seq = getInt(j, "seq", 0);
     if (m.type == RequestType::Http) {
         if (auto it = j.find("http"); it != j.end()) m.http = httpFrom(*it);
+    } else if (m.type == RequestType::WebSocket) {
+        if (auto it = j.find("ws"); it != j.end()) m.ws = wsFrom(*it);
     } else {
         if (auto it = j.find("grpc"); it != j.end()) m.grpc = grpcFrom(*it);
     }

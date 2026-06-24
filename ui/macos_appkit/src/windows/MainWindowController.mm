@@ -398,11 +398,13 @@
     _settingButton.frame = NSMakeRect(x, ty, wSetting, btnH); x += wSetting + 6;
     _envButton.frame = NSMakeRect(x, ty, wEnv, btnH); x += wEnv + 6;
     BOOL grpc = (_model.type == core::RequestType::Grpc);
+    BOOL ws = (_model.type == core::RequestType::WebSocket);
     _methodPopup.frame = NSMakeRect(x, ty, wMethod, btnH);
     _protoPopup.frame = NSMakeRect(x, ty, wProto, btnH);
-    _methodPopup.hidden = grpc;
+    _methodPopup.hidden = grpc || ws;   // only HTTP shows the method popup
     _protoPopup.hidden = !grpc;
-    x += (grpc ? wProto : wMethod) + 6;
+    // WS has no leading popup; HTTP advances by method width, gRPC by proto width.
+    x += (grpc ? wProto : (ws ? 0 : wMethod)) + 6;
 
     _cancelButton.hidden = !_sending;
     _servicePopup.hidden = !grpc;
@@ -451,6 +453,11 @@
     if (t == core::RequestType::Http) {
         _reqTabTitles = @[ StrTabBody, StrTabQuery, StrTabHeaders, StrTabAuth ];  // "Query" (avoid confusion with path params); Body leftmost
         _respTabTitles = @[ StrTabResponse, StrTabHeaders, StrTabRequest, StrTabCookie ];
+    } else if (t == core::RequestType::WebSocket) {
+        // WS: Message = frame to send (also auto-sent on connect); Headers = handshake headers.
+        // Response pane = the in/out frame log array (reuses the streaming render).
+        _reqTabTitles = @[ StrTabMessage, StrTabHeaders ];
+        _respTabTitles = @[ StrTabMessage, StrTabRequest ];
     } else {
         _reqTabTitles = @[ StrTabMessage, StrTabMetadata, StrTabAuth ];
         _respTabTitles = @[ StrTabMessage, StrTabRequest ];

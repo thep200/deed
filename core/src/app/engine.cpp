@@ -23,6 +23,7 @@
 #include "sending/grpc_descriptors.hpp"
 #include "sending/grpc_sender.hpp"
 #include "sending/http_sender.hpp"
+#include "sending/ws_sender.hpp"
 #include "codec/json_codec.hpp"
 #include "sending/sender_registry.hpp"
 #include "infra/thread_pool.hpp"
@@ -106,6 +107,7 @@ struct Engine::Impl {
         : collectionRoot(std::move(cfg.collectionRoot)),
           cacheLimits(cfg.cacheLimits),
           streamLimits(cfg.streamLimits),
+          wsLimits(cfg.wsLimits),
           collection(collectionRoot),
           session(collectionRoot),
           environments(collectionRoot),
@@ -133,6 +135,7 @@ struct Engine::Impl {
     std::string collectionRoot;
     CacheLimits cacheLimits;                  // cache ceiling/floor from .env (via EngineConfig)
     StreamLimits streamLimits;                // stream ceilings from .env (via EngineConfig)
+    WsLimits wsLimits;                        // WebSocket tunables from .env (via EngineConfig)
     CollectionStore collection;
     SessionStore session;
     EnvironmentStore environments;
@@ -175,6 +178,14 @@ struct Engine::Impl {
     };
     std::shared_ptr<StreamReg> streams = std::make_shared<StreamReg>();
     std::atomic<std::uint64_t> nextStreamId{1};
+
+    // Duplex session registry (SPEC_websocket §4): sessionId -> shared WsSession (for close + cleanup).
+    struct SessionReg {
+        std::mutex mu;
+        std::map<std::string, std::shared_ptr<WsSession>> map;
+    };
+    std::shared_ptr<SessionReg> sessions = std::make_shared<SessionReg>();
+    std::atomic<std::uint64_t> nextSessionId{1};
 
     // pool DECLARED LAST -> destructor runs FIRST (reverse order): join all workers
     // before registry/inflight are destroyed, ensuring senders stay alive throughout sending.
@@ -282,6 +293,11 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
         h.auth.basicUsername = resolveStr(h.auth.basicUsername, vars);
         h.auth.basicPassword = resolveStr(h.auth.basicPassword, vars);
         h.auth.apikeyValue = resolveStr(h.auth.apikeyValue, vars);
+    } else if (rr.model.type == RequestType::WebSocket) {
+        auto& ws = rr.model.ws;
+        ws.url = resolveStr(ws.url, vars);
+        resolveKv(ws.headers, vars);
+        for (auto& m : ws.onOpenSend) m = resolveStr(m, vars);
     } else {
         auto& g = rr.model.grpc;
         g.target = resolveStr(g.target, vars);
@@ -423,6 +439,7 @@ void Engine::cancel(RequestHandle handle) {
 
 InteractionKind Engine::interactionOf(const RequestModel& model) const {
     // gRPC: derived from the method descriptor's type (set when the RPC was picked — §4, no round-trip).
+    if (model.type == RequestType::WebSocket) return InteractionKind::Duplex;
     if (model.type == RequestType::Grpc) {
         if (model.grpc.methodType == "server_streaming") return InteractionKind::ServerStream;
         if (model.grpc.methodType == "client_streaming") return InteractionKind::ClientStream;
@@ -492,6 +509,74 @@ void Engine::cancelStream(const StreamHandle& h) {
     std::lock_guard<std::mutex> lk(streams->mu);
     auto it = streams->map.find(h.streamId);
     if (it != streams->map.end()) it->second->cancel();   // hook + flag -> sender stops its Read loop
+}
+
+// --- Duplex session (SPEC_websocket §4) ---
+
+SessionHandle Engine::openSession(const RequestModel& model, IStreamSink* inbound) {
+    SessionHandle h;
+    if (!inbound) return h;
+
+    // Build WS config: .env limits (0 -> WsSender default) + TLS verify from AppConfig.
+    WsConfig cfg;
+    const WsLimits& wl = impl_->wsLimits;
+    if (wl.pingIntervalMs > 0) cfg.pingIntervalMs = wl.pingIntervalMs;
+    if (wl.idleTimeoutMs > 0) cfg.idleTimeoutMs = wl.idleTimeoutMs;
+    if (wl.closeTimeoutMs > 0) cfg.closeTimeoutMs = wl.closeTimeoutMs;
+    if (wl.maxFrameBytes > 0) cfg.maxFrameBytes = static_cast<std::uint64_t>(wl.maxFrameBytes);
+    if (wl.sendQueueMaxFrames > 0) cfg.sendQueueMaxFrames = static_cast<std::size_t>(wl.sendQueueMaxFrames);
+    if (wl.sendQueueMaxBytes > 0) cfg.sendQueueMaxBytes = static_cast<std::uint64_t>(wl.sendQueueMaxBytes);
+    cfg.verifyTls = impl_->appConfig.load().verifyTls;
+
+    h.sessionId = "ws-" + std::to_string(impl_->nextSessionId.fetch_add(1));
+    auto session = wsMakeSession(cfg);
+    h.channel = wsMakeChannel(session);
+
+    auto sessions = impl_->sessions;
+    { std::lock_guard<std::mutex> lk(sessions->mu); sessions->map[h.sessionId] = session; }
+
+    std::shared_ptr<ResolvedRequest> rr;
+    std::shared_ptr<std::string> immediateError;
+    try {
+        rr = std::make_shared<ResolvedRequest>(resolveRequest(model));
+    } catch (const std::exception& e) {
+        immediateError = std::make_shared<std::string>(e.what());
+    }
+
+    const std::string sid = h.sessionId;
+    impl_->pool.submit([rr, inbound, session, sid, sessions, immediateError]() {
+        try {
+            if (immediateError) {
+                inbound->onStreamOpen(StreamMeta{sid, StreamTransport::WebSocket, {}, 0});
+                StreamEnd end;
+                end.status = StreamStatus::Error;
+                end.statusMessage = *immediateError;
+                inbound->onStreamClose(end);
+            } else {
+                wsRun(*rr, *inbound, session, sid);
+            }
+        } catch (const std::exception& e) {
+            StreamEnd end;
+            end.status = StreamStatus::Error;
+            end.statusMessage = e.what();
+            inbound->onStreamClose(end);
+        }
+        std::lock_guard<std::mutex> lk(sessions->mu);
+        sessions->map.erase(sid);
+    });
+    return h;
+}
+
+void Engine::closeSession(const SessionHandle& h, int code, const std::string& reason) {
+    if (h.sessionId.empty()) return;
+    auto sessions = impl_->sessions;
+    std::shared_ptr<WsSession> s;
+    {
+        std::lock_guard<std::mutex> lk(sessions->mu);
+        auto it = sessions->map.find(h.sessionId);
+        if (it != sessions->map.end()) s = it->second;
+    }
+    if (s) wsRequestClose(s, code, reason);
 }
 
 // --- Response cache ---
