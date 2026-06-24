@@ -77,6 +77,9 @@
 - (void)onCoreError:(uint64_t)handle error:(const core::ApiError &)err {
     if (handle != _currentHandle) return;
     NSLog(@"[smoke] onCoreError kind=%s msg=%s", core::toString(err.kind).c_str(), err.message.c_str());
+    // gRPC send failed -> the RPC list may be stale (server down/changed). Invalidate so the next
+    // dropdown open re-fetches it (requirement: re-fetch starting from the failed send).
+    if (_model.type == core::RequestType::Grpc) _grpcMethodsFetched = NO;
     [self finishSending];
     [self displayErrorKind:err.kind message:N(err.message)];
     [self toastWarn:[NSString stringWithFormat:@"%@: %@", N(core::toString(err.kind)), N(err.message)]];
@@ -135,28 +138,32 @@
     _hasResp = YES;
     [self rebuildResponseBuffers];   // reformat the captured array into the body/Request tabs
 
-    // Status line, fields separated by '|': "OK | N events | Nms" / "Cancelled | N events" /
-    // "Error | <code> | <msg>" (+ " (truncated)" suffix after OK).
+    // Status line, fields separated by '|'. Size is shown for Ok AND Cancelled — so a stream stopped
+    // mid-way still reports how much was received.
+    int64_t sz = (int64_t)_streamAccum.length;
+    NSString *sizeStr = (sz >= 1024) ? [NSString stringWithFormat:@"%.1fkb", sz / 1024.0]
+                                     : [NSString stringWithFormat:@"%lldb", (long long)sz];
     NSString *line;
     NSColor *color;
     NSString *trunc = truncated ? StrStreamTruncated : @"";
     if (status == core::StreamStatus::Ok) {
-        line = [NSString stringWithFormat:StrFmtStreamOk, trunc, (unsigned long long)events, elapsedMs];
+        line = [NSString stringWithFormat:StrFmtStreamOk, trunc, sizeStr, (unsigned long long)events, elapsedMs];
         color = [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1.0];
     } else if (status == core::StreamStatus::Cancelled) {
-        line = [NSString stringWithFormat:StrFmtStreamCancelled, StrStatusCancelled,
+        line = [NSString stringWithFormat:StrFmtStreamCancelled, StrStatusCancelled, sizeStr,
                                           (unsigned long long)events];
         color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
     } else {
         NSString *kind = (status == core::StreamStatus::Timeout) ? StrStreamKindTimeout : StrStreamKindError;
         line = [NSString stringWithFormat:StrFmtStreamError, kind, code, message ?: @""];
         color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
+        if (_model.type == core::RequestType::Grpc) _grpcMethodsFetched = NO;   // re-fetch RPCs next open
     }
     _statusLabel.stringValue = line;
     _statusLabel.textColor = color;
 
-    // Cache the assembled array (partial flagged for cancel/error) — keyed by request id (§8).
-    [self cacheResponseAsync:resp forId:_currentId];
+    // Stream responses (gRPC stream / WS / SSE) are NOT cached — they are live, open-ended and can be
+    // huge; persisting them would bloat the cache (and a partial/cancelled capture is rarely useful).
 }
 
 // Display the error state in the response pane (shared by new errors and cached errors).

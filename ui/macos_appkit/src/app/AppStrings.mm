@@ -66,6 +66,7 @@ NSString *const StrMethodOptions = @"OPTIONS";
 #pragma mark - RPC picker
 NSString *const StrNoRpc = @"No RPC";
 NSString *const StrLoading = @"Loading...";
+NSString *const StrFetching = @"Fetching...";   // RPC list fetch in progress (gRPC)
 
 #pragma mark - Tab
 NSString *const StrTabBody = @"Body";
@@ -157,9 +158,9 @@ NSString *const StrGrpcTagClientStream = @"[S <-C]";
 NSString *const StrGrpcTagBidiStream = @"[S<->C]";
 
 NSString *const StrFmtStreamReceived = @"Received %llu events";
-NSString *const StrFmtStreamOk = @"OK%@ | %llu events | %lldms";
+NSString *const StrFmtStreamOk = @"OK%@ | %@ | %llu events | %lldms";   // trunc | size | events | ms
 NSString *const StrStreamTruncated = @" (truncated)";
-NSString *const StrFmtStreamCancelled = @"%@ | %llu events";
+NSString *const StrFmtStreamCancelled = @"%@ | %@ | %llu events";       // Cancelled | size | events
 NSString *const StrFmtStreamError = @"%@ | %d | %@";
 NSString *const StrStreamKindError = @"Error";
 NSString *const StrStreamKindTimeout = @"Timeout";

@@ -156,6 +156,7 @@ static NSString *GrpcRpcLabel(const std::string &service, const std::string &met
 // Show the RPC saved in the model on the button (NO network call). Real fetch happens on dropdown click.
 - (void)showSavedGrpcMethodLabel {
     _grpcMethods.clear();
+    _grpcMethodsFetched = NO;   // invalidate: only ONE request's list is kept; next open re-fetches
     const core::GrpcRequest &g = _model.grpc;
     if (g.service.empty() || g.method.empty()) {
         _servicePopup.itemTitles = @[ StrNoRpc ];
@@ -169,8 +170,9 @@ static NSString *GrpcRpcLabel(const std::string &service, const std::string &met
     [_servicePopup setNeedsDisplay:YES];
 }
 
-// Background load (does NOT open menu): used when changing proto source / committing URL.
-- (void)reloadGrpcMethods { [self fetchGrpcMethodsThenOpen:NO]; }
+// Proto source / URL changed -> the RPC list is stale (different server or source). Invalidate so the
+// NEXT dropdown open re-fetches from scratch; don't hit the network on every edit.
+- (void)reloadGrpcMethods { [self showSavedGrpcMethodLabel]; }
 
 // Load the service/RPC list from the current proto source (reflection: query host; .proto: parse).
 // openWhenDone = YES: open the menu right after loading (used when clicking the dropdown to pick an RPC).
@@ -189,7 +191,7 @@ static NSString *GrpcRpcLabel(const std::string &service, const std::string &met
         if (openWhenDone) [self toastWarn:StrToastEnterGrpcHost];
         return;
     }
-    _servicePopup.itemTitles = @[ StrLoading ];
+    _servicePopup.itemTitles = @[ StrFetching ];
     _servicePopup.selectedIndex = 0;
     [_servicePopup setNeedsDisplay:YES];
 
@@ -213,6 +215,7 @@ static NSString *GrpcRpcLabel(const std::string &service, const std::string &met
                 openMenu:(BOOL)openMenu {
     _grpcMethods = methods;
     if (methods.empty()) {
+        _grpcMethodsFetched = NO;   // failed/empty -> allow a retry on the next open
         _servicePopup.itemTitles = @[ StrNoRpc ];
         _servicePopup.selectedIndex = 0;
         _servicePopup.toolTip = nil;
@@ -220,6 +223,7 @@ static NSString *GrpcRpcLabel(const std::string &service, const std::string &met
         if (err.length) [self toastWarn:[NSString stringWithFormat:StrFmtToastListRpcs, err]];
         return;
     }
+    _grpcMethodsFetched = YES;       // success -> reuse this list; don't re-fetch until invalidated
     NSMutableArray<NSString *> *titles = [NSMutableArray array];
     NSInteger sel = 0;
     for (size_t i = 0; i < methods.size(); ++i) {

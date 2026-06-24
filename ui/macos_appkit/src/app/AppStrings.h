@@ -81,6 +81,7 @@ extern NSString *const StrMethodOptions;
 #pragma mark - RPC picker
 extern NSString *const StrNoRpc;
 extern NSString *const StrLoading;
+extern NSString *const StrFetching;
 
 #pragma mark - Tab (request/response)
 extern NSString *const StrTabBody;
@@ -174,9 +175,9 @@ extern NSString *const StrGrpcTagBidiStream;     // [S<->C]
 
 // --- gRPC streaming: status line (fields separated by '|') ---
 extern NSString *const StrFmtStreamReceived;     // "Received %llu events"
-extern NSString *const StrFmtStreamOk;           // "OK%@ | %llu events | %lldms"  (%@ = truncated suffix)
+extern NSString *const StrFmtStreamOk;           // "OK%@ | %@ | %llu events | %lldms"  (trunc | size | events | ms)
 extern NSString *const StrStreamTruncated;       // " (truncated)"
-extern NSString *const StrFmtStreamCancelled;    // "%@ | %llu events"  (%@ = StrStatusCancelled)
+extern NSString *const StrFmtStreamCancelled;    // "%@ | %@ | %llu events"  (Cancelled | size | events)
 extern NSString *const StrFmtStreamError;        // "%@ | %d | %@"  (kind | code | message)
 extern NSString *const StrStreamKindError;       // Error
 extern NSString *const StrStreamKindTimeout;     // Timeout

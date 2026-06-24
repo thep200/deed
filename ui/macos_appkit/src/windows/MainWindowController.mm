@@ -251,7 +251,10 @@
     __weak MainWindowController *wsForRpc = self;
     _servicePopup.onClick = ^{
         MainWindowController *s = wsForRpc; if (!s) return;
-        [s fetchGrpcMethodsThenOpen:YES];
+        // First open fetches the full list; afterwards reuse it (no network) until invalidated
+        // (request switch / URL or proto change / a send error).
+        if (s->_grpcMethodsFetched && !s->_grpcMethods.empty()) [s->_servicePopup openMenu];
+        else [s fetchGrpcMethodsThenOpen:YES];
     };
 
     _methodPopup = [[OS9PopupButton alloc] initWithItems:@[ StrMethodGet, StrMethodPost, StrMethodPut, StrMethodPatch, StrMethodDelete, StrMethodHead, StrMethodOptions ]

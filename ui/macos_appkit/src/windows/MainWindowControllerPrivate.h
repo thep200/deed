@@ -78,8 +78,9 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     core::SessionHandle _wsSession;        // active WebSocket session (SPEC_websocket §4); channel = send side
     NSMutableString *_streamAccum;         // assembled "[ … ]" array, cached on close
     uint64_t _streamEvents;                // events received so far (status line)
-    std::vector<core::GrpcMethodInfo> _grpcMethods; // parallel to _servicePopup items
+    std::vector<core::GrpcMethodInfo> _grpcMethods; // parallel to _servicePopup items (ONLY the current request's)
     uint64_t _grpcMethodsReqSeq;  // race guard: apply only the latest listGrpcMethods result
+    BOOL _grpcMethodsFetched;     // true once fetched for THIS request -> reuse, don't re-fetch (until invalidated)
     uint64_t _loadReqSeq;         // token: apply only the LATEST loadRequestAtRel model (async load)
 
     // Chrome + containers
