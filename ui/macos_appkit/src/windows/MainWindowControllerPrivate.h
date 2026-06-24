@@ -305,6 +305,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)newHttp:(id)s;
 - (void)newGrpc:(id)s;
 - (void)newWs:(id)s;
+- (void)newGraphQl:(id)s;
 - (void)wsSendOrConnect;
 - (void)createRequest:(core::RequestType)t name:(NSString *)name;
 - (void)newFolder:(id)s;

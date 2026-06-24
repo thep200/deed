@@ -92,6 +92,8 @@ extern NSString *const StrTabResponse;
 extern NSString *const StrTabRequest;
 extern NSString *const StrTabCookie;
 extern NSString *const StrTabMessage;
+extern NSString *const StrTabGqlQuery;
+extern NSString *const StrTabVariables;
 extern NSString *const StrTabMetadata;
 
 #pragma mark - Body mode (dropdown)
@@ -107,6 +109,7 @@ extern NSString *const StrTitleEnvironments;
 extern NSString *const StrMenuNewHttp;
 extern NSString *const StrMenuNewGrpc;
 extern NSString *const StrMenuNewWs;
+extern NSString *const StrMenuNewGraphQl;
 extern NSString *const StrNewFolder;     // menu + default folder name
 extern NSString *const StrFmtDeleteItems;
 
@@ -114,6 +117,7 @@ extern NSString *const StrFmtDeleteItems;
 extern NSString *const StrDefaultRequestName;
 extern NSString *const StrDefaultRpcName;
 extern NSString *const StrDefaultWsName;
+extern NSString *const StrDefaultGqlName;
 extern NSString *const StrDefaultImportName;   // fallback when a name cannot be inferred
 extern NSString *const StrImportedGrpc;
 

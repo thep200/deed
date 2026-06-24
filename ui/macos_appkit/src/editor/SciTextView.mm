@@ -25,6 +25,10 @@
 - (instancetype)initEditable:(BOOL)editable {
     if ((self = [super initWithFrame:NSZeroRect])) {
         _editable = editable;
+        // Clip the Scintilla content to our bounds. The parent OS9SerratedInset draws its border FIRST,
+        // then subviews paint on top; without clipping, Scintilla's line-number gutter background bleeds
+        // over the inset's bottom border when the document is scrolled. Clipping keeps it inside.
+        self.clipsToBounds = YES;
         _sci = [[ScintillaView alloc] initWithFrame:self.bounds];
         _sci.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         _sci.delegate = self;

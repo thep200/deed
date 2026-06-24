@@ -22,9 +22,10 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     if (!n.isFolder) {
         it.grpc = (n.requestType == core::RequestType::Grpc);
         it.badge = [NSString stringWithFormat:@"%s %s", core::toString(n.requestType).c_str(), n.methodOrType.c_str()];
-        // HTTP -> method name (GET/POST...); gRPC -> "gRPC"; WebSocket -> "WS".
+        // HTTP -> method name (GET/POST...); gRPC -> "gRPC"; WebSocket -> "WS"; GraphQL -> "GQL".
         it.mark = it.grpc ? @"gRPC"
                 : (n.requestType == core::RequestType::WebSocket) ? @"WS"
+                : (n.requestType == core::RequestType::GraphQL) ? @"GQL"
                 : N(n.methodOrType);
     }
     return it;

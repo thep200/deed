@@ -38,6 +38,8 @@ add_library(core STATIC
   src/sending/grpc_descriptors.cpp
   src/sending/ws_sender.cpp
   src/streaming/sse_parser.cpp
+  src/graphql/gql_operation.cpp
+  src/graphql/gql_ws_protocol.cpp
   src/app/engine.cpp
   src/import_export/shell_tokenize.cpp
   src/import_export/curl_importer.cpp

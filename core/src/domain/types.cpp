@@ -33,6 +33,7 @@ std::string toString(RequestType t) {
     switch (t) {
         case RequestType::Grpc: return "grpc";
         case RequestType::WebSocket: return "ws";
+        case RequestType::GraphQL: return "graphql";
         default: return "http";
     }
 }
@@ -41,6 +42,7 @@ bool parseRequestType(const std::string& s, RequestType& out) {
     if (s == "http") { out = RequestType::Http; return true; }
     if (s == "grpc") { out = RequestType::Grpc; return true; }
     if (s == "ws") { out = RequestType::WebSocket; return true; }
+    if (s == "graphql") { out = RequestType::GraphQL; return true; }
     return false;
 }
 

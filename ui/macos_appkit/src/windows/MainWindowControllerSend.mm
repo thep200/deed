@@ -11,7 +11,8 @@
     // WebSocket is a session, not a one-shot send: the action toggles Connect / Send-frame (SPEC_websocket §6).
     if (_model.type == core::RequestType::WebSocket) { [self wsSendOrConnect]; return; }
     if (_sending) return;
-    [self parseUrlQueryIntoQueryTab];   // user typed query into URL -> split into Query tab before sync
+    // Only HTTP has a URL query string to split; GraphQL's "Query" tab is the document, not params.
+    if (_model.type == core::RequestType::Http) [self parseUrlQueryIntoQueryTab];
     if (![self syncModelFromEditors:NO]) return;
 
     // Route by interaction kind (SPEC_grpc_streaming §4). Methods that STREAM responses (server-streaming

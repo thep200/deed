@@ -77,6 +77,8 @@ NSString *const StrTabResponse = @"Response";
 NSString *const StrTabRequest = @"Request";
 NSString *const StrTabCookie = @"Cookie";
 NSString *const StrTabMessage = @"Message";
+NSString *const StrTabGqlQuery = @"Query";
+NSString *const StrTabVariables = @"Variables";
 NSString *const StrTabMetadata = @"Metadata";
 
 #pragma mark - Body mode
@@ -92,6 +94,7 @@ NSString *const StrTitleEnvironments = @"Environments";
 NSString *const StrMenuNewHttp = @"New HTTP Request";
 NSString *const StrMenuNewGrpc = @"New gRPC Request";
 NSString *const StrMenuNewWs = @"New WebSocket";
+NSString *const StrMenuNewGraphQl = @"New GraphQL";
 NSString *const StrNewFolder = @"New Folder";
 NSString *const StrFmtDeleteItems = @"Delete %lu items";
 
@@ -99,6 +102,7 @@ NSString *const StrFmtDeleteItems = @"Delete %lu items";
 NSString *const StrDefaultRequestName = @"New Request";
 NSString *const StrDefaultRpcName = @"New RPC";
 NSString *const StrDefaultWsName = @"New Socket";
+NSString *const StrDefaultGqlName = @"New GraphQL";
 NSString *const StrDefaultImportName = @"request";
 NSString *const StrImportedGrpc = @"Imported gRPC";
 

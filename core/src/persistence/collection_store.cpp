@@ -323,6 +323,9 @@ std::string CollectionStore::createRequest(const std::string& folderRel, Request
         m.http.body.mode = "none";
     } else if (type == RequestType::WebSocket) {
         m.ws.defaultSendKind = WsSendKind::Text;   // url filled in by the user (ws:// or wss://)
+    } else if (type == RequestType::GraphQL) {
+        m.graphql.query = "query {\n  \n}";        // starter document
+        m.graphql.variablesJson = "{}";
     } else {
         m.grpc.methodType = "unary";
         m.grpc.protoSource.mode = "reflection";

@@ -442,6 +442,7 @@
         [[m addItemWithTitle:StrMenuNewHttp action:@selector(newHttp:) keyEquivalent:@""] setTarget:self];
         [[m addItemWithTitle:StrMenuNewGrpc action:@selector(newGrpc:) keyEquivalent:@""] setTarget:self];
         [[m addItemWithTitle:StrMenuNewWs action:@selector(newWs:) keyEquivalent:@""] setTarget:self];
+        [[m addItemWithTitle:StrMenuNewGraphQl action:@selector(newGraphQl:) keyEquivalent:@""] setTarget:self];
         [[m addItemWithTitle:StrNewFolder action:@selector(newFolder:) keyEquivalent:@""] setTarget:self];
         if (t != nil) { // folder also allows rename/dup/delete
             [m addItem:[NSMenuItem separatorItem]];
@@ -511,6 +512,7 @@
 - (void)newHttp:(id)s { [self createRequest:core::RequestType::Http name:StrDefaultRequestName]; }
 - (void)newGrpc:(id)s { [self createRequest:core::RequestType::Grpc name:StrDefaultRpcName]; }
 - (void)newWs:(id)s { [self createRequest:core::RequestType::WebSocket name:StrDefaultWsName]; }
+- (void)newGraphQl:(id)s { [self createRequest:core::RequestType::GraphQL name:StrDefaultGqlName]; }
 // Default name, NO popup. Rename later via inline-rename in the tree. loadRequestAtRel
 // autosaves the open request before switching.
 - (void)createRequest:(core::RequestType)t name:(NSString *)name {

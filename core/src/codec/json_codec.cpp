@@ -242,6 +242,50 @@ WsRequest wsFrom(const json& j) {
     return w;
 }
 
+const char* gqlOpStr(GqlOperation o) {
+    switch (o) {
+        case GqlOperation::Query: return "query";
+        case GqlOperation::Mutation: return "mutation";
+        case GqlOperation::Subscription: return "subscription";
+        default: return "auto";
+    }
+}
+json gqlToJson(const GraphQlRequest& g) {
+    json j;
+    j["url"] = g.url;
+    j["query"] = g.query;
+    j["variables"] = g.variablesJson;
+    j["operationName"] = g.operationName;
+    j["operation"] = gqlOpStr(g.operation);
+    j["subTransport"] = (g.subTransport == GqlSubTransport::Sse) ? "sse" : "ws";
+    j["wsProtocol"] = (g.wsProtocol == GqlWsProtocol::SubscriptionsTransportWs)
+                          ? "subscriptions-transport-ws" : "graphql-transport-ws";
+    if (!g.connectionInitPayloadJson.empty()) j["connectionInitPayload"] = g.connectionInitPayloadJson;
+    j["headers"] = kvArray(g.headers);
+    if (g.useGetForQuery) j["useGetForQuery"] = true;
+    return j;
+}
+GraphQlRequest gqlFrom(const json& j) {
+    GraphQlRequest g;
+    if (!j.is_object()) return g;
+    g.url = getStr(j, "url");
+    g.query = getStr(j, "query");
+    g.variablesJson = getStr(j, "variables", "{}");
+    g.operationName = getStr(j, "operationName");
+    std::string op = getStr(j, "operation", "auto");
+    g.operation = (op == "query") ? GqlOperation::Query
+                : (op == "mutation") ? GqlOperation::Mutation
+                : (op == "subscription") ? GqlOperation::Subscription : GqlOperation::Auto;
+    g.subTransport = (getStr(j, "subTransport", "ws") == "sse") ? GqlSubTransport::Sse
+                                                               : GqlSubTransport::WebSocket;
+    g.wsProtocol = (getStr(j, "wsProtocol", "graphql-transport-ws") == "subscriptions-transport-ws")
+                       ? GqlWsProtocol::SubscriptionsTransportWs : GqlWsProtocol::GraphQlTransportWs;
+    g.connectionInitPayloadJson = getStr(j, "connectionInitPayload");
+    if (auto it = j.find("headers"); it != j.end()) g.headers = kvFrom(*it);
+    g.useGetForQuery = getBool(j, "useGetForQuery", false);
+    return g;
+}
+
 } // namespace
 
 json toJson(const RequestModel& m) {
@@ -254,6 +298,7 @@ json toJson(const RequestModel& m) {
     j["seq"] = m.seq;
     if (m.type == RequestType::Http) j["http"] = httpToJson(m.http);
     else if (m.type == RequestType::WebSocket) j["ws"] = wsToJson(m.ws);
+    else if (m.type == RequestType::GraphQL) j["graphql"] = gqlToJson(m.graphql);
     else j["grpc"] = grpcToJson(m.grpc);
     return j;
 }
@@ -271,6 +316,8 @@ RequestModel requestFromJson(const json& j) {
         if (auto it = j.find("http"); it != j.end()) m.http = httpFrom(*it);
     } else if (m.type == RequestType::WebSocket) {
         if (auto it = j.find("ws"); it != j.end()) m.ws = wsFrom(*it);
+    } else if (m.type == RequestType::GraphQL) {
+        if (auto it = j.find("graphql"); it != j.end()) m.graphql = gqlFrom(*it);
     } else {
         if (auto it = j.find("grpc"); it != j.end()) m.grpc = grpcFrom(*it);
     }

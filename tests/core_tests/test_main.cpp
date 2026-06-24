@@ -27,6 +27,8 @@ int run_stream_sink_tests();
 int run_ws_session_tests();
 // Defined in sse_parser_test.cpp — SSE wire parser gatekeeper (SPEC_sse AC-2/3/5/7). Returns #failures.
 int run_sse_parser_tests();
+// Defined in gql_ws_protocol_test.cpp — GraphQL-over-WS protocol gatekeeper (SPEC_graphql AC-7). Returns #failures.
+int run_gql_ws_protocol_tests();
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -779,10 +781,11 @@ int main() {
     int streamFail = run_stream_sink_tests();   // INV-1 gatekeeper (transport-free)
     int wsFail = run_ws_session_tests();        // INV-1 duplex gatekeeper (transport-free)
     int sseFail = run_sse_parser_tests();       // SSE wire parser gatekeeper (transport-free)
+    int gqlFail = run_gql_ws_protocol_tests();  // GraphQL-over-WS protocol gatekeeper (transport-free)
 
     fs::remove_all(root);
 
-    std::printf("\n==== %d passed, %d failed (+%d stream, +%d ws, +%d sse failures) ====\n",
-                g_pass, g_fail, streamFail, wsFail, sseFail);
-    return (g_fail == 0 && streamFail == 0 && wsFail == 0 && sseFail == 0) ? 0 : 1;
+    std::printf("\n==== %d passed, %d failed (+%d stream, +%d ws, +%d sse, +%d gql failures) ====\n",
+                g_pass, g_fail, streamFail, wsFail, sseFail, gqlFail);
+    return (g_fail == 0 && streamFail == 0 && wsFail == 0 && sseFail == 0 && gqlFail == 0) ? 0 : 1;
 }

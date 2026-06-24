@@ -124,7 +124,8 @@ int usage() {
         "  apicli import-curl <curl command...>\n"
         "  apicli import-grpc <grpc spec...>\n"
         "  apicli ws <url> [message]\n"
-        "  apicli sse <url> [seconds]\n";
+        "  apicli sse <url> [seconds]\n"
+        "  apicli gql <url> <query...>\n";
     return 2;
 }
 
@@ -185,6 +186,17 @@ int main(int argc, char** argv) {
             for (const auto& m : methods)
                 std::cout << m.service << "/" << m.method << "  [" << m.methodType << "]\n";
             return 0;
+        }
+        if (cmd == "gql" && argc >= 4) {   // gql <url> <query...> — GraphQL query/mutation over HTTP
+            Engine engine(EngineConfig{".", ""});
+            RequestModel m;
+            m.type = RequestType::GraphQL;
+            m.graphql.url = argv[2];
+            m.graphql.query = joinArgs(argc, argv, 3);
+            std::cout << "GraphQL: " << m.graphql.url << "\n";
+            CliDelegate del;
+            engine.send(m, &del);   // query/mutation routes to HTTP under the hood
+            return del.wait() ? 0 : 1;
         }
         if (cmd == "sse" && argc >= 3) {   // sse <url> [seconds] — stream events, then Stop
             Engine engine(EngineConfig{".", ""});

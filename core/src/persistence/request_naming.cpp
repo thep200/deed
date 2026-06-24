@@ -27,8 +27,9 @@ bool parseTypeRest(const std::string& rest, ParsedRequestName& out) {
     std::size_t sep = rest.find('_');
     if (sep == std::string::npos) return false;
     std::string type = rest.substr(0, sep);
-    if (type == "grpc" || type == "ws") {
-        out.type = (type == "ws") ? RequestType::WebSocket : RequestType::Grpc;
+    if (type == "grpc" || type == "ws" || type == "gql") {
+        out.type = (type == "ws") ? RequestType::WebSocket
+                 : (type == "gql") ? RequestType::GraphQL : RequestType::Grpc;
         out.slug = rest.substr(sep + 1);            // everything left = slug
         out.method.clear();
         return !out.slug.empty();
@@ -61,7 +62,7 @@ ParsedRequestName parseRequestFilename(const std::string& filename) {
 
     std::string firstTok = base.substr(0, firstSep);
     // OLD form (no id): first token is the type -> empty id, parse the whole string by type.
-    if (firstTok == "http" || firstTok == "grpc" || firstTok == "ws") {
+    if (firstTok == "http" || firstTok == "grpc" || firstTok == "ws" || firstTok == "gql") {
         out.id.clear();
         out.ok = parseTypeRest(base, out);
         return out;
@@ -79,6 +80,7 @@ std::string encodeRequestFilename(const std::string& id, RequestType type,
     std::string prefix = id + "_";                     // id always first (caller guarantees a valid id)
     if (type == RequestType::Grpc) return prefix + "grpc_" + slug + ".json";   // NO method
     if (type == RequestType::WebSocket) return prefix + "ws_" + slug + ".json"; // NO method
+    if (type == RequestType::GraphQL) return prefix + "gql_" + slug + ".json";  // NO method
     std::string m;
     for (unsigned char c : method) m += static_cast<char>(std::tolower(c));
     if (m.empty()) m = "get";

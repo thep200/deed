@@ -131,6 +131,12 @@
         [_reqBuffers addObject:N(w.onOpenSend.empty() ? std::string() : w.onOpenSend[0])];  // 0 = Message
         [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(w.headers))];                   // 1 = Headers
         _urlField.stringValue = N(w.url); _urlPrevLen = _urlField.stringValue.length;
+    } else if (_model.type == RequestType::GraphQL) {
+        const GraphQlRequest &g = _model.graphql;
+        [_reqBuffers addObject:N(g.query)];                                          // 0 = Query document
+        [_reqBuffers addObject:N(g.variablesJson.empty() ? "{}" : g.variablesJson)]; // 1 = Variables (JSON)
+        [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(g.headers))];           // 2 = Headers
+        _urlField.stringValue = N(g.url); _urlPrevLen = _urlField.stringValue.length;
     } else {
         const GrpcRequest &g = _model.grpc;
         [_reqBuffers addObject:N(g.message.empty() ? "{}" : g.message)];
@@ -195,6 +201,12 @@
         w.onOpenSend.clear();
         if (!frame.empty()) w.onOpenSend.push_back(frame);   // sent on connect; also the Send-frame source
         if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[1]), w.headers, err)) return fail(1, err);
+    } else if (_model.type == RequestType::GraphQL) {
+        GraphQlRequest &g = _model.graphql;
+        g.url = _urlField.stringValue.UTF8String;
+        g.query = S(_reqBuffers[0]);
+        g.variablesJson = S(_reqBuffers[1]);                 // free-form JSON (validated at send by core)
+        if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[2]), g.headers, err)) return fail(2, err);
     } else {
         GrpcRequest &g = _model.grpc;
         g.target = _urlField.stringValue.UTF8String;
@@ -597,6 +609,7 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     if (!_hasRequest) { _urlField.stringValue = @""; _urlPrevLen = 0; return; }
     NSString *u = (_model.type == core::RequestType::Grpc)      ? N(_model.grpc.target)
                   : (_model.type == core::RequestType::WebSocket) ? N(_model.ws.url)
+                  : (_model.type == core::RequestType::GraphQL)   ? N(_model.graphql.url)
                                                                   : N(_model.http.url);
     _urlField.stringValue = u;
     _urlPrevLen = u.length;

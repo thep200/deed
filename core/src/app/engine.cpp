@@ -20,6 +20,7 @@
 #include "core/sending/i_request_sender.hpp"
 #include "core/variables/variable_resolver.hpp"
 #include "infra/fs_util.hpp"
+#include "graphql/graphql.hpp"
 #include "sending/grpc_descriptors.hpp"
 #include "sending/grpc_sender.hpp"
 #include "sending/http_sender.hpp"
@@ -298,6 +299,12 @@ ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
         ws.url = resolveStr(ws.url, vars);
         resolveKv(ws.headers, vars);
         for (auto& m : ws.onOpenSend) m = resolveStr(m, vars);
+    } else if (rr.model.type == RequestType::GraphQL) {
+        auto& g = rr.model.graphql;
+        g.url = resolveStr(g.url, vars);
+        resolveKv(g.headers, vars);
+        g.variablesJson = resolveStr(g.variablesJson, vars);
+        g.connectionInitPayloadJson = resolveStr(g.connectionInitPayloadJson, vars);
     } else {
         auto& g = rr.model.grpc;
         g.target = resolveStr(g.target, vars);
@@ -395,18 +402,23 @@ RequestHandle Engine::send(const RequestModel& model, IUiDelegate* delegate) {
     }
 
     // Resolve + look up sender NOW on the calling thread (Engine still alive) -> worker won't deref impl_.
-    IRequestSender* sender = impl_->registry.get(model.type);
+    // GraphQL query/mutation is repackaged into an HTTP POST (reuse HttpSender) AFTER {{var}} resolution
+    // so the variables JSON parses cleanly (SPEC_graphql §4).
+    IRequestSender* sender = nullptr;
     std::shared_ptr<ResolvedRequest> rr;
     std::shared_ptr<ApiError> immediateError;
-    if (!sender) {
-        immediateError = std::make_shared<ApiError>(
-            ApiError{ErrorKind::Unsupported, "no sender for this request type"});
-    } else {
-        try {
-            rr = std::make_shared<ResolvedRequest>(resolveRequest(model));
-        } catch (const std::exception& e) {
-            immediateError = std::make_shared<ApiError>(ApiError{ErrorKind::Unknown, e.what()});
+    try {
+        rr = std::make_shared<ResolvedRequest>(resolveRequest(model));
+        if (model.type == RequestType::GraphQL &&
+            gql::effectiveOperation(model.graphql) != GqlOperation::Subscription) {
+            rr->model = gql::buildHttpModel(rr->model);
         }
+        sender = impl_->registry.get(rr->model.type);
+        if (!sender)
+            immediateError = std::make_shared<ApiError>(
+                ApiError{ErrorKind::Unsupported, "no sender for this request type"});
+    } catch (const std::exception& e) {
+        immediateError = std::make_shared<ApiError>(ApiError{ErrorKind::Unknown, e.what()});
     }
 
     // Worker only touches captured vars (sender stays alive via pool-destroyed-first; inflight is a shared_ptr).
@@ -440,6 +452,10 @@ void Engine::cancel(RequestHandle handle) {
 InteractionKind Engine::interactionOf(const RequestModel& model) const {
     // gRPC: derived from the method descriptor's type (set when the RPC was picked — §4, no round-trip).
     if (model.type == RequestType::WebSocket) return InteractionKind::Duplex;
+    // GraphQL (SPEC_graphql §3): subscription -> stream (openStream); query/mutation -> unary (send).
+    if (model.type == RequestType::GraphQL)
+        return gql::effectiveOperation(model.graphql) == GqlOperation::Subscription
+                   ? InteractionKind::ServerStream : InteractionKind::Unary;
     // SSE (SPEC_sse §5): HTTP consumes the response as a stream when streamMode is Sse/Auto OR the
     // request carries an `Accept: text/event-stream` header -> reuse openStream.
     if (model.type == RequestType::Http && httpRequestsSse(model.http))
