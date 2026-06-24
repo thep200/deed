@@ -41,6 +41,7 @@ add_library(core STATIC
   src/graphql/gql_operation.cpp
   src/graphql/gql_ws_protocol.cpp
   src/app/engine.cpp
+  src/app/engine_cache.cpp
   src/import_export/shell_tokenize.cpp
   src/import_export/curl_importer.cpp
   src/import_export/curl_export.cpp

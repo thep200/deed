@@ -8,6 +8,7 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)   # compile_commands.json for clang-tidy (.clang-tidy / SPEC_refactor §7)
 
 # --- Sanitizers for the stress harness (STRESS_TEST.md §2). Run passes SEPARATELY. ---
 # macOS lacks a reliable LeakSanitizer -> use `leaks`/Instruments for leaks; ASan for

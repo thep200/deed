@@ -1,0 +1,38 @@
+# SPEC_refactor §7 — lint config encoding the §3.3 thresholds so CI flags regressions.
+# Scope: core C++ (.cpp/.hpp). Obj-C++ is linted by the compiler's -Wall -Wextra + nullability.
+# Run: clang-tidy -p build <file>   (compile_commands.json is emitted by CMake — see CMAKE_EXPORT_COMPILE_COMMANDS).
+Checks: >
+  -*,
+  readability-else-after-return,
+  readability-function-cognitive-complexity,
+  readability-function-size,
+  readability-redundant-control-flow,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-make-unique,
+  modernize-make-shared,
+  modernize-use-using,
+  bugprone-use-after-move,
+  bugprone-unchecked-optional-access,
+  cppcoreguidelines-prefer-member-initializer
+
+WarningsAsErrors: ''
+HeaderFilterRegex: 'core/(include|src)/.*\.(hpp|h)$'
+FormatStyle: file
+
+# §3.3 thresholds — nesting <= 3, cyclomatic/cognitive <= ~10, params <= ~5, function length bounded.
+CheckOptions:
+  - key: readability-function-size.LineThreshold
+    value: '80'
+  - key: readability-function-size.StatementThreshold
+    value: '60'
+  - key: readability-function-size.BranchThreshold
+    value: '12'
+  - key: readability-function-size.ParameterThreshold
+    value: '6'
+  - key: readability-function-size.NestingThreshold
+    value: '4'
+  - key: readability-function-cognitive-complexity.Threshold
+    value: '25'
+  - key: readability-function-cognitive-complexity.IgnoreMacros
+    value: 'true'
