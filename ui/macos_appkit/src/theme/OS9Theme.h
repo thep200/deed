@@ -62,7 +62,9 @@
 + (void)drawTitleBarInactiveInRect:(NSRect)r;
 // Pinstripe grip band: #DDDDDD fill, #EEEEEE/#C5C5C5 edges, #999999 line every 2px;
 // fixed 13px tall, vertically centered in r, stretches with r.width.
-+ (void)drawTitleGripInRect:(NSRect)r;
+// mirrored=NO: light edge left, dark edge right (default). mirrored=YES: swapped — so the LEFT band
+// can face its lit edge toward the centered title (the two bands read as a symmetric pair, not one run).
++ (void)drawTitleGripInRect:(NSRect)r mirrored:(BOOL)mirrored;
 // Title button (close/zoom/collapse) — square bevel box with side r.size.width.
 // Structure (outer→inner, each layer 1px): outer bevel (TL #808080 / BR #FFFFFF, sunken) ->
 // black frame #262626 -> vertical gradient face #C9C9C9(top)→#F1F1F1(bottom) -> inner bevel

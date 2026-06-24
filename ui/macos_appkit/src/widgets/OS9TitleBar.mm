@@ -74,12 +74,14 @@ typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBH
     }
 
     // Pinstripe band: split into 2 regions (left/right) around the title; empty -> 1 continuous band.
+    // The two bands mirror each other so their lit "heads" both face the centered title (symmetric pair):
+    // left band mirrored (lit edge on its right), right band normal (lit edge on its left).
     if (_title.length && tr.size.width > 0) {
         CGFloat gapL = NSMinX(tr) - kTitlePad, gapR = NSMaxX(tr) + kTitlePad;
-        [self drawGripFrom:sx to:gapL];
-        [self drawGripFrom:gapR to:sr];
+        [self drawGripFrom:sx to:gapL mirrored:YES];
+        [self drawGripFrom:gapR to:sr mirrored:NO];
     } else {
-        [self drawGripFrom:sx to:sr];
+        [self drawGripFrom:sx to:sr mirrored:NO];
     }
 
     // Bold #262626 title centered (on plain #CCCCCC background).
@@ -92,9 +94,10 @@ typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBH
     [OS9Theme drawTitleButtonInRect:[self hideRect]  glyph:2 pressed:(_pressed == OS9TBHide)];
 }
 
-- (void)drawGripFrom:(CGFloat)x0 to:(CGFloat)x1 {
+- (void)drawGripFrom:(CGFloat)x0 to:(CGFloat)x1 mirrored:(BOOL)mirrored {
     if (x1 - x0 <= 0) return;
-    [OS9Theme drawTitleGripInRect:NSMakeRect(x0, self.bounds.origin.y, x1 - x0, self.bounds.size.height)];
+    [OS9Theme drawTitleGripInRect:NSMakeRect(x0, self.bounds.origin.y, x1 - x0, self.bounds.size.height)
+                         mirrored:mirrored];
 }
 
 // Inactive: flat background + gray title only, centered. No folder icon, no buttons.

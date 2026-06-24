@@ -293,7 +293,7 @@ static NSColor *kPressBot(void)    { return G(0.612); }  // #9C9C9C — pressed 
 }
 
 // §3 — Seamless grip band. r provides x/width + bar height (to vertically center the 13px block).
-+ (void)drawTitleGripInRect:(NSRect)r {
++ (void)drawTitleGripInRect:(NSRect)r mirrored:(BOOL)mirrored {
     if (r.size.width <= 0) return;
     const CGFloat kH = 13;
     CGFloat gy = floor(r.origin.y + (r.size.height - kH) / 2);
@@ -307,8 +307,12 @@ static NSColor *kPressBot(void)    { return G(0.612); }  // #9C9C9C — pressed 
     [kGripLine() set];                                                     // #999999 grain / 2px
     for (int i = 1; i <= 11; i += 2)
         NSRectFill(NSMakeRect(gx, gy + i, gw, 1));
-    [kGripLight() set]; NSRectFill(NSMakeRect(gx, gy, 1, kH));             // #EEEEEE left edge
-    [kGripDark() set];  NSRectFill(NSMakeRect(NSMaxX(strip) - 1, gy, 1, kH)); // #C5C5C5 right edge
+    // Lit/dark vertical edges. Default: light left, dark right. Mirrored swaps them so the band's lit
+    // "head" faces the opposite way — used for the LEFT band so both bands point inward at the title.
+    NSColor *leftEdge = mirrored ? kGripDark() : kGripLight();
+    NSColor *rightEdge = mirrored ? kGripLight() : kGripDark();
+    [leftEdge set];  NSRectFill(NSMakeRect(gx, gy, 1, kH));                   // left edge
+    [rightEdge set]; NSRectFill(NSMakeRect(NSMaxX(strip) - 1, gy, 1, kH));    // right edge
 
     [NSGraphicsContext restoreGraphicsState];
 }
