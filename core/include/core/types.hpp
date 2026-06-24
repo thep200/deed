@@ -65,6 +65,12 @@ struct HttpSettings {
     bool verifyTlsSet = false;
 };
 
+// Server-Sent Events mode (SPEC_sse §1). SSE is a *consumption mode* of an HTTP request, not a new type.
+// None: plain unary (gather body). Sse: always parse the response as text/event-stream.
+// Auto: stream-parse only if the response Content-Type is text/event-stream, else unary.
+// Default None so ordinary HTTP requests stay unary (Auto would route every request through the stream path).
+enum class HttpStreamMode { None, Auto, Sse };
+
 struct HttpRequest {
     std::string method = "GET";
     std::string url;
@@ -74,7 +80,13 @@ struct HttpRequest {
     Body body;
     Auth auth;
     HttpSettings settings;
+    HttpStreamMode streamMode = HttpStreamMode::None;   // SSE consumption mode (SPEC_sse §1)
 };
+
+// SSE detection (SPEC_sse §1/§4). A request streams if streamMode is Sse/Auto, OR it carries an enabled
+// `Accept: text/event-stream` header (the standard SSE trigger) — so users can opt in with just a header.
+bool httpRequestsSse(const HttpRequest& h);   // route to the stream path (openStream)
+bool httpForcesSse(const HttpRequest& h);     // parse as SSE regardless of response Content-Type
 
 // ---- gRPC ----
 struct ProtoSource {

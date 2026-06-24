@@ -37,6 +37,7 @@ add_library(core STATIC
   src/sending/grpc_sender.cpp
   src/sending/grpc_descriptors.cpp
   src/sending/ws_sender.cpp
+  src/streaming/sse_parser.cpp
   src/app/engine.cpp
   src/import_export/shell_tokenize.cpp
   src/import_export/curl_importer.cpp

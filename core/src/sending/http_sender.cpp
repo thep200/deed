@@ -1,11 +1,13 @@
 #include "sending/http_sender.hpp"
 
 #include <chrono>
+#include <thread>
 
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
 
 #include "codec/json_codec.hpp"
+#include "core/streaming/sse_parser.hpp"
 #include "infra/url_util.hpp"
 
 namespace core {
@@ -90,14 +92,12 @@ Cookie parseSetCookie(const std::string& raw) {
     return c;
 }
 
-} // namespace
-
-void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDelegate& delegate,
-                      const std::shared_ptr<CancelToken>& cancel) {
-    const HttpRequest& h = req.model.http;
-
-    cpr::Session session;
-
+// Configure a cpr::Session from the resolved HTTP request (shared by send() + openStream()). Returns
+// false + err on a fatal local error (binary file open). `extraHeaders` are merged last (SSE adds
+// Accept / Last-Event-ID). Cancellation is wired via the progress callback.
+bool prepareSession(cpr::Session& session, const HttpRequest& h,
+                    const std::shared_ptr<CancelToken>& cancel,
+                    const std::vector<KeyValue>& extraHeaders, std::string& err) {
     std::string url = applyPathVariables(h.url, h.pathVariables);
     // User may type a query into the URL -> split it out (decode) to send correctly, url stays raw.
     std::vector<KeyValue> urlQuery;
@@ -144,6 +144,8 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
             header[h.auth.apikeyKey] = h.auth.apikeyValue;
         }
     }
+    for (const auto& e : extraHeaders)        // SSE: Accept / Last-Event-ID (merged last)
+        if (!e.key.empty()) header[e.key] = e.value;
     session.SetHeader(header);
 
     // --- Body by mode ---
@@ -182,11 +184,9 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
         // read the binary file
         FILE* f = std::fopen(b.binaryFilePath.c_str(), "rb");
         if (!f) {
-            // Open failed (missing/no permission): REPORT AN ERROR instead of silently sending an empty body
-            // -> user sees "cannot open" instead of a confusing 4xx/5xx from the server.
-            delegate.onError(handle, ApiError{ErrorKind::Unknown,
-                "cannot open binary file: " + b.binaryFilePath});
-            return;
+            // Open failed (missing/no permission): report so the caller surfaces "cannot open".
+            err = "cannot open binary file: " + b.binaryFilePath;
+            return false;
         }
         // §2.2: allocate once based on file size -> avoid repeated reallocs for large files.
         if (std::fseek(f, 0, SEEK_END) == 0) {
@@ -202,7 +202,7 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
             data.append(buf, n);
         }
         std::fclose(f);
-        if (aborted) { delegate.onError(handle, ApiError{ErrorKind::Cancelled, "Cancelled"}); return; }
+        if (aborted) { err = "Cancelled"; return false; }
         session.SetBody(cpr::Body{data});
     }
 
@@ -216,21 +216,37 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
         [cancel](cpr::cpr_off_t, cpr::cpr_off_t, cpr::cpr_off_t, cpr::cpr_off_t, intptr_t) -> bool {
             return !(cancel && cancel->isCancelled());
         }});
+    return true;
+}
+
+// Run the configured session with the request's verb.
+cpr::Response runVerb(cpr::Session& session, const std::string& methodIn) {
+    std::string method = methodIn.empty() ? "GET" : methodIn;
+    if (method == "POST") return session.Post();
+    if (method == "PUT") return session.Put();
+    if (method == "PATCH") return session.Patch();
+    if (method == "DELETE") return session.Delete();
+    if (method == "HEAD") return session.Head();
+    if (method == "OPTIONS") return session.Options();
+    return session.Get();
+}
+
+} // namespace
+
+void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDelegate& delegate,
+                      const std::shared_ptr<CancelToken>& cancel) {
+    const HttpRequest& h = req.model.http;
+
+    cpr::Session session;
+    std::string err;
+    if (!prepareSession(session, h, cancel, {}, err)) {
+        ErrorKind k = (err == "Cancelled") ? ErrorKind::Cancelled : ErrorKind::Unknown;
+        delegate.onError(handle, ApiError{k, err});
+        return;
+    }
 
     auto start = std::chrono::steady_clock::now();
-
-    // Pick verb
-    std::string method = h.method.empty() ? "GET" : h.method;
-    cpr::Response r;
-    if (method == "GET") r = session.Get();
-    else if (method == "POST") r = session.Post();
-    else if (method == "PUT") r = session.Put();
-    else if (method == "PATCH") r = session.Patch();
-    else if (method == "DELETE") r = session.Delete();
-    else if (method == "HEAD") r = session.Head();
-    else if (method == "OPTIONS") r = session.Options();
-    else r = session.Get();
-
+    cpr::Response r = runVerb(session, h.method);
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start)
                        .count();
@@ -259,6 +275,203 @@ void HttpSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
     }
     resp.resolvedRequestDump = codec::dumpRequest(req.model);
     delegate.onResponse(handle, resp);
+}
+
+bool HttpSender::isStreaming(const ResolvedRequest& req) const {
+    return httpRequestsSse(req.model.http);
+}
+
+// SSE (SPEC_sse §4): stream the HTTP response, feed each chunk to SseParser, emit one StreamEvent per
+// event. Reconnects with Last-Event-ID on abnormal end (§7). Auto + non-SSE response -> render the body
+// as a single element (no infinite gather; documented degradation of §5).
+void HttpSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
+                            const std::shared_ptr<CancelToken>& cancel) {
+    const HttpRequest& h = req.model.http;
+    using clock = std::chrono::steady_clock;
+    const auto t0 = clock::now();
+    auto offsetMs = [&] {
+        return static_cast<long long>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t0).count());
+    };
+    auto epochMs = [] {
+        return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    };
+
+    // Config (SPEC_sse §10). Defaults; event-size cap reuses the stream byte ceiling if provided.
+    const int kRetryDefaultMs = 3000;
+    const int kMaxRetries = 10;
+    const std::uint64_t kMaxEventBytes = req.streamMaxBytes ? req.streamMaxBytes : 8ull * 1024 * 1024;
+
+    StreamMeta meta;
+    meta.streamId = req.streamId;
+    meta.transport = StreamTransport::Sse;
+    meta.startedAtEpochMs = epochMs();
+
+    bool opened = false;
+    std::uint64_t seq = 0, bytes = 0;
+    std::string lastEventId;
+    long retryMs = kRetryDefaultMs;
+
+    StreamStatus endStatus = StreamStatus::Ok;
+    int endCode = 0;
+    std::string endMsg;
+
+    for (int attempt = 0;; ++attempt) {
+        cpr::Session session;
+        std::vector<KeyValue> extra;
+        extra.push_back({"Accept", "text/event-stream", true});
+        if (!lastEventId.empty()) extra.push_back({"Last-Event-ID", lastEventId, true});
+
+        std::string err;
+        if (!prepareSession(session, h, cancel, extra, err)) {
+            if (!opened) { sink.onStreamOpen(meta); opened = true; }
+            endStatus = (err == "Cancelled") ? StreamStatus::Cancelled : StreamStatus::Error;
+            endMsg = err;
+            break;
+        }
+        session.SetAcceptEncoding(cpr::AcceptEncoding{{cpr::AcceptEncodingMethods::deflate,
+                                                       cpr::AcceptEncodingMethods::gzip}});
+
+        // Per-connection callback state. Decided on the first body chunk (Content-Type known by then).
+        struct CbState {
+            int status = 0;
+            std::string ctype;
+            std::vector<KeyValue> leading;
+            bool decided = false;
+            bool isSse = false;
+        };
+        auto st = std::make_shared<CbState>();
+
+        session.SetHeaderCallback(cpr::HeaderCallback{[st](std::string_view line, intptr_t) -> bool {
+            std::string s(line);
+            if (s.rfind("HTTP/", 0) == 0) {            // status line resets the header set (redirects)
+                std::size_t sp = s.find(' ');
+                if (sp != std::string::npos) st->status = std::atoi(s.c_str() + sp + 1);
+                st->leading.clear();
+                st->ctype.clear();
+            } else {
+                std::size_t c = s.find(':');
+                if (c != std::string::npos) {
+                    std::string k = s.substr(0, c), v = s.substr(c + 1);
+                    auto trim = [](std::string& x) {
+                        std::size_t a = x.find_first_not_of(" \t\r\n");
+                        std::size_t b = x.find_last_not_of(" \t\r\n");
+                        x = (a == std::string::npos) ? std::string() : x.substr(a, b - a + 1);
+                    };
+                    trim(k); trim(v);
+                    if (!k.empty()) st->leading.push_back({k, v, true});
+                    std::string lk = k;
+                    for (auto& ch : lk) ch = static_cast<char>(::tolower(ch));
+                    if (lk == "content-type") { st->ctype = v; for (auto& ch : st->ctype) ch = static_cast<char>(::tolower(ch)); }
+                }
+            }
+            return true;
+        }});
+
+        SseParser parser;
+        parser.setMaxEventBytes(static_cast<std::size_t>(kMaxEventBytes));
+
+        // Build one log element per SSE event: {"event","id","data"} (data = JSON if parseable, else string).
+        auto onEvent = [&](const SseEvent& e) {
+            nlohmann::json env;
+            env["event"] = e.event.empty() ? std::string("message") : e.event;
+            if (!e.id.empty()) env["id"] = e.id;
+            try { env["data"] = nlohmann::json::parse(e.data); }
+            catch (...) { env["data"] = e.data; }
+            std::string payload = env.dump();
+            StreamEvent ev;
+            ev.seq = seq;
+            ev.direction = StreamDirection::Inbound;
+            ev.frameType = StreamFrameType::Message;
+            ev.kind = StreamPayloadKind::Json;
+            ev.payload = payload;
+            ev.name = e.event;
+            ev.id = e.id;
+            ev.offsetMs = offsetMs();
+            sink.onStreamEvent(ev);
+            ++seq;
+            bytes += payload.size();
+            if (!e.id.empty()) lastEventId = e.id;
+        };
+
+        std::string unaryBody;   // Auto + non-SSE: accumulate to show as one element
+        session.SetWriteCallback(cpr::WriteCallback{
+            [&, st](std::string_view data, intptr_t) -> bool {
+                if (cancel && cancel->cancelled()) return false;   // abort perform
+                if (!st->decided) {
+                    st->decided = true;
+                    st->isSse = httpForcesSse(h) ||
+                                (st->ctype.find("text/event-stream") != std::string::npos);
+                    if (!opened) { meta.leading = st->leading; sink.onStreamOpen(meta); opened = true; }
+                }
+                if (st->isSse) parser.feed(data.data(), data.size(), onEvent);
+                else unaryBody.append(data);
+                return true;
+            }});
+
+        cpr::Response r = runVerb(session, h.method);
+        if (!opened) { meta.leading = st->leading; sink.onStreamOpen(meta); opened = true; }
+        if (parser.retryMs() >= 0) retryMs = parser.retryMs();   // server-provided backoff
+
+        if (cancel && cancel->cancelled()) { endStatus = StreamStatus::Cancelled; endCode = st->status; break; }
+
+        // Non-SSE under Auto: emit the gathered body as one element, then finish (no reconnect).
+        if (st->decided && !st->isSse) {
+            if (!unaryBody.empty()) {
+                StreamEvent ev;
+                ev.seq = seq++;
+                ev.payload = unaryBody;
+                ev.kind = StreamPayloadKind::Text;
+                ev.offsetMs = offsetMs();
+                sink.onStreamEvent(ev);
+            }
+            endStatus = StreamStatus::Ok;
+            endCode = (int)r.status_code;
+            break;
+        }
+
+        // Fatal HTTP for SSE: 204 / 4xx / 5xx / explicit-Sse-but-wrong-content-type -> no reconnect (§7).
+        bool fatalHttp = (st->status == 204) || (st->status >= 400) ||
+                         (httpForcesSse(h) && st->decided && !st->isSse);
+        if (r.error && r.error.code != cpr::ErrorCode::OK) {
+            // Network drop -> reconnect with Last-Event-ID, up to the cap.
+            if (attempt < kMaxRetries) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(retryMs));
+                if (cancel && cancel->cancelled()) { endStatus = StreamStatus::Cancelled; break; }
+                continue;
+            }
+            endStatus = StreamStatus::Error;
+            endCode = (int)r.status_code;
+            endMsg = r.error.message;
+            break;
+        }
+        if (fatalHttp) {
+            endStatus = StreamStatus::Error;
+            endCode = st->status ? st->status : (int)r.status_code;
+            endMsg = "SSE: unexpected HTTP status / content-type";
+            break;
+        }
+        // Clean server close on a 2xx SSE stream -> reconnect (EventSource semantics), up to the cap.
+        if (attempt < kMaxRetries) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(retryMs));
+            if (cancel && cancel->cancelled()) { endStatus = StreamStatus::Cancelled; break; }
+            continue;
+        }
+        endStatus = StreamStatus::Ok;
+        endCode = (int)r.status_code;
+        break;
+    }
+
+    if (!opened) sink.onStreamOpen(meta);
+    StreamEnd end;
+    end.status = endStatus;
+    end.statusCode = endCode;
+    end.statusMessage = endMsg;
+    end.totalEvents = seq;
+    end.totalBytes = bytes;
+    end.elapsedMs = offsetMs();
+    sink.onStreamClose(end);
 }
 
 } // namespace core

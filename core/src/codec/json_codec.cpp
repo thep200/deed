@@ -130,6 +130,8 @@ json httpToJson(const HttpRequest& h) {
     if (h.settings.followRedirectsSet) s["followRedirects"] = h.settings.followRedirects;
     if (h.settings.verifyTlsSet) s["verifyTls"] = h.settings.verifyTls;
     if (!s.empty()) j["settings"] = s;
+    if (h.streamMode != HttpStreamMode::None)
+        j["streamMode"] = (h.streamMode == HttpStreamMode::Sse) ? "sse" : "auto";
     return j;
 }
 
@@ -149,6 +151,10 @@ HttpRequest httpFrom(const json& j) {
         if (s.contains("followRedirects")) { h.settings.followRedirects = getBool(s, "followRedirects", true); h.settings.followRedirectsSet = true; }
         if (s.contains("verifyTls")) { h.settings.verifyTls = getBool(s, "verifyTls", true); h.settings.verifyTlsSet = true; }
     }
+    std::string sm = getStr(j, "streamMode", "none");
+    h.streamMode = (sm == "sse") ? HttpStreamMode::Sse
+                 : (sm == "auto") ? HttpStreamMode::Auto
+                                  : HttpStreamMode::None;
     return h;
 }
 

@@ -440,6 +440,10 @@ void Engine::cancel(RequestHandle handle) {
 InteractionKind Engine::interactionOf(const RequestModel& model) const {
     // gRPC: derived from the method descriptor's type (set when the RPC was picked — §4, no round-trip).
     if (model.type == RequestType::WebSocket) return InteractionKind::Duplex;
+    // SSE (SPEC_sse §5): HTTP consumes the response as a stream when streamMode is Sse/Auto OR the
+    // request carries an `Accept: text/event-stream` header -> reuse openStream.
+    if (model.type == RequestType::Http && httpRequestsSse(model.http))
+        return InteractionKind::ServerStream;
     if (model.type == RequestType::Grpc) {
         if (model.grpc.methodType == "server_streaming") return InteractionKind::ServerStream;
         if (model.grpc.methodType == "client_streaming") return InteractionKind::ClientStream;

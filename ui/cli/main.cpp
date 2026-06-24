@@ -5,6 +5,7 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <thread>
 
 #include "core/engine.hpp"
 #include "core/import_export/importer.hpp"
@@ -122,7 +123,8 @@ int usage() {
         "  apicli validate <jsonText>\n"
         "  apicli import-curl <curl command...>\n"
         "  apicli import-grpc <grpc spec...>\n"
-        "  apicli ws <url> [message]\n";
+        "  apicli ws <url> [message]\n"
+        "  apicli sse <url> [seconds]\n";
     return 2;
 }
 
@@ -182,6 +184,23 @@ int main(int argc, char** argv) {
             if (!err.empty()) { std::cerr << "reflection error: " << err << "\n"; return 1; }
             for (const auto& m : methods)
                 std::cout << m.service << "/" << m.method << "  [" << m.methodType << "]\n";
+            return 0;
+        }
+        if (cmd == "sse" && argc >= 3) {   // sse <url> [seconds] — stream events, then Stop
+            Engine engine(EngineConfig{".", ""});
+            RequestModel m;
+            m.type = RequestType::Http;
+            m.http.method = "GET";
+            m.http.url = argv[2];
+            // Trigger SSE the standard way — via the Accept header (no explicit streamMode).
+            m.http.headers.push_back({"Accept", "text/event-stream", true});
+            std::cout << "SSE: " << m.http.url << "\n";
+            CliDelegate del;
+            StreamHandle h = engine.openStream(m, &del);
+            int secs = argc >= 4 ? std::atoi(argv[3]) : 4;
+            std::this_thread::sleep_for(std::chrono::seconds(secs > 0 ? secs : 4));
+            engine.cancelStream(h);   // SSE is open-ended -> Stop after a window
+            del.wait();
             return 0;
         }
         if (cmd == "ws" && argc >= 3) {   // ws <url> [message] — connect, (send), echo, close
