@@ -8,6 +8,8 @@
 // consumer (controller) only ever sees neutral DTO-derived data — never a transport type (INV-1).
 #import <Cocoa/Cocoa.h>
 
+#include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -34,8 +36,12 @@
 class UiDelegateBridge : public core::IUiDelegate {
 public:
     // coalesceMs: UI flush cadence (STREAM_COALESCE_MS, §9). <=0 -> 50ms default.
-    explicit UiDelegateBridge(id<CoreResponseSink> sink, int coalesceMs = 50)
+    // maxBufferKB: high-water mark for the coalescing buffer (perf spec §2.2/§10). When the UI can't keep
+    // up and the buffer exceeds this, the producer (background sender) blocks -> the gRPC Read loop pauses
+    // -> HTTP/2 window fills -> server is throttled. 0 disables backpressure (unbounded — not recommended).
+    explicit UiDelegateBridge(id<CoreResponseSink> sink, int coalesceMs = 50, int maxBufferKB = 8192)
         : sink_(sink), coalesceMs_(coalesceMs > 0 ? coalesceMs : 50),
+          maxBufferBytes_(maxBufferKB > 0 ? static_cast<size_t>(maxBufferKB) * 1024 : 0),
           coal_(std::make_shared<Coalescer>()) {}
 
     void onResponse(core::RequestHandle h, const core::ApiResponse &r) override {
@@ -63,6 +69,7 @@ public:
             coal_->firstEvent = true;
             coal_->events = 0;
             coal_->flushScheduled = false;
+            coal_->closed = false;
         }
         int transport = static_cast<int>(meta.transport);
         __weak id<CoreResponseSink> weakSink = sink_;
@@ -83,6 +90,18 @@ public:
             if (!coal_->flushScheduled) { coal_->flushScheduled = true; schedule = true; }
         }
         if (schedule) scheduleFlush();
+
+        // Backpressure (perf spec §2.2/§10): if the UI hasn't drained and the buffer is over the
+        // high-water mark, block this background sender thread until a flush drains it. That stalls the
+        // gRPC Read loop -> the HTTP/2 window fills -> the server stops sending -> RAM stays bounded.
+        // Bounded wait so a wedged/torn-down UI can't hang the stream forever (per-call deadline is the
+        // final backstop); on timeout we proceed and the sender's own STREAM_MAX_BYTES cap still applies.
+        if (maxBufferBytes_) {
+            std::unique_lock<std::mutex> lk(coal_->mu);
+            coal_->cv.wait_for(lk, std::chrono::milliseconds(coalesceMs_ * 4 + 100), [this] {
+                return coal_->closed || coal_->buf.size() <= maxBufferBytes_;
+            });
+        }
     }
 
     void onStreamClose(const core::StreamEnd &end) override {
@@ -104,7 +123,9 @@ public:
                 chunk.swap(coal->buf);     // drain whatever is still pending
                 cnt = coal->events;
                 coal->flushScheduled = false;
+                coal->closed = true;       // release any backpressured producer (defensive)
             }
+            coal->cv.notify_all();
             if (!chunk.empty())
                 [s onStreamChunk:[NSString stringWithUTF8String:chunk.c_str()] events:cnt];
             [s onStreamClose:status
@@ -120,9 +141,11 @@ private:
     // Coalescing state shared between the background producer and the main-queue flush block.
     struct Coalescer {
         std::mutex mu;
+        std::condition_variable cv;   // producer waits here when over the high-water mark; flush notifies
         std::string buf;
         bool firstEvent = true;
         bool flushScheduled = false;
+        bool closed = false;          // stream ended -> never block the producer again
         uint64_t events = 0;
     };
 
@@ -139,6 +162,7 @@ private:
                 cnt = coal->events;
                 coal->flushScheduled = false;
             }
+            coal->cv.notify_all();   // buffer drained -> wake any backpressured producer (§2.2)
             id<CoreResponseSink> s = weakSink;
             if (s && !chunk.empty())
                 [s onStreamChunk:[NSString stringWithUTF8String:chunk.c_str()] events:cnt];
@@ -147,5 +171,6 @@ private:
 
     __weak id<CoreResponseSink> sink_;
     int coalesceMs_;
+    size_t maxBufferBytes_;
     std::shared_ptr<Coalescer> coal_;
 };

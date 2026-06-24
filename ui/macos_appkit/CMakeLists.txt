@@ -46,10 +46,10 @@ add_executable(deed MACOSX_BUNDLE
   src/dialogs/OS9Dialog.mm
   src/windows/TreeViews.mm
   src/windows/MainWindowController.mm
-  src/windows/MainWindowController+Tree.mm
-  src/windows/MainWindowController+Editor.mm
-  src/windows/MainWindowController+Send.mm
-  src/windows/MainWindowController+Config.mm
+  src/windows/MainWindowControllerTree.mm
+  src/windows/MainWindowControllerEditor.mm
+  src/windows/MainWindowControllerSend.mm
+  src/windows/MainWindowControllerConfig.mm
   src/windows/EnvWindowController.mm
 )
 
@@ -58,7 +58,7 @@ option(DEED_DEBUG_TOOLS "Compile in-app debug tools (StressRunner)" OFF)
 if(DEED_DEBUG_TOOLS)
   target_sources(deed PRIVATE
     src/debug/StressRunner.mm
-    src/windows/MainWindowController+Stress.mm)
+    src/windows/MainWindowControllerStress.mm)
   target_compile_definitions(deed PRIVATE DEED_DEBUG_TOOLS=1)
 endif()
 

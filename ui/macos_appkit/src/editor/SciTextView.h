@@ -15,10 +15,14 @@
 - (void)clearContents;
 
 // --- Streaming render (SPEC_grpc_streaming §7) ---
-// beginStreaming: clear + enter streaming-write mode (follow-tail on). appendStreamChunk: programmatic
-// append (toggles read-only off/on around the write), auto-scrolls if the caret was following the tail.
-// endStreamingValid: leave streaming mode; fold=YES may fold/validate the now-complete JSON array.
+// beginStreaming: clear + seed an empty-but-VALID array "[\n]" so the JSON is well-formed from the very
+//   first frame, then enter streaming-write mode (follow-tail on).
+// insertStreamChunk: insert one coalesced chunk JUST BEFORE the trailing "]" -> the array stays valid the
+//   whole time (the closing bracket is always present).
+// appendStreamChunk: raw programmatic append at the end (used to seed); toggles read-only off/on.
+// endStreamingValid: leave streaming mode; fold=YES may fold/validate the JSON array.
 - (void)beginStreaming;
+- (void)insertStreamChunk:(NSString *)chunk;
 - (void)appendStreamChunk:(NSString *)chunk;
 - (void)endStreamingValid:(BOOL)fold;
 // Safe teardown (CRASH_FIX_LIFECYCLE §2.2): resign input context + detach the Scintilla delegate

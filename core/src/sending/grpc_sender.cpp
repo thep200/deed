@@ -14,7 +14,9 @@
 
 #include <grpcpp/generic/generic_stub.h>
 #include <grpcpp/grpcpp.h>
+#include <grpcpp/resource_quota.h>
 #include <grpcpp/support/byte_buffer.h>
+#include <grpcpp/support/channel_arguments.h>
 #include <grpcpp/support/slice.h>
 
 #include "codec/json_codec.hpp"
@@ -36,6 +38,17 @@ ErrorKind mapGrpcStatus(grpc::StatusCode code) {
         case grpc::StatusCode::UNAVAILABLE: return ErrorKind::Network;
         default: return ErrorKind::Network;
     }
+}
+
+// Channel args shared by every gRPC call. A ResourceQuota caps the memory one channel may use for
+// buffering, so a buggy/flooding server can't OOM the app (perf spec §2.8/§7). Flow control already
+// bounds in-flight data; this is the hard backstop. 512 MiB is generous for a desktop client.
+grpc::ChannelArguments streamChannelArgs() {
+    grpc::ChannelArguments args;
+    grpc::ResourceQuota quota("deed-grpc");
+    quota.Resize(512ull * 1024 * 1024);
+    args.SetResourceQuota(quota);
+    return args;
 }
 
 std::string byteBufferToString(const grpc::ByteBuffer& bb) {
@@ -157,7 +170,7 @@ void sendClientStream(const ResolvedRequest& req, const gp::MethodDescriptor* mt
     }
 
     // 3. Channel + generic stub + context (metadata + deadline).
-    auto channel = grpc::CreateChannel(g.target, makeCreds(g.tls));
+    auto channel = grpc::CreateCustomChannel(g.target, makeCreds(g.tls), streamChannelArgs());
     grpc::GenericStub stub(channel);
     grpc::ClientContext clientCtx;
     int deadlineMs = g.settings.deadlineMs > 0 ? g.settings.deadlineMs : 30000;
@@ -303,7 +316,7 @@ void GrpcSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
     }
 
     // Channel + generic stub.
-    auto channel = grpc::CreateChannel(g.target, makeCreds(g.tls));
+    auto channel = grpc::CreateCustomChannel(g.target, makeCreds(g.tls), streamChannelArgs());
     grpc::GenericStub stub(channel);
 
     grpc::ClientContext clientCtx;
@@ -470,7 +483,7 @@ void GrpcSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
     }
 
     // Channel + generic stub + context (metadata + deadline).
-    auto channel = grpc::CreateChannel(g.target, makeCreds(g.tls));
+    auto channel = grpc::CreateCustomChannel(g.target, makeCreds(g.tls), streamChannelArgs());
     grpc::GenericStub stub(channel);
     grpc::ClientContext ctx;
     int deadlineMs = g.settings.deadlineMs > 0 ? g.settings.deadlineMs : 30000;
@@ -490,11 +503,15 @@ void GrpcSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
 
     auto makeBuf = [](const std::string& s) { grpc::Slice sl(s); return grpc::ByteBuffer(&sl, 1); };
 
+    // Reuse ONE response message across the whole stream (Clear() per event) instead of allocating a new
+    // DynamicMessage each time — cuts allocator churn on high-frequency streams (perf spec §2.8).
+    std::unique_ptr<gp::Message> outMsg(factory.GetPrototype(mth->output_type())->New());
+
     // Decode one response message -> JSON, emit as a StreamEvent. Returns false if a ceiling was hit
     // (caller stops reading). On decode failure emits a VALID error element (keeps the array valid, §10).
     auto emitMessage = [&](const grpc::ByteBuffer& msg) -> bool {
         std::string json;
-        std::unique_ptr<gp::Message> outMsg(factory.GetPrototype(mth->output_type())->New());
+        outMsg->Clear();
         std::string raw = byteBufferToString(msg);
         bool decoded = outMsg->ParseFromString(raw);
         if (decoded) {

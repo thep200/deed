@@ -146,7 +146,19 @@ NSString *const StrToastRequestGone = @"Request no longer exists";
 NSString *const StrToastEnterGrpcHost = @"Enter gRPC host first (e.g. localhost:50051)";
 NSString *const StrStatusCancelled = @"Cancelled";
 NSString *const StrStatusNetworkError = @"NETWORK ERROR";
-NSString *const StrStatusStreaming = @"streaming…";
+
+NSString *const StrGrpcTagUnary = @"[Unary]";
+NSString *const StrGrpcTagServerStream = @"[S-> C]";
+NSString *const StrGrpcTagClientStream = @"[S <-C]";
+NSString *const StrGrpcTagBidiStream = @"[S<->C]";
+
+NSString *const StrFmtStreamReceived = @"Received %llu events";
+NSString *const StrFmtStreamOk = @"OK%@ | %llu events | %lldms";
+NSString *const StrStreamTruncated = @" (truncated)";
+NSString *const StrFmtStreamCancelled = @"%@ | %llu events";
+NSString *const StrFmtStreamError = @"%@ | %d | %@";
+NSString *const StrStreamKindError = @"Error";
+NSString *const StrStreamKindTimeout = @"Timeout";
 NSString *const StrNoSetCookie = @"(no Set-Cookie)";
 NSString *const StrFmtToastEnv = @"ENV: %@";
 NSString *const StrFmtToastNotFound = @"Not found: %s (skipped)";

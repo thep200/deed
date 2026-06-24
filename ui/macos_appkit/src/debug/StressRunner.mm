@@ -2,7 +2,7 @@
 
 #if DEED_DEBUG_TOOLS
 
-#import "debug/MainWindowController+Stress.h"
+#import "debug/MainWindowControllerStress.h"
 
 #include <memory>
 #include <random>

@@ -1,4 +1,4 @@
-#import "windows/MainWindowController+Private.h"
+#import "windows/MainWindowControllerPrivate.h"
 
 @implementation MainWindowController (Editor)
 

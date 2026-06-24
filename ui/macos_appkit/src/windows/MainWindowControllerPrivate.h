@@ -1,4 +1,4 @@
-// MainWindowController+Private.h — class extension SHARED by every file implementing
+// MainWindowControllerPrivate.h — class extension SHARED by every file implementing
 // MainWindowController (the main file + the Tree/Editor/Send/Config/Stress categories).
 //
 // Why needed: MainWindowController is too long, so it's split into several categories in

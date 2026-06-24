@@ -1,4 +1,4 @@
-#import "windows/MainWindowController+Private.h"
+#import "windows/MainWindowControllerPrivate.h"
 
 @implementation MainWindowController (Tree)
 
@@ -42,7 +42,10 @@
     cfg.streamLimits.maxBytes = (uint64_t)[dc intFor:@"STREAM_MAX_BYTES_MB" def:0] * 1024ull * 1024ull;
     cfg.appDefaults = [self appDefaultsFromEnv];   // app-config defaults from .env
     _engine = std::make_unique<core::Engine>(cfg);
-    _bridge = std::make_unique<UiDelegateBridge>(self, (int)[dc intFor:@"STREAM_COALESCE_MS" def:50]);
+    // coalesce cadence + UI buffer high-water mark (backpressure valve, perf spec §2.2/§10).
+    _bridge = std::make_unique<UiDelegateBridge>(self,
+                                                 (int)[dc intFor:@"STREAM_COALESCE_MS" def:50],
+                                                 (int)[dc intFor:@"STREAM_UI_BUFFER_MAX_KB" def:8192]);
     _envVC = [[EnvWindowController alloc] initWithEngine:_engine.get()];
     // Remember this folder in app-support so it reopens next time.
     try { core::AppConfig ac = _engine->appConfig().load(); ac.lastCollectionRoot = _root;

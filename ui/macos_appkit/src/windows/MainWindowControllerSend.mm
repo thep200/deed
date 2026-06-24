@@ -1,4 +1,4 @@
-#import "windows/MainWindowController+Private.h"
+#import "windows/MainWindowControllerPrivate.h"
 
 @implementation MainWindowController (Send)
 
@@ -69,28 +69,26 @@
     // Show the streaming text in the body tab (tab 0) and select it.
     _activeRespTab = 0;
     [self highlightActiveTab:_respTabButtons active:0];
-    [_respText beginStreaming];
-    [_respText appendStreamChunk:@"["];
-    _statusLabel.stringValue = StrStatusStreaming;
+    [_respText beginStreaming];   // seeds "[\n]" -> the response is a valid JSON array from the start
+    _statusLabel.stringValue = [NSString stringWithFormat:StrFmtStreamReceived, 0ULL];
     _statusLabel.textColor = [NSColor blackColor];
 }
 
 // Coalesced append (already comma-joined per Appendix A). Update the live counter.
 - (void)onStreamChunk:(NSString *)chunk events:(uint64_t)totalEvents {
     if (!_streaming || !chunk.length) return;
-    [_respText appendStreamChunk:chunk];
+    [_respText insertStreamChunk:chunk];   // inserted before the trailing "]" -> stays valid live
     [_streamAccum appendString:chunk];
     _streamEvents = totalEvents;
-    _statusLabel.stringValue = [NSString stringWithFormat:@"%@ %llu", StrStatusStreaming,
-                                                          (unsigned long long)totalEvents];
+    _statusLabel.stringValue = [NSString stringWithFormat:StrFmtStreamReceived, (unsigned long long)totalEvents];
 }
 
 // ']' + finalize status; swap the live text for the normal formatted buffers; cache the array (§8).
 - (void)onStreamClose:(core::StreamStatus)status code:(int)code message:(NSString *)message
                events:(uint64_t)events elapsedMs:(long long)elapsedMs truncated:(BOOL)truncated {
-    NSString *tail = (events == 0) ? @"]" : @"\n]";   // empty stream -> "[]" (valid)
-    [_respText appendStreamChunk:tail];
-    [_streamAccum appendString:tail];
+    // The pane already shows a closed, valid array (seeded "[\n]"; each event was inserted before the
+    // trailing "]"). Only close the cache accumulator, which was built by appending "[" + chunks.
+    [_streamAccum appendString:@"\n]"];
     [_respText endStreamingValid:YES];
 
     _streaming = NO;
@@ -111,21 +109,21 @@
     _hasResp = YES;
     [self rebuildResponseBuffers];   // reformat the captured array into the body/Request tabs
 
-    // Status line: Ok · N events · ms  /  Cancelled  /  Error <code> <msg>  (+ "(truncated)").
+    // Status line, fields separated by '|': "OK | N events | Nms" / "Cancelled | N events" /
+    // "Error | <code> | <msg>" (+ " (truncated)" suffix after OK).
     NSString *line;
     NSColor *color;
-    NSString *trunc = truncated ? @" (truncated)" : @"";
+    NSString *trunc = truncated ? StrStreamTruncated : @"";
     if (status == core::StreamStatus::Ok) {
-        line = [NSString stringWithFormat:@"OK%@ · %llu events · %lldms", trunc,
-                                          (unsigned long long)events, elapsedMs];
+        line = [NSString stringWithFormat:StrFmtStreamOk, trunc, (unsigned long long)events, elapsedMs];
         color = [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1.0];
     } else if (status == core::StreamStatus::Cancelled) {
-        line = [NSString stringWithFormat:@"%@ · %llu events", StrStatusCancelled,
+        line = [NSString stringWithFormat:StrFmtStreamCancelled, StrStatusCancelled,
                                           (unsigned long long)events];
         color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
     } else {
-        NSString *kind = (status == core::StreamStatus::Timeout) ? @"Timeout" : @"Error";
-        line = [NSString stringWithFormat:@"%@ %d %@", kind, code, message ?: @""];
+        NSString *kind = (status == core::StreamStatus::Timeout) ? StrStreamKindTimeout : StrStreamKindError;
+        line = [NSString stringWithFormat:StrFmtStreamError, kind, code, message ?: @""];
         color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
     }
     _statusLabel.stringValue = line;

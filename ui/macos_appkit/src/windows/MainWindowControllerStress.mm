@@ -1,7 +1,7 @@
-#import "windows/MainWindowController+Private.h"
+#import "windows/MainWindowControllerPrivate.h"
 
 #if DEED_DEBUG_TOOLS
-#import "debug/MainWindowController+Stress.h"
+#import "debug/MainWindowControllerStress.h"
 
 @implementation MainWindowController (Stress)
 

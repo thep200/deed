@@ -1,4 +1,4 @@
-#import "windows/MainWindowController+Private.h"
+#import "windows/MainWindowControllerPrivate.h"
 
 // Base column: internal KEY "Global" (keeps {{var}} resolve semantics) but DISPLAYED as "Local"
 // (SPEC §T4). Mapped both ways at the UI layer.
@@ -139,6 +139,20 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
 
 #pragma mark RPC picker (gRPC)
 
+// Short, tagged RPC label for the picker, e.g. "[Unary] Calc/Add". The service is shortened to its last
+// dotted segment (calc.Calc -> Calc); the leading tag shows the streaming direction.
+static NSString *GrpcRpcLabel(const std::string &service, const std::string &method,
+                              const std::string &methodType) {
+    std::string svc = service;
+    auto dot = svc.find_last_of('.');
+    if (dot != std::string::npos) svc = svc.substr(dot + 1);
+    NSString *tag = StrGrpcTagUnary;
+    if (methodType == "server_streaming") tag = StrGrpcTagServerStream;
+    else if (methodType == "client_streaming") tag = StrGrpcTagClientStream;
+    else if (methodType == "bidi_streaming") tag = StrGrpcTagBidiStream;
+    return [NSString stringWithFormat:@"%@ %s/%s", tag, svc.c_str(), method.c_str()];
+}
+
 // Show the RPC saved in the model on the button (NO network call). Real fetch happens on dropdown click.
 - (void)showSavedGrpcMethodLabel {
     _grpcMethods.clear();
@@ -148,8 +162,8 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
         _servicePopup.toolTip = nil;
     } else {
         NSString *full = [NSString stringWithFormat:@"%s/%s", g.service.c_str(), g.method.c_str()];
-        _servicePopup.itemTitles = @[ full ];
-        _servicePopup.toolTip = full;
+        _servicePopup.itemTitles = @[ GrpcRpcLabel(g.service, g.method, g.methodType) ];
+        _servicePopup.toolTip = full;   // hover shows the fully-qualified pkg.Service/Method
     }
     _servicePopup.selectedIndex = 0;
     [_servicePopup setNeedsDisplay:YES];
@@ -210,7 +224,7 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     NSInteger sel = 0;
     for (size_t i = 0; i < methods.size(); ++i) {
         const core::GrpcMethodInfo &m = methods[i];
-        [titles addObject:[NSString stringWithFormat:@"%s/%s", m.service.c_str(), m.method.c_str()]];
+        [titles addObject:GrpcRpcLabel(m.service, m.method, m.methodType)];
         if (m.service == _model.grpc.service && m.method == _model.grpc.method) sel = (NSInteger)i;
     }
     _servicePopup.itemTitles = titles;

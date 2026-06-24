@@ -176,7 +176,26 @@
 - (void)beginStreaming {
     _streaming = YES;
     _followTail = YES;
-    [self clearContents];   // resets text + undo + read-only to the configured state
+    [self clearContents];           // resets text + undo + read-only to the configured state
+    [self appendStreamChunk:@"[\n]"];   // seed a closed, valid (empty) array -> JSON is valid from frame 0
+}
+
+// Insert one chunk right before the trailing "\n]" so the array always stays closed/valid. The doc
+// always ends in the 2-byte "\n]" (seeded by beginStreaming, preserved by every insert), so the insert
+// position is length-2.
+- (void)insertStreamChunk:(NSString *)chunk {
+    if (!chunk.length) return;
+    const char *utf8 = chunk.UTF8String;
+    if (!utf8) return;
+    sptr_t docLen = [self q:SCI_GETLENGTH w:0 l:0];
+    sptr_t pos = docLen >= 2 ? docLen - 2 : 0;   // before the trailing "\n]"
+    if (_followTail && ![self isTailVisible]) _followTail = NO;
+    _programmatic = YES;
+    [self msg:SCI_SETREADONLY w:0 l:0];
+    [self msg:SCI_INSERTTEXT w:(uptr_t)pos l:(sptr_t)utf8];
+    [self msg:SCI_SETREADONLY w:(_editable ? 0 : 1) l:0];
+    _programmatic = NO;
+    if (_followTail) [self scrollToEnd];
 }
 
 - (void)appendStreamChunk:(NSString *)chunk {

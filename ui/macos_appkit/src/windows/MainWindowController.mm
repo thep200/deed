@@ -1,8 +1,8 @@
-#import "windows/MainWindowController+Private.h"
+#import "windows/MainWindowControllerPrivate.h"
 
 // This file holds the core: UI building (build*), layout, per-type render, window & toast.
 // The remaining groups are split into categories: +Tree / +Editor / +Send / +Config / +Stress.
-// Shared ivars + imports live in MainWindowController+Private.h.
+// Shared ivars + imports live in MainWindowControllerPrivate.h.
 
 @implementation MainWindowController
 

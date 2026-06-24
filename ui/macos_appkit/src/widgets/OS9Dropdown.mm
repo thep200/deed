@@ -52,20 +52,6 @@
                                        options:(NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited | NSTrackingActiveAlways)
                                          owner:self userInfo:nil];
     [self addTrackingArea:_ta];
-
-    // Per-row tooltip: hover shows full name (even when truncated to "…" in drawRect).
-    [self removeAllToolTips];
-    for (NSInteger i = 0; i < (NSInteger)_items.count; i++) {
-        NSRect row = NSMakeRect(_listRect.origin.x, _listRect.origin.y + 1 + i * _rowH,
-                                _listRect.size.width, _rowH);
-        [self addToolTipRect:row owner:self userData:NULL];
-    }
-}
-
-- (NSString *)view:(NSView *)view stringForToolTipTag:(NSToolTipTag)tag point:(NSPoint)point
-          userData:(void *)data {
-    NSInteger r = [self rowAt:point];
-    return (r >= 0 && r < (NSInteger)_items.count) ? _items[r] : @"";
 }
 
 - (NSInteger)rowAt:(NSPoint)p {
@@ -115,7 +101,7 @@
         NSDictionary *attrs = hot ? hi : norm;
         if (i == _selected)
             [@"✓" drawAtPoint:NSMakePoint(row.origin.x + 7, row.origin.y + (_rowH - 12) / 2) withAttributes:attrs];
-        // Truncate "…" to row width; full name shown in tooltip.
+        // Truncate "…" to row width.
         NSDictionary *trAttrs = hot ? hiTr : normTr;
         CGFloat textX = row.origin.x + 22;
         NSSize sz = [_items[i] sizeWithAttributes:attrs];

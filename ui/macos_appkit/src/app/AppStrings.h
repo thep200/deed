@@ -161,7 +161,21 @@ extern NSString *const StrToastRequestGone;
 extern NSString *const StrToastEnterGrpcHost;
 extern NSString *const StrStatusCancelled;
 extern NSString *const StrStatusNetworkError;
-extern NSString *const StrStatusStreaming;       // streaming in progress
+
+// --- gRPC streaming: RPC picker tags (streaming direction) ---
+extern NSString *const StrGrpcTagUnary;          // [Unary]
+extern NSString *const StrGrpcTagServerStream;   // [S-> C]
+extern NSString *const StrGrpcTagClientStream;   // [S <-C]
+extern NSString *const StrGrpcTagBidiStream;     // [S<->C]
+
+// --- gRPC streaming: status line (fields separated by '|') ---
+extern NSString *const StrFmtStreamReceived;     // "Received %llu events"
+extern NSString *const StrFmtStreamOk;           // "OK%@ | %llu events | %lldms"  (%@ = truncated suffix)
+extern NSString *const StrStreamTruncated;       // " (truncated)"
+extern NSString *const StrFmtStreamCancelled;    // "%@ | %llu events"  (%@ = StrStatusCancelled)
+extern NSString *const StrFmtStreamError;        // "%@ | %d | %@"  (kind | code | message)
+extern NSString *const StrStreamKindError;       // Error
+extern NSString *const StrStreamKindTimeout;     // Timeout
 extern NSString *const StrNoSetCookie;
 extern NSString *const StrFmtToastEnv;
 extern NSString *const StrFmtToastNotFound;

@@ -5,7 +5,7 @@
 // Main window: tree (1)(2), raw-JSON editor (3), response (4), ENV (5), method (6),
 // URL/target (7), status (8), proto (9), send (10), setting (11). See UI spec §5.
 // Controller split into several category files (+Tree/+Editor/+Send/+Config/+Stress) for brevity.
-// Conformance protocols live in the category that implements them (declared in MainWindowController+Private.h):
+// Conformance protocols live in the category that implements them (declared in MainWindowControllerPrivate.h):
 //   NSOutlineView* -> +Tree, NSTextField/TextView -> +Editor, CoreResponseSink -> +Send.
 // Primary keeps only NSWindowDelegate (implemented in MainWindowController.mm) -> avoids
 // -Wincomplete-implementation / -Wobjc-protocol-method-implementation warnings.
