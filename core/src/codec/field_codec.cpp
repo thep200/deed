@@ -124,6 +124,27 @@ bool jsonToAuth(const std::string& text, Auth& a, std::string& err) {
     } catch (const std::exception& e) { err = e.what(); return false; }
 }
 
+std::string configToJson(const RequestConfig& c) {
+    json j;
+    j["timeout_ms"] = c.timeoutMs;
+    j["tls"] = c.tls;
+    return j.dump(2);
+}
+
+bool jsonToConfig(const std::string& text, RequestConfig& c, std::string& err) {
+    try {
+        auto j = json::parse(text.empty() ? "{}" : text);
+        if (!j.is_object()) { err = "must be a JSON object"; return false; }
+        RequestConfig def;
+        if (auto it = j.find("timeout_ms"); it != j.end() && it->is_number())
+            c.timeoutMs = it->get<int>();
+        else
+            c.timeoutMs = def.timeoutMs;
+        c.tls = gb(j, "tls", def.tls);
+        return true;
+    } catch (const std::exception& e) { err = e.what(); return false; }
+}
+
 std::string formatJson(const std::string& text, bool pretty) {
     try {
         auto j = json::parse(text);

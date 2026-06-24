@@ -82,6 +82,7 @@ NSString *const StrTabMessage = @"Message";
 NSString *const StrTabGqlQuery = @"Query";
 NSString *const StrTabVariables = @"Variables";
 NSString *const StrTabMetadata = @"Metadata";
+NSString *const StrTabConfig = @"Config";
 
 #pragma mark - Body mode
 NSString *const StrBodyJson = @"JSON";

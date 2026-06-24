@@ -436,12 +436,13 @@ static void test_engine(const std::string& root) {
     CHECK(!vbad.ok, "invalid JSON caught");
     CHECK(vbad.line >= 1, "has error position");
 
-    // resolveRequest applies env + app-global timeout.
-    AppConfig ac; ac.defaultTimeoutMs = 12345; engine.appConfig().save(ac);
+    // resolveRequest applies env vars + per-request config (timeout + TLS).
     RequestModel m; m.type = RequestType::Http; m.http.url = "{{baseUrl}}/u";
+    m.config.timeoutMs = 12345; m.config.tls = false;
     auto rr = engine.resolveRequest(m);
     CHECK_EQ(rr.model.http.url, std::string("http://global/u"), "resolveRequest resolves url");
-    CHECK_EQ(rr.model.http.settings.timeoutMs, 12345, "timeout from app-global when unset");
+    CHECK_EQ(rr.model.http.settings.timeoutMs, 12345, "timeout from per-request config");
+    CHECK(!rr.model.http.settings.verifyTls, "verifyTls from per-request config");
 
     // --- missingVars: flags aliases absent from the active env (Global here) ---
     RequestModel mm; mm.type = RequestType::Http;
@@ -659,7 +660,6 @@ static void test_app_config_defaults(const std::string& root) {
     EngineConfig ec;
     ec.collectionRoot = (fs::path(root) / "defs_root").string();
     ec.appConfigPath = cfgPath;
-    ec.appDefaults.defaultTimeoutMs = 12345;
     ec.appDefaults.fontName = "Courier";
     ec.appDefaults.fontSize = 17;
     ec.appDefaults.ramCacheSizeMb = 33;
@@ -670,7 +670,6 @@ static void test_app_config_defaults(const std::string& root) {
 
     // No config.json yet -> load returns defaults (.env).
     AppConfig c = eng.appConfig().load();
-    CHECK_EQ(c.defaultTimeoutMs, 12345, "default_timeout_ms from .env when no config");
     CHECK_EQ(c.fontName, std::string("Courier"), "font_name default from .env");
     CHECK_EQ(c.fontSize, 17, "font_size default from .env");
     CHECK_EQ(c.ramCacheSizeMb, 33, "ram_cache_size default from .env");
@@ -684,7 +683,7 @@ static void test_app_config_defaults(const std::string& root) {
     st.setDefaults(ec.appDefaults);
     AppConfig pc = st.load();
     CHECK_EQ(pc.fontSize, 20, "key present in file -> use file value");
-    CHECK_EQ(pc.defaultTimeoutMs, 12345, "missing key -> falls back to .env default");
+    CHECK_EQ(pc.fontName, std::string("Courier"), "missing key -> falls back to .env default");
     CHECK_EQ(pc.ramCacheSizeMb, 33, "missing key -> ram default .env");
     fs::remove(cfgPath);
 }

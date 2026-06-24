@@ -23,6 +23,10 @@ bool jsonToBody(const std::string &, Body &out, std::string &err);
 std::string authToJson(const Auth &);
 bool jsonToAuth(const std::string &, Auth &out, std::string &err);
 
+// RequestConfig{} <-> JSON text (Config tab: timeout_ms + tls).
+std::string configToJson(const RequestConfig &);
+bool jsonToConfig(const std::string &, RequestConfig &out, std::string &err);
+
 // Format JSON: pretty (indent 2) or compact. Unparseable -> return verbatim.
 std::string formatJson(const std::string &text, bool pretty);
 

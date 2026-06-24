@@ -97,6 +97,7 @@ extern NSString *const StrTabMessage;
 extern NSString *const StrTabGqlQuery;
 extern NSString *const StrTabVariables;
 extern NSString *const StrTabMetadata;
+extern NSString *const StrTabConfig;
 
 #pragma mark - Body mode (dropdown)
 extern NSString *const StrBodyJson;

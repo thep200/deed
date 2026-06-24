@@ -256,6 +256,16 @@ struct GraphQlRequest {
   Auth auth; // applied to query/mutation (HTTP) and subscription handshake
 };
 
+// ---- Per-request config (envelope level; edited in the "Config" tab) ----
+// One unified place for timeout + TLS, applied to whichever transport the request uses.
+//   timeoutMs -> HTTP/GraphQL request timeout | gRPC deadline | WebSocket idle timeout
+//   tls       -> HTTP/WS/GraphQL: verify the server TLS certificate
+//                gRPC: use a TLS channel (replaces the old per-connection TLS toggle)
+struct RequestConfig {
+  int timeoutMs = 1800000; // 30 min
+  bool tls = true;
+};
+
 // ---- Model of one request (envelope + per-type block) ----
 struct RequestModel {
   int schemaVersion = 1;
@@ -264,6 +274,7 @@ struct RequestModel {
   std::string description;
   RequestType type = RequestType::Http;
   int seq = 0;
+  RequestConfig config; // per-request timeout + TLS (Config tab)
 
   HttpRequest http;       // used when type == Http
   GrpcRequest grpc;       // used when type == Grpc
@@ -366,8 +377,8 @@ struct Environment {
 };
 
 // ---- App-global config (README §12.1) ----
+// (timeout/TLS are now per-request — see RequestConfig — not app-global.)
 struct AppConfig {
-  int defaultTimeoutMs = 30000;
   std::string lastCollectionRoot; // most recently opened collection dir
                                   // (reopened at startup)
   std::string fontName; // display font (empty = default); from Settings

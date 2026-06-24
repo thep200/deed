@@ -263,18 +263,26 @@ std::vector<std::pair<std::string, std::string>> Engine::activeVarsOrdered() con
     return vars;
 }
 
+// Map the unified per-request config (timeout + TLS) onto the active transport's settings.
+// HTTP/GraphQL: timeout + verify-TLS. gRPC: deadline + TLS-channel-enabled. (WS handled in openSession.)
+static void applyRequestConfig(RequestModel& m) {
+    const RequestConfig& c = m.config;
+    if (m.type == RequestType::Http) {
+        m.http.settings.timeoutMs = c.timeoutMs;   m.http.settings.timeoutMsSet = true;
+        m.http.settings.verifyTls = c.tls;         m.http.settings.verifyTlsSet = true;
+    } else if (m.type == RequestType::Grpc) {
+        m.grpc.settings.deadlineMs = c.timeoutMs;  m.grpc.settings.deadlineMsSet = true;
+        m.grpc.tls.enabled = c.tls;
+    }
+}
+
 ResolvedRequest Engine::resolveRequest(const RequestModel& model) const {
     auto vars = activeVars();
     ResolvedRequest rr;
     rr.model = model;
 
-    // --- Merge settings precedence: request > folder > collection > app-global (README §12.1) ---
-    AppConfig app = impl_->appConfig.load();
-    if (model.type == RequestType::Http) {
-        auto& s = rr.model.http.settings;
-        if (!s.timeoutMsSet) { s.timeoutMs = app.defaultTimeoutMs; }
-        // verifyTls/followRedirects: keep the per-request default (TLS verify on) when unset.
-    }
+    // --- Timeout + TLS come from the per-request Config tab (RequestConfig). ---
+    applyRequestConfig(rr.model);
 
     // --- Resolve {{var}} in all string fields ---
     if (rr.model.type == RequestType::Http) {
@@ -432,6 +440,7 @@ RequestHandle Engine::send(const RequestModel& model, IUiDelegate* delegate) {
         if (model.type == RequestType::GraphQL &&
             gql::effectiveOperation(model.graphql) != GqlOperation::Subscription) {
             rr->model = gql::buildHttpModel(rr->model);
+            applyRequestConfig(rr->model);   // buildHttpModel resets http settings -> re-apply config
         }
         sender = impl_->registry.get(rr->model.type);
         if (!sender)
@@ -566,7 +575,9 @@ SessionHandle Engine::openSession(const RequestModel& model, IStreamSink* inboun
     if (wl.maxFrameBytes > 0) cfg.maxFrameBytes = static_cast<std::uint64_t>(wl.maxFrameBytes);
     if (wl.sendQueueMaxFrames > 0) cfg.sendQueueMaxFrames = static_cast<std::size_t>(wl.sendQueueMaxFrames);
     if (wl.sendQueueMaxBytes > 0) cfg.sendQueueMaxBytes = static_cast<std::uint64_t>(wl.sendQueueMaxBytes);
-    // wss:// cert verification stays on (WsConfig default); no app-global verify_tls toggle anymore.
+    // Per-request Config tab drives TLS verify + idle timeout for this WebSocket.
+    cfg.verifyTls = model.config.tls;
+    if (model.config.timeoutMs > 0) cfg.idleTimeoutMs = model.config.timeoutMs;
 
     h.sessionId = "ws-" + std::to_string(impl_->nextSessionId.fetch_add(1));
     auto session = wsMakeSession(cfg);

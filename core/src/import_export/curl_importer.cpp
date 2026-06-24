@@ -259,6 +259,10 @@ ImportResult CurlImporter::parse(const std::string& input) const {
     // Query after '?' -> split into params (decoded), remaining url is raw.
     urlutil::splitUrlQuery(h.url, h.params);
 
+    // Timeout + TLS live in the per-request Config (RequestConfig). Carry imported intent across.
+    if (h.settings.timeoutMsSet) m.config.timeoutMs = h.settings.timeoutMs;
+    if (h.settings.verifyTlsSet) m.config.tls = h.settings.verifyTls;
+
     res.ok = true;
     res.model = std::move(m);
     return res;

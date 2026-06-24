@@ -300,6 +300,7 @@ json toJson(const RequestModel& m) {
     if (!m.description.empty()) j["description"] = m.description;
     j["type"] = toString(m.type);
     j["seq"] = m.seq;
+    j["config"] = json{{"timeout_ms", m.config.timeoutMs}, {"tls", m.config.tls}};
     if (m.type == RequestType::Http) j["http"] = httpToJson(m.http);
     else if (m.type == RequestType::WebSocket) j["ws"] = wsToJson(m.ws);
     else if (m.type == RequestType::GraphQL) j["graphql"] = gqlToJson(m.graphql);
@@ -316,6 +317,10 @@ RequestModel requestFromJson(const json& j) {
     std::string t = getStr(j, "type", "http");
     parseRequestType(t, m.type);
     m.seq = getInt(j, "seq", 0);
+    if (auto it = j.find("config"); it != j.end() && it->is_object()) {
+        m.config.timeoutMs = getInt(*it, "timeout_ms", m.config.timeoutMs);
+        m.config.tls = getBool(*it, "tls", m.config.tls);
+    }
     if (m.type == RequestType::Http) {
         if (auto it = j.find("http"); it != j.end()) m.http = httpFrom(*it);
     } else if (m.type == RequestType::WebSocket) {
@@ -357,8 +362,7 @@ Environment envFromJson(const json& j) {
 
 // snake_case keys (app config). cacheResponses/cachePersist NOT exposed to user -> always default true.
 json toJson(const AppConfig& c) {
-    return json{{"default_timeout_ms", c.defaultTimeoutMs},
-                {"last_collection_root", c.lastCollectionRoot},
+    return json{{"last_collection_root", c.lastCollectionRoot},
                 {"font_name", c.fontName},
                 {"font_size", c.fontSize},
                 {"ram_cache_size", c.ramCacheSizeMb},
@@ -381,7 +385,6 @@ AppConfig appConfigFromJson(const json& j) { return appConfigFromJson(j, AppConf
 
 AppConfig appConfigFromJson(const json& j, const AppConfig& def) {
     AppConfig c = def;   // missing key -> keep the default value (from .env)
-    c.defaultTimeoutMs = getIntCompat(j, "default_timeout_ms", "defaultTimeoutMs", def.defaultTimeoutMs);
     c.lastCollectionRoot = getStrCompat(j, "last_collection_root", "lastCollectionRoot", def.lastCollectionRoot);
     c.fontName = getStrCompat(j, "font_name", "fontName", def.fontName);
     c.fontSize = getIntCompat(j, "font_size", "fontSize", def.fontSize);

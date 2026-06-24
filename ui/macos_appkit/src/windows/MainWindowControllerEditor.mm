@@ -151,6 +151,8 @@
         [_protoPopup setNeedsDisplay:YES];
         [self showSavedGrpcMethodLabel];   // show the saved RPC (do NOT fetch; fetch on dropdown click)
     }
+    // Config tab (last for every type) = per-request timeout_ms + tls.
+    [_reqBuffers addObject:N(fieldcodec::configToJson(_model.config))];
     // Re-apply the left pane's remembered tab (if the key exists for the current request type); else first tab.
     NSInteger li = [self tabIndexForKey:_leftPaneActiveTabKey inTitles:_reqTabTitles];
     if (li >= (NSInteger)_reqBuffers.count) li = 0;
@@ -217,6 +219,9 @@
         g.message = S(_reqBuffers[0]);
         if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[1]), g.metadata, err)) return fail(1, err);
     }
+    // Config tab (last buffer for every type) -> per-request timeout_ms + tls.
+    NSInteger ci = (NSInteger)_reqBuffers.count - 1;
+    if (ci >= 0 && !fieldcodec::jsonToConfig(S(_reqBuffers[ci]), _model.config, err)) return fail(ci, err);
     return YES;
 }
 
@@ -559,7 +564,7 @@ static NSString *GqlImportLabel(NSInteger kind) {
             g.service.empty() ? "(pick RPC)" : g.service.c_str(),
             g.method.empty() ? "" : g.method.c_str()];
         [s appendFormat:@"TLS: %@ · metadata: %lu · proto: %s",
-            g.tls.enabled ? @"secure" : @"plaintext",
+            m.config.tls ? @"secure" : @"plaintext",
             (unsigned long)g.metadata.size(), g.protoSource.mode.c_str()];
     } else {
         const core::HttpRequest &h = m.http;

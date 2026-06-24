@@ -244,9 +244,8 @@
                                                  target:self action:@selector(protoModeChanged:)];
     _protoPopup.toolTip = StrTipProtoSource;
 
-    // gRPC: retro slide switch to toggle TLS on/off for the connection before sending.
-    _tlsToggle = [[OS9Toggle alloc] initWithLabel:StrTls target:self action:@selector(toggleTls:)];
-    _tlsToggle.toolTip = StrTipGrpcTls;
+    // gRPC TLS is now part of the per-request Config tab (RequestConfig.tls); no toolbar toggle.
+    // (OS9Toggle widget kept in the tree for future reuse.)
 
     // gRPC: pick the service/RPC the server provides (placed before the Send button).
     _servicePopup = [[OS9PopupButton alloc] initWithItems:@[ StrNoRpc ]
@@ -283,7 +282,7 @@
     _urlField.delegate = self;   // controlTextDidChange: -> detect cURL/grpcurl paste
     [_urlInset addSubview:_urlField];
 
-    for (NSView *v in @[ _settingButton, _envButton, _sendButton, _cancelButton, _protoPopup, _servicePopup, _methodPopup, _tlsToggle, _urlInset ])
+    for (NSView *v in @[ _settingButton, _envButton, _sendButton, _cancelButton, _protoPopup, _servicePopup, _methodPopup, _urlInset ])
         [_mainPane addSubview:v];
 }
 
@@ -417,14 +416,7 @@
     // WS/GraphQL have no leading popup; HTTP advances by method width, gRPC by proto width.
     x += (grpc ? wProto : (noPopup ? 0 : wMethod)) + 6;
 
-    // gRPC TLS slide switch (after the proto popup). Reflects the model's TLS state.
-    CGFloat wTls = [_tlsToggle preferredWidth];   // snug: knob just fits "TLS", no wide margin
-    _tlsToggle.hidden = !grpc;
-    if (grpc) {
-        _tlsToggle.on = _model.grpc.tls.enabled;
-        _tlsToggle.frame = NSMakeRect(x, ty, wTls, btnH);
-        x += wTls + 6;
-    }
+    // (gRPC TLS toggle removed — TLS is set in the per-request Config tab.)
 
     _cancelButton.hidden = !_sending;
     _servicePopup.hidden = !grpc;
@@ -470,20 +462,21 @@
 
 - (void)setRequestType:(core::RequestType)t {
     _model.type = t;
+    // Config is the LAST request tab for every type (sits right before the cURL button).
     if (t == core::RequestType::Http) {
-        _reqTabTitles = @[ StrTabBody, StrTabQuery, StrTabHeaders, StrTabAuth ];  // "Query" (avoid confusion with path params); Body leftmost
+        _reqTabTitles = @[ StrTabBody, StrTabQuery, StrTabHeaders, StrTabAuth, StrTabConfig ];  // "Query" (avoid confusion with path params); Body leftmost
         _respTabTitles = @[ StrTabResponse, StrTabHeaders, StrTabRequest, StrTabCookie ];
     } else if (t == core::RequestType::WebSocket) {
         // WS: Message = frame to send (also auto-sent on connect); Headers = handshake headers; Auth.
         // Response pane = the in/out frame log array (reuses the streaming render).
-        _reqTabTitles = @[ StrTabMessage, StrTabHeaders, StrTabAuth ];
+        _reqTabTitles = @[ StrTabMessage, StrTabHeaders, StrTabAuth, StrTabConfig ];
         _respTabTitles = @[ StrTabMessage, StrTabRequest ];
     } else if (t == core::RequestType::GraphQL) {
         // GraphQL: Query document + Variables (JSON) + Headers + Auth. query/mutation -> normal response pane.
-        _reqTabTitles = @[ StrTabGqlQuery, StrTabVariables, StrTabHeaders, StrTabAuth ];
+        _reqTabTitles = @[ StrTabGqlQuery, StrTabVariables, StrTabHeaders, StrTabAuth, StrTabConfig ];
         _respTabTitles = @[ StrTabResponse, StrTabRequest ];
     } else {
-        _reqTabTitles = @[ StrTabMessage, StrTabMetadata, StrTabAuth ];
+        _reqTabTitles = @[ StrTabMessage, StrTabMetadata, StrTabAuth, StrTabConfig ];
         _respTabTitles = @[ StrTabMessage, StrTabRequest ];
     }
     [self rebuildTabButtons];

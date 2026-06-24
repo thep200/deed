@@ -117,6 +117,7 @@ ImportResult GrpcImporter::parse(const std::string& input) const {
         res.error = "missing target (host:port)";
         return res;
     }
+    m.config.tls = g.tls.enabled;   // TLS now lives in the per-request Config (RequestConfig)
     res.ok = true;
     res.model = std::move(m);
     return res;

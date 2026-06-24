@@ -135,7 +135,6 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     OS9BevelButton *_sendButton;
     OS9BevelButton *_cancelButton;
     OS9PopupButton *_protoPopup;     // gRPC: pick proto source (Reflection | .proto)
-    OS9Toggle *_tlsToggle;           // gRPC: retro slide switch to toggle TLS before sending
     OS9PopupButton *_servicePopup;   // gRPC: pick service/RPC (before the Send button)
     OS9PopupButton *_methodPopup;
     OS9SerratedInset *_urlInset; // retro serrated input frame wrapping the URL field
@@ -294,7 +293,6 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)enterConfig:(NSInteger)kind;
 - (void)exitConfig:(id)sender;
 - (void)protoModeChanged:(id)sender;
-- (void)toggleTls:(id)sender;
 - (void)showSavedGrpcMethodLabel;
 - (void)reloadGrpcMethods;
 - (void)fetchGrpcMethodsThenOpen:(BOOL)openWhenDone;
