@@ -421,44 +421,69 @@
 
 #pragma mark Tree context menu (right-click) + multi-select
 
-- (NSMenu *)contextMenuForRow:(NSInteger)row {
-    if (!_engine) return nil;
+- (void)showContextMenuForRow:(NSInteger)row atWindowPoint:(NSPoint)pt {
+    if (!_engine) return;
     // Right-click on an unselected item -> select just that item.
     if (row >= 0 && ![_tree.selectedRowIndexes containsIndex:row])
         [_tree selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
     if (row < 0) [_tree deselectAll:nil]; // empty area -> operate at tree root
 
-    NSMenu *m = [[NSMenu alloc] init];
+    NSMutableArray<OS9MenuEntry *> *items = [NSMutableArray array];
     NSUInteger selCount = _tree.selectedRowIndexes.count;
+    __weak MainWindowController *ws = self;
 
     // Multi-select -> Delete only.
     if (selCount > 1) {
-        [[m addItemWithTitle:[NSString stringWithFormat:StrFmtDeleteItems, (unsigned long)selCount]
-                      action:@selector(deleteSelectedMulti:) keyEquivalent:@""] setTarget:self];
-        return m;
+        NSString *title = [NSString stringWithFormat:StrFmtDeleteItems, (unsigned long)selCount];
+        [items addObject:[OS9MenuEntry entry:title action:^{ [ws deleteSelectedMulti:nil]; }]];
+        OS9ShowContextMenu(items, _tree, pt);
+        return;
     }
 
     TreeItem *t = (row >= 0) ? [_tree itemAtRow:row] : nil;
     if (t == nil || t.isFolder) {
         // Empty area or folder -> add request/folder.
-        [[m addItemWithTitle:StrMenuNewHttp action:@selector(newHttp:) keyEquivalent:@""] setTarget:self];
-        [[m addItemWithTitle:StrMenuNewGrpc action:@selector(newGrpc:) keyEquivalent:@""] setTarget:self];
-        [[m addItemWithTitle:StrMenuNewWs action:@selector(newWs:) keyEquivalent:@""] setTarget:self];
-        [[m addItemWithTitle:StrMenuNewGraphQl action:@selector(newGraphQl:) keyEquivalent:@""] setTarget:self];
-        [[m addItemWithTitle:StrNewFolder action:@selector(newFolder:) keyEquivalent:@""] setTarget:self];
+        [items addObject:[OS9MenuEntry entry:StrMenuNewHttp    action:^{ [ws newHttp:nil]; }]];
+        [items addObject:[OS9MenuEntry entry:StrMenuNewGrpc    action:^{ [ws newGrpc:nil]; }]];
+        [items addObject:[OS9MenuEntry entry:StrMenuNewWs      action:^{ [ws newWs:nil]; }]];
+        [items addObject:[OS9MenuEntry entry:StrMenuNewGraphQl action:^{ [ws newGraphQl:nil]; }]];
+        [items addObject:[OS9MenuEntry entry:StrNewFolder      action:^{ [ws newFolder:nil]; }]];
         if (t != nil) { // folder also allows rename/dup/delete
-            [m addItem:[NSMenuItem separatorItem]];
-            [[m addItemWithTitle:StrRename action:@selector(renameSel:) keyEquivalent:@""] setTarget:self];
-            [[m addItemWithTitle:StrDuplicate action:@selector(dupSel:) keyEquivalent:@""] setTarget:self];
-            [[m addItemWithTitle:StrDelete action:@selector(deleteSel:) keyEquivalent:@""] setTarget:self];
+            [items addObject:[OS9MenuEntry separator]];
+            [items addObject:[OS9MenuEntry entry:StrRename    action:^{ [ws renameSel:nil]; }]];
+            [items addObject:[OS9MenuEntry entry:StrDuplicate action:^{ [ws dupSel:nil]; }]];
+            [items addObject:[OS9MenuEntry entry:StrDelete    action:^{ [ws deleteSel:nil]; }]];
         }
     } else {
-        // Request -> rename / duplicate / delete.
-        [[m addItemWithTitle:StrRename action:@selector(renameSel:) keyEquivalent:@""] setTarget:self];
-        [[m addItemWithTitle:StrDuplicate action:@selector(dupSel:) keyEquivalent:@""] setTarget:self];
-        [[m addItemWithTitle:StrDelete action:@selector(deleteSel:) keyEquivalent:@""] setTarget:self];
+        // Request -> (cURL for HTTP/gRPC) rename / duplicate / delete.
+        // §curl: WebSocket and GraphQL have no cURL equivalent -> only HTTP/gRPC get the item.
+        if (t.requestType == core::RequestType::Http || t.requestType == core::RequestType::Grpc) {
+            NSString *rel = t.relPath;   // copy THIS request (not whatever is open in the editor)
+            [items addObject:[OS9MenuEntry entry:StrMenuCopyCurl action:^{ [ws copyCurlForRel:rel]; }]];
+            [items addObject:[OS9MenuEntry separator]];
+        }
+        [items addObject:[OS9MenuEntry entry:StrRename    action:^{ [ws renameSel:nil]; }]];
+        [items addObject:[OS9MenuEntry entry:StrDuplicate action:^{ [ws dupSel:nil]; }]];
+        [items addObject:[OS9MenuEntry entry:StrDelete    action:^{ [ws deleteSel:nil]; }]];
     }
-    return m;
+    OS9ShowContextMenu(items, _tree, pt);
+}
+
+// Copy a tree request as cURL/grpcurl (right-click). Copies the RIGHT-CLICKED request, not
+// necessarily the one open in the editor. If it IS the open request, defer to copyAsCurl: so any
+// unsaved editor edits are included.
+- (void)copyCurlForRel:(NSString *)rel {
+    if (!_engine || rel.length == 0) return;
+    if (_hasRequest && _currentRel == S(rel)) { [self copyAsCurl:nil]; return; }
+    try {
+        core::RequestModel m = _engine->collection().loadRequest(rel.UTF8String);
+        core::ResolvedRequest rr = _engine->resolveRequest(m);
+        std::string curl = core::toCurl(rr.model);
+        NSPasteboard *pb = [NSPasteboard generalPasteboard];
+        [pb clearContents];
+        [pb setString:N(curl) forType:NSPasteboardTypeString];
+        [self toastOk:StrToastCopiedCurl];
+    } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 
 // Purge the response cache of a deleted request (both tiers — §7). §T2: id TAKEN FROM FILENAME (zero-read)

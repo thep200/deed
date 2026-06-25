@@ -43,13 +43,11 @@ extern NSString *const StrMenuSend;
 extern NSString *const StrOpenFolder;   // File menu + open-folder button
 extern NSString *const StrOpenCollection;   // button prompt in NSOpenPanel
 extern NSString *const StrSave;
-extern NSString *const StrBtnCurl;
 extern NSString *const StrBtnBack;
 extern NSString *const StrEnvLocal;      // base environment column/variable label
 extern NSString *const StrEnvManage;
 
 #pragma mark - Tooltip
-extern NSString *const StrTipCurl;
 extern NSString *const StrTipSettings;
 extern NSString *const StrTipSend;
 extern NSString *const StrTipProtoSource;
@@ -114,6 +112,7 @@ extern NSString *const StrMenuNewGrpc;
 extern NSString *const StrMenuNewWs;
 extern NSString *const StrMenuNewGraphQl;
 extern NSString *const StrNewFolder;     // menu + default folder name
+extern NSString *const StrMenuCopyCurl;  // right-click: copy request as cURL/grpcurl
 extern NSString *const StrFmtDeleteItems;
 
 #pragma mark - Default names

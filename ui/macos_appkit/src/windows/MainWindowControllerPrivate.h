@@ -29,6 +29,7 @@
 #import "widgets/OS9Label.h"
 #import "widgets/OS9PopupButton.h"
 #import "widgets/OS9Scroller.h"
+#import "widgets/OS9StyleMenu.h"
 #import "widgets/OS9SerratedInset.h"
 #import "widgets/OS9TitleBar.h"
 #import "widgets/OS9Toast.h"
@@ -121,7 +122,6 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     NSString *_rightPaneActiveTabKey;   // active tab key for right pane (remembered separately)
     OS9BevelButton *_prettyButton;
     NSInteger _prettyMode; // 0=Pretty 1=Raw 2=Encode 3=Decode
-    OS9BevelButton *_curlButton;      // copy current request as cURL
     core::ApiResponse _lastResp;
     BOOL _hasResp;
 
@@ -246,6 +246,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)prettyToggle:(id)sender;
 - (void)applyPrettyToFocusedPane;
 - (void)copyAsCurl:(id)sender;
+- (void)copyCurlForRel:(NSString *)rel;   // right-click "Copy as cURL" on a tree request
 - (void)zoomToggle:(id)sender;
 - (void)collapseToggle:(id)sender;
 - (void)applyConfiguredFontAndRefresh;
@@ -300,7 +301,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)serviceMethodChanged:(id)sender;
 - (void)applySelectedGrpcMethod:(NSInteger)idx;
 - (void)manageEnv:(id)sender;
-- (NSMenu *)contextMenuForRow:(NSInteger)row;
+- (void)showContextMenuForRow:(NSInteger)row atWindowPoint:(NSPoint)pt;
 - (void)purgeCacheAtRel:(NSString *)rel isFolder:(BOOL)isFolder;
 - (void)deleteSelectedMulti:(id)sender;
 - (std::string)selectedFolderRel;

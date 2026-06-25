@@ -20,6 +20,7 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     it.children = [NSMutableArray array];
     it.childrenLoaded = NO;
     if (!n.isFolder) {
+        it.requestType = n.requestType;
         it.grpc = (n.requestType == core::RequestType::Grpc);
         it.badge = [NSString stringWithFormat:@"%s %s", core::toString(n.requestType).c_str(), n.methodOrType.c_str()];
         // HTTP -> method name (GET/POST...); gRPC -> "gRPC"; WebSocket -> "WS"; GraphQL -> "GQL".
@@ -35,7 +36,8 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
 - (NSMenu *)menuForEvent:(NSEvent *)e {
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
     NSInteger row = [self rowAtPoint:p];
-    return self.menuProvider ? self.menuProvider(row) : nil;
+    if (self.contextHandler) self.contextHandler(row, e.locationInWindow);
+    return nil;   // we draw our own retro overlay menu, not the system NSMenu
 }
 // Drop the fold arrow (disclosure triangle) — we draw our own in the cell.
 - (NSRect)frameOfOutlineCellAtRow:(NSInteger)row { return NSZeroRect; }

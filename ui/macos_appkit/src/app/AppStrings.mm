@@ -28,13 +28,11 @@ NSString *const StrMenuSend = @"Send";
 NSString *const StrOpenFolder = @"Open Folder…";
 NSString *const StrOpenCollection = @"Open Collection";
 NSString *const StrSave = @"Save";
-NSString *const StrBtnCurl = @"cURL";
 NSString *const StrBtnBack = @"Back";
 NSString *const StrEnvLocal = @"Local";
 NSString *const StrEnvManage = @"Manage…";
 
 #pragma mark - Tooltip
-NSString *const StrTipCurl = @"Copy current request as cURL";
 NSString *const StrTipSettings = @"Settings";
 NSString *const StrTipSend = @"Send  ⌘↩";
 NSString *const StrTipProtoSource = @"Proto source: Reflection (ask server) or load a .proto file";
@@ -99,6 +97,7 @@ NSString *const StrMenuNewGrpc = @"New gRPC Request";
 NSString *const StrMenuNewWs = @"New WebSocket";
 NSString *const StrMenuNewGraphQl = @"New GraphQL";
 NSString *const StrNewFolder = @"New Folder";
+NSString *const StrMenuCopyCurl = @"Copy as cURL";
 NSString *const StrFmtDeleteItems = @"Delete %lu items";
 
 #pragma mark - Default names

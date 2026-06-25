@@ -18,6 +18,7 @@ extern NSString *const kTreeDragType;
 @property(nonatomic, copy) NSString *badge;
 @property(nonatomic, copy) NSString *mark;   // line-leading marker: HTTP method, or "gRPC"
 @property(nonatomic) BOOL grpc;
+@property(nonatomic) core::RequestType requestType;   // request kind (folders: unused) — drives cURL menu item
 @property(nonatomic) BOOL childrenLoaded;   // lazy: children loaded only on expand (§3)
 @property(nonatomic, strong) NSMutableArray<TreeItem *> *children;
 @end
@@ -28,7 +29,9 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n);
 #pragma mark - DeedOutlineView (dynamic right-click context menu)
 
 @interface DeedOutlineView : NSOutlineView
-@property(nonatomic, copy) NSMenu *(^menuProvider)(NSInteger clickedRow);
+// Right-click -> controller shows its own retro overlay menu (no system NSMenu). windowPoint is the
+// click location in window coords (for positioning the overlay).
+@property(nonatomic, copy) void (^contextHandler)(NSInteger clickedRow, NSPoint windowPoint);
 @end
 
 #pragma mark - TreeCellView (self-drawn retro folder/doc icon)

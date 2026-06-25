@@ -174,7 +174,7 @@
     _tree.backgroundColor = [NSColor whiteColor];
     [_tree registerForDraggedTypes:@[ kTreeDragType ]]; // drag-and-drop move
     __weak MainWindowController *weakSelf = self;
-    _tree.menuProvider = ^NSMenu *(NSInteger row) { return [weakSelf contextMenuForRow:row]; };
+    _tree.contextHandler = ^(NSInteger row, NSPoint pt) { [weakSelf showContextMenuForRow:row atWindowPoint:pt]; };
     _treeScroll.documentView = _tree;
     [_treeInset addSubview:_treeScroll];
     _roots = [NSMutableArray array];
@@ -199,11 +199,7 @@
     _respBuffers = [NSMutableArray array];
     _respTabButtons = [NSMutableArray array];
     _prettyMode = 0;
-
-    // Left pane: cURL button (Format JSON moved to the editor's right-click menu).
-    _curlButton = [[OS9BevelButton alloc] initWithTitle:StrBtnCurl target:self action:@selector(copyAsCurl:)];
-    _curlButton.toolTip = StrTipCurl;
-    [_mainPane addSubview:_curlButton];
+    // cURL is now copied via the tree's right-click menu (copyCurlSel:) — no tab-header button.
 }
 
 // Label + body transform per the pretty button's current mode.
@@ -371,13 +367,8 @@
     _divTree.frame = NSMakeRect(divTreeX, statusY, dw, panesBottom - statusY);
     _divResp.frame = NSMakeRect(divRespX, panesY, dw, panesBottom - panesY);
 
-    // (3) LEFT pane GROUP = request tabs + cURL (same row, evenly spread) + editor.
-    // WebSocket and GraphQL have no cURL equivalent -> hide the button for those types.
-    BOOL showCurl = (_model.type == core::RequestType::Http || _model.type == core::RequestType::Grpc);
-    _curlButton.hidden = !showCurl;
-    NSMutableArray<OS9BevelButton *> *leftTabGroup = [_reqTabButtons mutableCopy];
-    if (_curlButton && showCurl) [leftTabGroup addObject:_curlButton];
-    [self layoutTabButtons:leftTabGroup atX:reqX y:top width:_reqW height:tabH extra:0];
+    // (3) LEFT pane GROUP = request tabs (cURL moved to the tree right-click menu) + editor.
+    [self layoutTabButtons:_reqTabButtons atX:reqX y:top width:_reqW height:tabH extra:0];
     _reqInset.frame = NSMakeRect(reqX, panesY, _reqW, panesBottom - panesY);
     _reqText.frame = NSInsetRect(_reqInset.bounds, 2, 2);
 
