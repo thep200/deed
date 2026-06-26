@@ -1,8 +1,34 @@
 #import "windows/MainWindowControllerPrivate.h"
+#import <QuartzCore/QuartzCore.h>
 
 // This file holds the core: UI building (build*), layout, per-type render, window & toast.
 // The remaining groups are split into categories: +Tree / +Editor / +Send / +Config / +Stress.
 // Shared ivars + imports live in MainWindowControllerPrivate.h.
+
+// Build a non-anti-aliased circular alpha mask of side (2*rpx+1) device pixels (SQUARE_CORNERS=2). Used as a
+// 9-slice CALayer mask: the 4 quarter-circle corners stay pixel-exact (chunky/retro, no smoothing) while the
+// 1px center cross stretches to fill the window on resize. Caller owns the returned image (CGImageRelease).
+static CGImageRef OS9CreateCornerMask(int rpx) {
+    const int S = 2 * rpx + 1;
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(NULL, S, S, 8, 0, cs, kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(cs);
+    if (!ctx) return NULL;
+    unsigned char *data = (unsigned char *)CGBitmapContextGetData(ctx);
+    const size_t bpr = CGBitmapContextGetBytesPerRow(ctx);
+    const long r2 = (long)rpx * rpx;
+    for (int y = 0; y < S; y++) {
+        for (int x = 0; x < S; x++) {
+            const long dx = x - rpx, dy = y - rpx;
+            const unsigned char a = (dx * dx + dy * dy) <= r2 ? 255 : 0;   // hard threshold -> pixel corners
+            unsigned char *p = data + (size_t)y * bpr + (size_t)x * 4;
+            p[0] = a; p[1] = a; p[2] = a; p[3] = a;                        // premultiplied white; mask uses alpha
+        }
+    }
+    CGImageRef img = CGBitmapContextCreateImage(ctx);
+    CGContextRelease(ctx);
+    return img;
+}
 
 @implementation MainWindowController
 
@@ -16,17 +42,11 @@
     // Button style: new (btn-new.svg) by default, or classic (button.svg) via .env.
     [OS9Theme setButtonStyleName:[cfg stringFor:@"BUTTON_STYLE" def:@"new"]];
     NSRect frame = NSMakeRect(0, 0, [cfg floatFor:@"WINDOW_WIDTH" def:1040], [cfg floatFor:@"WINDOW_HEIGHT" def:680]);
-    // Window corners: SQUARE_CORNERS=1 (default) -> borderless SQUARE corners, OS9 style.
-    // =0 -> system titled window (rounded corners). Title/buttons are always drawn by OS9TitleBar.
-    BOOL square = [cfg boolFor:@"SQUARE_CORNERS" def:YES];
-    if (square) {
-        // + Miniaturizable: allow minimizing into the Dock (genie) while staying borderless -> SQUARE corners.
-        _window = [[OS9Window alloc] initWithContentRect:frame
-                                               styleMask:(NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable |
-                                                          NSWindowStyleMaskMiniaturizable)
-                                                 backing:NSBackingStoreBuffered
-                                                   defer:NO];
-    } else {
+    // Window corners (SQUARE_CORNERS): 0 = system titled window (OS-rounded), 1 = borderless SQUARE (OS9
+    // default), 2 = borderless + PIXEL-rounded corners (retro, non-AA 9-slice mask). 1 and 2 share the
+    // borderless OS9Window; 2 additionally applies _cornerMask after the content view is set (below).
+    NSInteger corners = [cfg intFor:@"SQUARE_CORNERS" def:1];
+    if (corners == 0) {
         _window = [[NSWindow alloc] initWithContentRect:frame
                                               styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                                                          NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable |
@@ -38,6 +58,14 @@
         [_window standardWindowButton:NSWindowCloseButton].hidden = YES;
         [_window standardWindowButton:NSWindowMiniaturizeButton].hidden = YES;
         [_window standardWindowButton:NSWindowZoomButton].hidden = YES;
+    } else {
+        // + Miniaturizable: allow minimizing into the Dock (genie) while staying borderless.
+        _window = [[OS9Window alloc] initWithContentRect:frame
+                                               styleMask:(NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable |
+                                                          NSWindowStyleMaskMiniaturizable)
+                                                 backing:NSBackingStoreBuffered
+                                                   defer:NO];
+        if (corners == 2) _cornerRadiusPts = [cfg floatFor:@"CORNER_RADIUS_PX" def:6];
     }
     _window.movableByWindowBackground = NO;
     _window.releasedWhenClosed = NO;   // §4: controller owns _window (ARC); don't let close auto-release it
@@ -48,6 +76,7 @@
 
     OS9BackgroundView *content = [[OS9BackgroundView alloc] initWithFrame:frame];
     _window.contentView = content;
+    if (_cornerRadiusPts > 0) [self applyPixelCorners];   // SQUARE_CORNERS=2
 
     _treeW = [cfg floatFor:@"SIDEBAR_WIDTH" def:230];
     _reqW = 0; // computed on first relayout
@@ -318,6 +347,11 @@
 
 - (void)relayout {
     NSRect cb = [_window.contentView bounds];
+    if (_cornerMask) {   // keep the 9-slice corner mask sized to the window (no implicit animation on resize)
+        [CATransaction begin]; [CATransaction setDisableActions:YES];
+        _cornerMask.frame = cb;
+        [CATransaction commit];
+    }
     CGFloat W = cb.size.width, H = cb.size.height;
     CGFloat titleH = 21;   // §2 spec: title bar fixed at 21px tall (incl. border)
     _titleBar.frame = NSMakeRect(0, 0, W, titleH);
@@ -552,6 +586,36 @@
     if (_engine) _engine->flushCache();
 }
 - (void)windowDidResize:(NSNotification *)note { [self relayout]; }
+
+// SQUARE_CORNERS=2: mask the content layer with a 9-slice non-AA corner image so the window has
+// pixel-rounded corners. Layer-backing the content view makes the mask clip the whole subtree.
+- (void)applyPixelCorners {
+    NSView *content = _window.contentView;
+    if (!content) return;
+    content.wantsLayer = YES;
+    const CGFloat scale = _window.backingScaleFactor > 0 ? _window.backingScaleFactor : 1.0;
+    int rpx = (int)lround(_cornerRadiusPts * scale);
+    if (rpx < 1) rpx = 1;
+    const int S = 2 * rpx + 1;
+    CGImageRef img = OS9CreateCornerMask(rpx);
+    if (!img) return;
+    if (!_cornerMask) _cornerMask = [CALayer layer];
+    _cornerMask.contents = (__bridge id)img;
+    _cornerMask.contentsScale = scale;
+    _cornerMask.contentsCenter = CGRectMake((CGFloat)rpx / S, (CGFloat)rpx / S, 1.0 / S, 1.0 / S);  // 9-slice
+    _cornerMask.magnificationFilter = kCAFilterNearest;   // stretched edges stay crisp (no blur)
+    _cornerMask.frame = content.bounds;
+    content.layer.mask = _cornerMask;
+    CGImageRelease(img);
+    _window.opaque = NO;
+    _window.backgroundColor = [NSColor clearColor];
+    [_window invalidateShadow];   // shadow follows the rounded shape
+}
+
+// Moving to a display with a different scale -> regenerate the mask at the new device resolution.
+- (void)windowDidChangeBackingProperties:(NSNotification *)note {
+    if (_cornerRadiusPts > 0) [self applyPixelCorners];
+}
 - (void)windowDidBecomeKey:(NSNotification *)note { [_titleBar setNeedsDisplay:YES]; }
 - (void)windowDidResignKey:(NSNotification *)note { [_titleBar setNeedsDisplay:YES]; }
 

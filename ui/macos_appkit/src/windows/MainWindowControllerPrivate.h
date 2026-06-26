@@ -88,6 +88,8 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 
     // Chrome + containers
     NSWindow *_window;
+    CALayer *_cornerMask;       // SQUARE_CORNERS=2: 9-slice non-AA mask -> pixel-rounded window corners (nil otherwise)
+    CGFloat _cornerRadiusPts;   // mask radius in points (from CORNER_RADIUS_PX), re-applied on backing change
     OS9TitleBar *_titleBar;
     NSView *_mainPane;     // main screen
     NSView *_configPane;   // config screen (ENV + Setting)
