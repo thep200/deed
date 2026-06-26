@@ -47,6 +47,10 @@
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app { return YES; }
 
+// Fix 2: flush deferred cache metadata on quit. C++ dtors (which would otherwise persist the cache index)
+// do NOT run on app terminate, so do it explicitly here.
+- (void)applicationWillTerminate:(NSNotification *)note { [self.mainWC flushCaches]; }
+
 - (void)openFolder:(id)sender  { [self.mainWC openFolder:sender]; }
 - (void)saveRequest:(id)sender { [self.mainWC saveRequest:sender]; }
 - (void)sendRequest:(id)sender { [self.mainWC sendRequest:sender]; }

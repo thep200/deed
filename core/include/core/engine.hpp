@@ -117,6 +117,7 @@ public:
     std::optional<ResponseRecord> getResponse(const std::string& id);
     void removeResponse(const std::string& id);          // remove when request deleted
     void reloadCacheConfig();                            // call after Settings change
+    void flushCache();                                   // persist deferred cache metadata (app quit/window close — Fix 2)
     CacheConfig cacheConfig() const;                     // current effective config (by value — M4, race-free)
     ResponseCache* responseCache();                      // direct access (test/diagnostic), null if off
 

@@ -11,6 +11,7 @@
 // -Wincomplete-implementation / -Wobjc-protocol-method-implementation warnings.
 @interface MainWindowController : NSObject <NSWindowDelegate>
 - (void)showWindow;
+- (void)flushCaches;   // persist deferred cache metadata before the app exits (Fix 2)
 @end
 
 // Public actions (called from AppController/menu). Implemented in a category, so declared

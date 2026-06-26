@@ -73,6 +73,11 @@ void ResponseCache::clear() {
     if (l2_) l2_->clear();
 }
 
+void ResponseCache::flush() {
+    l1_->flush();
+    if (l2_) l2_->flush();
+}
+
 void ResponseCache::onConfigChanged(const CacheConfig& c) {
     l1_->setCapBytes(c.ramEffBytes);
     if (l2_) l2_->setCapBytes(c.diskEffBytes);

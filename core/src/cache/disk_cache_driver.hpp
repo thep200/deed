@@ -22,6 +22,7 @@ public:
     void remove(const std::string& id) override;
     void clear() override;
     void setCapBytes(std::uint64_t cap) override;
+    void flush() override;          // persist pending atime updates (Fix 2; dtors don't run on app terminate)
     std::uint64_t usedBytes() const override;
     const char* name() const override { return "disk"; }
 
@@ -32,21 +33,18 @@ private:
         std::int64_t atime = 0;     // last-access tick (LRU; persisted to restore order after restart)
         std::list<std::string>::iterator lru;  // position in lru_ (front = most recently used)
     };
-    void loadIndex();               // read _index.json (called once at init)
-    void persistIndex() const;      // rewrite _index.json (atomic) + clear dirty_/unflushed_
-    void noteIndexDirty();          // mark dirty + BATCHED flush every N changes (avoid writing on every put)
+    void loadIndex();               // read _index.json (called once at init); trusts the index, no FS scan
+    void persistIndex() const;      // rewrite _index.json (atomic) + clear dirty_
     void touch(IndexEntry& e, const std::string& id);  // move id to LRU front (O(1))
     void evictToFit();              // pop back (oldest-atime) until used_ <= cap_ (O(1)/victim)
-    std::string fileFor(const std::string& id) const;  // <dir>/<safeId>.json
-    static std::string safeId(const std::string& id);
+    std::string fileFor(const std::string& id) const;  // <dir>/<id>.json (id is guaranteed FS-safe upstream)
 
     mutable std::mutex mu_;
     std::string dir_;
     std::uint64_t cap_;
     std::uint64_t used_ = 0;
     std::int64_t tick_ = 0;         // incremented per access -> LRU order
-    mutable bool dirty_ = false;    // atime changes on get (RAM only) -> needs flush; avoid writing per read (§1.1)
-    mutable int unflushed_ = 0;     // index changes not yet written to disk (put/remove batched -> flush every N)
+    mutable bool dirty_ = false;    // atime changed on get but not yet flushed (§1.1; structural changes persist now)
     std::map<std::string, IndexEntry> index_;
     std::list<std::string> lru_;    // front = recently used, back = oldest (evict O(1) — §1.2)
 };

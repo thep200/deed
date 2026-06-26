@@ -1,10 +1,7 @@
 #include "cache/disk_cache_driver.hpp"
 
 #include <algorithm>
-#include <cctype>
-#include <cstdio>
 #include <filesystem>
-#include <functional>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -18,32 +15,12 @@ namespace core {
 
 namespace {
 const char* kIndexFile = "_index.json";
-// Batched index writes: flush _index.json only every N structural changes (put/remove), not each time.
-// Response files are written durably right away; the index is just derived metadata — an entry missing
-// after a crash becomes an orphan file (cache miss, cleaned on clear), an extra entry self-heals in loadIndex (fs::exists check).
-const int kIndexFlushEvery = 8;
-}
-
-std::string DiskCacheDriver::safeId(const std::string& id) {
-    std::string out;
-    out.reserve(id.size() + 17);
-    for (unsigned char c : id) {
-        if (std::isalnum(c) || c == '_' || c == '-') out += static_cast<char>(c);
-        else out += '_';
-    }
-    if (out.empty()) out = "_";
-    // L5: append a short hash of the ORIGINAL id so ids that sanitize to the same string (e.g. "a/b",
-    // "a_b", "a b" all -> "a_b") map to DIFFERENT files instead of silently overwriting each other.
-    char buf[17];
-    std::snprintf(buf, sizeof(buf), "%016llx",
-                  static_cast<unsigned long long>(std::hash<std::string>{}(id)));
-    out += '-';
-    out += buf;
-    return out;
 }
 
 std::string DiskCacheDriver::fileFor(const std::string& id) const {
-    return (fs::path(dir_) / (safeId(id) + ".json")).string();
+    // The cache key is a request id, which the upper layer guarantees filesystem-safe (genId -> [a-z0-9];
+    // isValidFileId enforces it). So the filename IS the id — no sanitizing, no hashing, no backup naming.
+    return (fs::path(dir_) / (id + ".json")).string();
 }
 
 DiskCacheDriver::DiskCacheDriver(std::string dir, std::uint64_t capBytes)
@@ -95,15 +72,15 @@ void DiskCacheDriver::persistIndex() const {
     for (const auto& [id, e] : index_)
         entries[id] = {{"bytes", e.bytes}, {"receivedAt", e.receivedAt}, {"atime", e.atime}};
     nlohmann::json j{{"tick", tick_}, {"entries", entries}};
-    try { fsutil::writeFileAtomic((fs::path(dir_) / kIndexFile).string(), j.dump()); dirty_ = false; unflushed_ = 0; }
+    try { fsutil::writeFileAtomic((fs::path(dir_) / kIndexFile).string(), j.dump()); dirty_ = false; }
     catch (...) { /* index is a derived cache; write error -> ignore */ }
 }
 
-// put/remove call this instead of persistIndex() directly: batch up to kIndexFlushEvery changes
-// into a single disk write. Destructor flushes the remainder while dirty_ is still set.
-void DiskCacheDriver::noteIndexDirty() {
-    dirty_ = true;
-    if (++unflushed_ >= kIndexFlushEvery) persistIndex();
+// Flush pending atime updates (get marks dirty_ but defers the write — §1.1). Called on shutdown
+// (Engine::flushCache, since dtors don't run on app terminate) so LRU order survives restart. (Fix 2)
+void DiskCacheDriver::flush() {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (dirty_) persistIndex();
 }
 
 void DiskCacheDriver::touch(IndexEntry& e, const std::string& id) {
@@ -132,7 +109,7 @@ std::optional<ResponseRecord> DiskCacheDriver::get(const std::string& id) {
         used_ -= it->second.bytes;
         lru_.erase(it->second.lru);
         index_.erase(it);
-        noteIndexDirty();                             // file gone -> drop index entry (batched write)
+        persistIndex();                               // file gone -> drop index entry (structural -> durable now)
         return std::nullopt;
     }
     try {
@@ -153,7 +130,7 @@ bool DiskCacheDriver::put(const std::string& id, const ResponseRecord& r, std::u
             used_ -= old->second.bytes;
             lru_.erase(old->second.lru);
             index_.erase(old);
-            noteIndexDirty();
+            persistIndex();
         }
         return false;
     }
@@ -174,7 +151,9 @@ bool DiskCacheDriver::put(const std::string& id, const ResponseRecord& r, std::u
     used_ += bytes;
     index_[id] = ie;
     evictToFit();                                     // bound disk
-    noteIndexDirty();                                 // batched index write (response file already durable)
+    persistIndex();                                   // Fix 1: structural change -> persist NOW (response
+                                                      // file already durable). Closes the data-loss window
+                                                      // where a sparse stream's entry was never flushed.
     return true;
 }
 
@@ -187,7 +166,7 @@ void DiskCacheDriver::remove(const std::string& id) {
         used_ -= it->second.bytes;
         lru_.erase(it->second.lru);
         index_.erase(it);
-        noteIndexDirty();
+        persistIndex();              // Fix 1: structural change -> durable now
     }
 }
 
@@ -197,14 +176,14 @@ void DiskCacheDriver::clear() {
     index_.clear();
     lru_.clear();
     used_ = 0;
-    dirty_ = true; unflushed_ = 0;   // H9: defer the index write (files already removed; dtor flushes)
+    persistIndex();                  // Fix 1: write the empty index now (tiny; don't rely on a dtor that may not run)
 }
 
 void DiskCacheDriver::setCapBytes(std::uint64_t cap) {
     std::lock_guard<std::mutex> lk(mu_);
     cap_ = cap;
-    evictToFit();                    // eviction removes files immediately; the index write can batch
-    dirty_ = true;                   // H9: don't force a full index rewrite on every cap change (dtor flushes)
+    evictToFit();                    // eviction removes files immediately; persist the trimmed index now
+    persistIndex();                  // Fix 1: keep on-disk index in sync with the eviction (rare op)
 }
 
 std::uint64_t DiskCacheDriver::usedBytes() const {

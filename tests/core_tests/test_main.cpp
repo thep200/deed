@@ -588,6 +588,41 @@ static void test_response_cache(const std::string& root) {
     fs::remove_all(sdir);
 }
 
+// Durability + filename fixes: index write-through (Fix 1) and bare-id filename + orphan sweep (Fix 3).
+static void test_cache_durability(const std::string& root) {
+    std::printf("[cache_durability]\n");
+    CacheConfig cfg;
+    cfg.ramEffBytes = 1024 * 1024;
+    cfg.diskEffBytes = 1024 * 1024;
+    cfg.thresholdBytes = 1024;
+    cfg.enabled = true; cfg.persist = true;
+
+    // Fix 1: a put persists _index.json IMMEDIATELY (not batched), so a fresh view of the same dir sees it
+    // WITHOUT the first cache being destroyed — mimics app terminate that never runs dtors (the stream bug).
+    std::string sdir = (fs::path(root) / ".session_durability").string();
+    fs::remove_all(sdir);
+    {
+        auto c1 = ResponseCache::create(cfg, sdir);
+        c1->put("strm_a16z", mkRec(500, 200));         // single sparse put, like a stream close
+        auto c2 = ResponseCache::create(cfg, sdir);    // NO dtor on c1 -> only succeeds if put wrote the index
+        auto got = c2->get("strm_a16z");
+        CHECK(got.has_value() && got->response.statusCode == 200,
+              "Fix 1: put persisted to index immediately (survives w/o dtor)");
+    }
+
+    // Filename = id.json directly (no sanitize, no hash) — this layer trusts the upstream-safe id.
+    std::string sdir2 = (fs::path(root) / ".session_filename").string();
+    fs::remove_all(sdir2);
+    fs::path respDir = fs::path(sdir2) / "responses";
+    {
+        auto c = ResponseCache::create(cfg, sdir2);
+        c->put("cleanid123", mkRec(300, 200));
+        CHECK(fs::exists(respDir / "cleanid123.json"), "filename is exactly <id>.json (no hash/sanitize)");
+        CHECK(c->get("cleanid123").has_value(), "round-trips by bare id");
+    }
+    fs::remove_all(sdir); fs::remove_all(sdir2);
+}
+
 // ENV ceiling/floor clamps user; user config is read correctly (RESPONSE_CACHE.md §1.2 + acceptance §10).
 static void test_cache_config_clamp(const std::string& root) {
     std::printf("[cache_config]\n");
@@ -822,6 +857,7 @@ int main() {
     test_request_naming();
     test_filename_migration(root);
     test_response_cache(root);
+    test_cache_durability(root);
     test_cache_config_clamp(root);
     test_app_config_defaults(root);
     test_collection_store(root);

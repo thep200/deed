@@ -91,6 +91,12 @@ void Engine::reloadCacheConfig() {
     impl_->rebuildCache();
 }
 
+void Engine::flushCache() {
+    std::shared_ptr<ResponseCache> c;
+    { std::lock_guard<std::mutex> lk(impl_->cacheMu); c = impl_->cache; }
+    if (c) c->flush();   // persist deferred LRU atime so it survives restart (Fix 2)
+}
+
 CacheConfig Engine::cacheConfig() const {
     // Return BY VALUE under the lock (M4): handing out a reference let a concurrent reloadCacheConfig/
     // rebuildCache mutation tear the struct under a reader.

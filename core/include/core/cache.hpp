@@ -51,6 +51,9 @@ public:
     virtual void remove(const std::string& id) = 0;
     virtual void clear() = 0;
     virtual void setCapBytes(std::uint64_t cap) = 0;   // change cap at runtime -> evict if needed
+    // Persist any deferred metadata (e.g. disk LRU atime). Default no-op (RAM keeps nothing on disk).
+    // Called on shutdown because dtors don't run on macOS app terminate (Fix 2).
+    virtual void flush() {}
     virtual std::uint64_t usedBytes() const = 0;
     virtual const char* name() const = 0;              // "ram" | "disk" | future…
 };
@@ -72,6 +75,7 @@ public:
     void put(const std::string& id, ResponseRecord r);          // write-through + prefer RAM
     void remove(const std::string& id);                         // remove from both tiers
     void clear();
+    void flush();                                               // persist deferred metadata on both tiers (Fix 2)
     void onConfigChanged(const CacheConfig& c);                 // reload cap + threshold -> evict
 
     // Observability (test/diagnostic).

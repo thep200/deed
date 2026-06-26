@@ -542,7 +542,14 @@
     // so closing mid-send doesn't leave a live timer / stuck _sending state.
     [_spinTimer invalidate]; _spinTimer = nil;
     _sending = NO;
+    [self flushCaches];   // Fix 2: persist cache index before the window (and likely the app) goes away
     return YES;
+}
+
+// Persist deferred cache metadata. Called on window close + applicationWillTerminate because C++ dtors
+// (which would otherwise flush) do NOT run on macOS app terminate (Fix 2).
+- (void)flushCaches {
+    if (_engine) _engine->flushCache();
 }
 - (void)windowDidResize:(NSNotification *)note { [self relayout]; }
 - (void)windowDidBecomeKey:(NSNotification *)note { [_titleBar setNeedsDisplay:YES]; }
