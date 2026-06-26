@@ -3,27 +3,16 @@
 /build-*/
 /dist/
 
-# Stress harness artifacts (STRESS_TEST.md)
 /stress-artifacts/
-
-# vcpkg manifest mode (rebuilt from vcpkg.json)
 /vcpkg_installed/
-
-# Local caches (ccache per mise.toml)
-/.cache/
-/.claude/
-
-/docs/
-/assets/
-
-# CMake per-machine (not in VCS)
 CMakeUserPresets.json
 
-# macOS
-.DS_Store
 .env
+.DS_Store
+.mise.toml
 
-third_party/lexilla
-third_party/scintilla
-
+/docs/
 /scripts
+
+/.cache/
+/.claude/

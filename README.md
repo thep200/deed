@@ -1,6 +1,6 @@
 <h1 align="center">Deed</h1>
 
-![Deed main](images/main.png)
+![Deed main](assets/images/main.png)
 
 <h1 align="center">Deed is MacOS native API client</h1>
 

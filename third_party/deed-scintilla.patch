@@ -1,0 +1,93 @@
+diff --color -ruN a/cocoa/PlatCocoa.mm b/cocoa/PlatCocoa.mm
+--- a/cocoa/PlatCocoa.mm	2026-06-26 14:12:30
++++ b/cocoa/PlatCocoa.mm	2026-06-26 14:12:30
+@@ -1980,8 +1980,9 @@
+ 
+ 	table.target = ds;
+ 	table.doubleAction = @selector(doubleClick:);
+-	table.selectionHighlightStyle = NSTableViewSelectionHighlightStyleSourceList;
+-
++	// deed local patch: dropped the deprecated `selectionHighlightStyle = …SourceList` (removed in macOS 12).
++	// On macOS 11+ the explicit `setStyle:` below already governs the look; the old property only applied
++	// pre-11, which we no longer target — so removing it is behaviour-preserving and warning-free.
+ 	if (@available(macOS 11.0, *)) {
+ 		[table setStyle: NSTableViewStylePlain];
+ 	}
+diff --color -ruN a/cocoa/ScintillaCocoa.mm b/cocoa/ScintillaCocoa.mm
+--- a/cocoa/ScintillaCocoa.mm	2026-06-26 14:12:30
++++ b/cocoa/ScintillaCocoa.mm	2026-06-26 14:12:30
+@@ -2648,38 +2648,45 @@
+  */
+ void ScintillaCocoa::UpdateBaseElements() {
+ 	NSView *content = ContentView();
+-	NSAppearance *saved = [NSAppearance currentAppearance];
+-	[NSAppearance setCurrentAppearance:content.effectiveAppearance];
++	// deed local patch: read the system colours with the content's effectiveAppearance as the current
++	// drawing appearance. The deprecated currentAppearance/setCurrentAppearance: save-set-restore (removed
++	// in macOS 12) is replaced by the documented block API performAsCurrentDrawingAppearance: — no
++	// deprecated symbol on any path, so the build stays warning-free.
++	auto updateColours = [this] {
++		bool changed = false;
++		if (@available(macOS 10.14, *)) {
++			NSColorSpace *colorSpace = [NSColorSpace genericRGBColorSpace];
++			NSColor *textBack = [NSColor.textBackgroundColor colorUsingColorSpace: colorSpace];
++			NSColor *noFocusBack = [NSColor.unemphasizedSelectedTextBackgroundColor colorUsingColorSpace: colorSpace];
++			if (vs.selection.layer == Layer::Base) {
++				NSColor *selBack = [NSColor.selectedTextBackgroundColor colorUsingColorSpace: colorSpace];
++				// Additional selection: blend with text background to make weaker version.
++				NSColor *modified = [selBack blendedColorWithFraction:0.5 ofColor:textBack];
++				changed = vs.SetElementBase(Element::SelectionBack, ColourFromNSColor(selBack));
++				changed = vs.SetElementBase(Element::SelectionAdditionalBack, ColourFromNSColor(modified)) || changed;
++				changed = vs.SetElementBase(Element::SelectionInactiveBack, ColourFromNSColor(noFocusBack)) || changed;
++			} else {
++				// Less translucent colour used in dark mode as otherwise less visible
++				const int alpha = textBack.brightnessComponent > 0.5 ? 0x40 : 0x60;
++				// Make a translucent colour that approximates selectedTextBackgroundColor
++				NSColor *accent = [NSColor.controlAccentColor colorUsingColorSpace: colorSpace];
++				const ColourRGBA colourAccent = ColourFromNSColor(accent);
++				changed = vs.SetElementBase(Element::SelectionBack, ColourRGBA(colourAccent, alpha));
++				changed = vs.SetElementBase(Element::SelectionAdditionalBack, ColourRGBA(colourAccent, alpha/2)) || changed;
++				changed = vs.SetElementBase(Element::SelectionInactiveBack, ColourRGBA(ColourFromNSColor(noFocusBack), alpha)) || changed;
+ 
+-	bool changed = false;
+-	if (@available(macOS 10.14, *)) {
+-		NSColorSpace *colorSpace = [NSColorSpace genericRGBColorSpace];
+-		NSColor *textBack = [NSColor.textBackgroundColor colorUsingColorSpace: colorSpace];
+-		NSColor *noFocusBack = [NSColor.unemphasizedSelectedTextBackgroundColor colorUsingColorSpace: colorSpace];
+-		if (vs.selection.layer == Layer::Base) {
+-			NSColor *selBack = [NSColor.selectedTextBackgroundColor colorUsingColorSpace: colorSpace];
+-			// Additional selection: blend with text background to make weaker version.
+-			NSColor *modified = [selBack blendedColorWithFraction:0.5 ofColor:textBack];
+-			changed = vs.SetElementBase(Element::SelectionBack, ColourFromNSColor(selBack));
+-			changed = vs.SetElementBase(Element::SelectionAdditionalBack, ColourFromNSColor(modified)) || changed;
+-			changed = vs.SetElementBase(Element::SelectionInactiveBack, ColourFromNSColor(noFocusBack)) || changed;
+-		} else {
+-			// Less translucent colour used in dark mode as otherwise less visible
+-			const int alpha = textBack.brightnessComponent > 0.5 ? 0x40 : 0x60;
+-			// Make a translucent colour that approximates selectedTextBackgroundColor
+-			NSColor *accent = [NSColor.controlAccentColor colorUsingColorSpace: colorSpace];
+-			const ColourRGBA colourAccent = ColourFromNSColor(accent);
+-			changed = vs.SetElementBase(Element::SelectionBack, ColourRGBA(colourAccent, alpha));
+-			changed = vs.SetElementBase(Element::SelectionAdditionalBack, ColourRGBA(colourAccent, alpha/2)) || changed;
+-			changed = vs.SetElementBase(Element::SelectionInactiveBack, ColourRGBA(ColourFromNSColor(noFocusBack), alpha)) || changed;
+-
++			}
+ 		}
+-	}
+-	if (changed) {
+-		Redraw();
+-	}
++		if (changed) {
++			Redraw();
++		}
++	};
+ 
+-	[NSAppearance setCurrentAppearance:saved];
++	if (@available(macOS 11.0, *)) {
++		[content.effectiveAppearance performAsCurrentDrawingAppearance:^{ updateColours(); }];
++	} else {
++		updateColours();
++	}
+ }
+ 
+ //--------------------------------------------------------------------------------------------------

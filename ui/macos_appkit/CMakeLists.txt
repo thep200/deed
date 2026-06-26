@@ -15,8 +15,8 @@ configure_file(
   ${CMAKE_CURRENT_BINARY_DIR}/generated/app/DeedConfigData.h
   @ONLY)
 
-# App icon: embed logo/deed.icns (transparent background) into Contents/Resources.
-set(DEED_APP_ICON ${CMAKE_SOURCE_DIR}/logo/deed.icns)
+# App icon: embed assets/logo/deed.icns (transparent background) into Contents/Resources.
+set(DEED_APP_ICON ${CMAKE_SOURCE_DIR}/assets/logo/deed.icns)
 set_source_files_properties(${DEED_APP_ICON} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 
 add_executable(deed MACOSX_BUNDLE

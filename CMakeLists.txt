@@ -39,12 +39,6 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(protobuf CONFIG REQUIRED)
 
-# --- Smoke test: verify the toolchain can link (throwaway) ---
-option(BUILD_SMOKE "Build the toolchain smoke-test executable" OFF)
-if(BUILD_SMOKE)
-  add_subdirectory(tools/smoke)
-endif()
-
 # --- Real targets (README §3) ---
 add_subdirectory(core)              # -> static lib "core" (pure C++)
 

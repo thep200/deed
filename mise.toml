@@ -1,8 +1,0 @@
-[tools]
-cmake = "latest"
-ninja = "latest"
-
-[env]
-VCPKG_ROOT = "{{env.HOME}}/vcpkg"
-CMAKE_GENERATOR = "Ninja"
-VCPKG_DEFAULT_TRIPLET = "arm64-osx"
