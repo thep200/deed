@@ -12,11 +12,7 @@
 #include "core/persistence/stores.hpp"
 #include "core/types.hpp"
 
-// Internal key of the base column. UI shows "Local" (SPEC §T4 / Q2) but the key stays
-// "Global" so {{var}} resolution semantics in core are unchanged.
-static NSString *const kBaseEnv = @"Global";
-static NSString *const kBaseLabel = @"Local";
-
+// No special base env any more: every environment is a normal, equal, deletable column (its name == file).
 static NSString *Key(NSString *env, NSString *alias) {
     return [NSString stringWithFormat:@"%@\t%@", env, alias];
 }
@@ -48,7 +44,6 @@ static NSString *Key(NSString *env, NSString *alias) {
     if (_grid) return _grid;
     _grid = [[OS9EnvGrid alloc] initWithFrame:NSMakeRect(0, 0, 700, 360)];
     _grid.delegate = self;
-    _grid.baseDisplayName = kBaseLabel;
     return _grid;
 }
 
@@ -75,9 +70,8 @@ static NSString *Key(NSString *env, NSString *alias) {
     [_removedEnvs removeAllObjects];
     if (!_engine) return;
 
-    [_envNames addObject:kBaseEnv];
     for (const auto &n : _engine->environments().list())
-        if (n != kBaseEnv.UTF8String) [_envNames addObject:[NSString stringWithUTF8String:n.c_str()]];
+        [_envNames addObject:[NSString stringWithUTF8String:n.c_str()]];
 
     NSMutableArray<NSString *> *aliasOrder = [NSMutableArray array];
     for (NSString *env in _envNames) {
@@ -152,7 +146,6 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)envGrid:(OS9EnvGrid *)g renameEnv:(NSString *)oldEnv to:(NSString *)newEnv {
-    if ([oldEnv isEqualToString:kBaseEnv]) return;   // base cannot be renamed
     if ([_envNames containsObject:newEnv]) {
         [self errorDialog:[NSString stringWithFormat:StrFmtEnvExists, newEnv]];
         return;
@@ -184,7 +177,6 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)envGrid:(OS9EnvGrid *)g deleteEnv:(NSString *)env {
-    if ([env isEqualToString:kBaseEnv]) return;
     NSInteger r = [OS9Dialog confirmWithTitle:StrDlgDeleteEnv
                                       message:[NSString stringWithFormat:StrFmtConfirmDeleteEnv, env]
                                       buttons:@[ StrCancel, StrDelete ]
@@ -196,7 +188,7 @@ static NSString *Key(NSString *env, NSString *alias) {
     [_dirtyEnvs removeObject:env];
     [_removedEnvs addObject:env];
     if (_engine && _engine->session().getActiveEnv() == std::string(env.UTF8String))
-        _engine->session().setActiveEnv(kBaseEnv.UTF8String);   // reset to base
+        _engine->session().setActiveEnv("");   // deleted the active env -> none selected
     [self pushToGrid];
 }
 

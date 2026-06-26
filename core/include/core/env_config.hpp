@@ -39,7 +39,7 @@ struct AppConfig {
 struct Session {
   int schemaVersion = 1;
   std::string lastOpenedFile; // relative
-  std::string activeEnv = "Global";
+  std::string activeEnv;   // empty = no env selected (no special base; all envs are equal)
 };
 
 // ---- Collection tree (lazy, metadata only) ----

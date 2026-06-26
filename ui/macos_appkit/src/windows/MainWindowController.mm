@@ -256,7 +256,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _settingButton = [[OS9BevelButton alloc] initWithTitle:@"" target:self action:@selector(settingClicked:)];
     _settingButton.icon = OS9GearImage(16);   // classic gear instead of "Setting" text (centered)
     _settingButton.toolTip = StrTipSettings;
-    _envButton = [[OS9BevelButton alloc] initWithTitle:StrEnvLocal target:self action:@selector(envClicked:)];
+    _envButton = [[OS9BevelButton alloc] initWithTitle:@"ENV" target:self action:@selector(envClicked:)];
     _envButton.dropdown = YES;   // show dropdown arrow like method
     _sendButton = [[OS9BevelButton alloc] initWithTitle:@"" target:self action:@selector(sendRequest:)];
     _sendButton.isDefault = YES;
@@ -381,7 +381,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     if (_treeW < minTree) _treeW = minTree;
     if (_treeW > avail - minReq - minResp) _treeW = avail - minReq - minResp;
     CGFloat remain = avail - _treeW; // for req + resp
-    if (_reqW <= 0) _reqW = remain / 2;
+    if (_reqW <= 0) _reqW = remain / 3;   // default: left (request) pane = half the right (response) pane (1:2)
     if (_reqW < minReq) _reqW = minReq;
     if (_reqW > remain - minResp) _reqW = remain - minResp;
     CGFloat respW = remain - _reqW;

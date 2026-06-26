@@ -321,7 +321,7 @@ static void test_session_store(const std::string& root) {
     std::printf("[session_store]\n");
     {
         SessionStore s(root);
-        CHECK_EQ(s.getActiveEnv(), std::string("Global"), "active env defaults to Global");
+        CHECK_EQ(s.getActiveEnv(), std::string(""), "active env defaults to none (no special base)");
         s.saveLastOpened("folderA/get.json");
         s.setActiveEnv("Dev");
     }

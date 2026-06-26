@@ -368,7 +368,8 @@ json toJson(const Environment& e) {
     for (const auto& k : e.keys) {
         keys.push_back(json{{"key", k.key}, {"value", k.value}, {"enabled", k.enabled ? 1 : 0}});
     }
-    return json{{"schemaVersion", e.schemaVersion}, {"name", e.name}, {"keys", keys}};
+    // No "name" field: the env name is the FILENAME (EnvironmentStore sets it on load). Don't duplicate it.
+    return json{{"schemaVersion", e.schemaVersion}, {"keys", keys}};
 }
 
 Environment envFromJson(const json& j) {
@@ -431,7 +432,7 @@ Session sessionFromJson(const json& j) {
     Session s;
     s.schemaVersion = getInt(j, "schemaVersion", 1);
     s.lastOpenedFile = getStr(j, "lastOpenedFile");
-    s.activeEnv = getStr(j, "activeEnv", "Global");
+    s.activeEnv = getStr(j, "activeEnv", "");   // empty = no env selected (no special base)
     return s;
 }
 

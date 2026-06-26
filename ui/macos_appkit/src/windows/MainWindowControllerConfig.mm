@@ -2,15 +2,9 @@
 
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>   // UTType (NSOpenPanel.allowedContentTypes)
 
-// Base column: internal KEY "Global" (keeps {{var}} resolve semantics) but DISPLAYED as "Local"
-// (SPEC §T4). Mapped both ways at the UI layer.
-static NSString *const kBaseEnvKey = @"Global";
-static NSString *EnvDisplay(NSString *key) {
-    return [key isEqualToString:kBaseEnvKey] ? StrEnvLocal : key;
-}
-static NSString *EnvKeyFromDisplay(NSString *disp) {
-    return [disp isEqualToString:StrEnvLocal] ? kBaseEnvKey : disp;
-}
+// No special base env: the dropdown lists every environment by its own name; the title shows the active
+// env (or "ENV" when none is selected).
+static NSString *const kEnvNone = @"ENV";
 
 @implementation MainWindowController (Config)
 
@@ -18,12 +12,11 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
 
 - (void)envClicked:(id)sender {
     if (!_engine) { [self toastWarn:StrToastOpenFolderFirst]; return; }
-    NSMutableArray<NSString *> *items = [@[ StrEnvLocal ] mutableCopy];   // base displayed as "Local"
-    for (const auto &name : _engine->environments().list())
-        if (name != kBaseEnvKey.UTF8String) [items addObject:N(name)];
+    NSMutableArray<NSString *> *items = [NSMutableArray array];
+    for (const auto &name : _engine->environments().list()) [items addObject:N(name)];
     [items addObject:StrEnvManage];
-    NSString *activeDisp = EnvDisplay(N(_engine->session().getActiveEnv()));
-    NSInteger sel = [items indexOfObject:activeDisp]; if (sel == NSNotFound) sel = 0;
+    NSString *active = N(_engine->session().getActiveEnv());
+    NSInteger sel = [items indexOfObject:active]; if (sel == NSNotFound) sel = 0;
     __weak MainWindowController *ws = self;
     OS9ShowDropdown(items, sel, _envButton, ^(NSInteger idx) {
         MainWindowController *s = ws; if (!s) return;
@@ -33,12 +26,13 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
 }
 - (void)pickEnvNamed:(NSString *)name {
     if (!_engine) return;
-    _engine->session().setActiveEnv(EnvKeyFromDisplay(name).UTF8String);   // "Local" -> key "Global"
+    _engine->session().setActiveEnv(name.UTF8String);
     [self refreshEnvButton];
     [self toast:[NSString stringWithFormat:StrFmtToastEnv, name]];
 }
 - (void)refreshEnvButton {
-    _envButton.title = _engine ? EnvDisplay(N(_engine->session().getActiveEnv())) : StrEnvLocal;
+    NSString *active = _engine ? N(_engine->session().getActiveEnv()) : @"";
+    _envButton.title = active.length ? active : kEnvNone;
 }
 
 #pragma mark Config screen (ENV + Setting)

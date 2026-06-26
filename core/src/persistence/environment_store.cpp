@@ -46,7 +46,7 @@ Environment EnvironmentStore::load(const std::string& name) const {
     if (!fsutil::readFile(envFile(root_, name), txt))
         throw std::runtime_error("env not found: " + name);
     Environment e = codec::envFromJson(codec::parseGuarded(txt));
-    if (e.name.empty()) e.name = name;
+    e.name = name;   // the env name IS the filename (authoritative) — ignore any stale "name" inside the JSON
     return e;
 }
 

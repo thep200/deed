@@ -311,8 +311,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     [_body setNeedsDisplayInRect:NSMakeRect(0, row * kRowH, _body.bounds.size.width, kRowH)];
 }
 
-- (NSString *)displayForEnv:(NSInteger)e {   // e = 0-based index into _envNames
-    if (e == 0) return _baseDisplayName ?: StrEnvLocal;
+- (NSString *)displayForEnv:(NSInteger)e {   // e = 0-based index into _envNames (every env is its own name)
     return _envNames[e];
 }
 
@@ -356,7 +355,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         NSRect r = [self envRectAtIndex:e height:kHeaderH];
         r.origin.x += dx;
         [self drawVDivAt:NSMaxX(r) height:kHeaderH];
-        BOOL showX = (e != 0 && e == _hoverEnvCol);   // × shows only when hovering that column (like alias)
+        BOOL showX = (e == _hoverEnvCol);   // × shows when hovering any column (all envs deletable)
         NSRect txt = r;
         if (showX) txt.size.width -= (kGlyph + 6);     // leave room for × on hover
         DrawCellText([self displayForEnv:e], txt, fg);
@@ -458,8 +457,8 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         NSRect r = [self envRectAtIndex:e height:kHeaderH];
         if (p.x < NSMinX(r) || p.x >= NSMaxX(r)) continue;
         h.col = e;
-        if (e != 0 && NSPointInRect(p, [self closeBoxInRect:r])) { h.zone = EnvZoneDeleteEnv; return h; }
-        if (e != 0) h.zone = EnvZoneHeaderName;   // base column not renamable
+        if (NSPointInRect(p, [self closeBoxInRect:r])) { h.zone = EnvZoneDeleteEnv; return h; }
+        h.zone = EnvZoneHeaderName;   // every column is deletable + renamable
         break;
     }
     return h;
@@ -519,9 +518,9 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     CGFloat cx = raw.x + [self scrollX];
     if ([self resizeTargetForContentX:cx] != -1) [[NSCursor resizeLeftRightCursor] set];
     else [[NSCursor arrowCursor] set];
-    // hovered env column -> show × (skip base column index 0).
+    // hovered env column -> show × (every column is deletable).
     NSInteger hov = -1;
-    for (NSInteger en = 1; en < (NSInteger)_envNames.count; en++) {
+    for (NSInteger en = 0; en < (NSInteger)_envNames.count; en++) {
         NSRect r = [self envRectAtIndex:en height:kHeaderH];
         if (cx >= NSMinX(r) && cx < NSMaxX(r)) { hov = en; break; }
     }
@@ -606,9 +605,8 @@ static NSString *Trim(NSString *s) {
     if (nn && t.length && ![t isEqualToString:old]) [self.delegate envGrid:self renameAlias:old to:t];
 }
 
-// --- Rename env (block empty + duplicate + must not match base label) ---
+// --- Rename env (block empty + duplicate) — any column is renamable ---
 - (void)promptRenameEnvAtCol:(NSInteger)col {
-    if (col == 0) return;   // base column is not renamable
     NSString *old = _envNames[col];
     NSString *nn = [self promptTitle:StrDlgRenameEnv default:old
                             validate:[self envNameValidatorExcluding:old]];
@@ -637,16 +635,12 @@ static NSString *Trim(NSString *s) {
     if (nn && t.length) [self.delegate envGrid:self addAliasNamed:t];
 }
 
-// Shared env-name validator for add/rename: non-empty, no duplicate of another env,
-// no clash with base KEY ("Global") or base LABEL ("Local").
+// Shared env-name validator for add/rename: non-empty + no duplicate of another env (no reserved names).
 - (NSString * (^)(NSString *))envNameValidatorExcluding:(NSString *)exclude {
     __weak OS9EnvGrid *ws = self;
     return ^NSString *(NSString *s) {
         NSString *t = Trim(s);
         if (!t.length) return StrValNameEmpty;
-        if ([t caseInsensitiveCompare:(ws.baseDisplayName ?: StrEnvLocal)] == NSOrderedSame ||
-            [t caseInsensitiveCompare:@"Global"] == NSOrderedSame)
-            return StrValReservedBase;
         for (NSString *n in ws.envNames)
             if (![n isEqualToString:exclude] && [n isEqualToString:t]) return StrValEnvExists;
         return nil;

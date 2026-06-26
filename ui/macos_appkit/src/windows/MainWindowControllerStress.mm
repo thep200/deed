@@ -78,9 +78,10 @@ static void StressCollectRels(const core::TreeNode &n, NSMutableArray<NSString *
 
 - (void)stressPickRandomEnv:(uint32_t)r {
     if (!_engine) return;
-    NSMutableArray<NSString *> *envs = [@[ @"Global" ] mutableCopy];
-    try { for (const auto &n : _engine->environments().list()) if (n != "Global") [envs addObject:N(n)]; }
+    NSMutableArray<NSString *> *envs = [NSMutableArray array];
+    try { for (const auto &n : _engine->environments().list()) [envs addObject:N(n)]; }
     catch (...) {}
+    if (!envs.count) return;   // no envs -> nothing to switch to
     [self pickEnvNamed:envs[r % envs.count]];
 }
 

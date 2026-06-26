@@ -78,7 +78,7 @@ NSString *const StrTabRequest = @"Request";
 NSString *const StrTabCookie = @"Cookie";
 NSString *const StrTabMessage = @"Message";
 NSString *const StrTabGqlQuery = @"Query";
-NSString *const StrTabVariables = @"Variables";
+NSString *const StrTabVariables = @"Vars";
 NSString *const StrTabMetadata = @"Metadata";
 NSString *const StrTabConfig = @"Config";
 

@@ -78,8 +78,7 @@ std::shared_ptr<const std::map<std::string, std::string>> Engine::activeVarsSnap
                 if (k.enabled) (*vars)[k.key] = k.value;
         } catch (...) { /* env does not exist -> skip */ }
     };
-    merge("Global");                         // base
-    if (!active.empty() && active != "Global") merge(active); // override
+    if (!active.empty()) merge(active);      // no special base env: vars come only from the active env
     std::shared_ptr<const std::map<std::string, std::string>> snap = vars;
     {
         std::lock_guard<std::mutex> lk(impl_->varsMu);
@@ -111,8 +110,7 @@ std::vector<std::pair<std::string, std::string>> Engine::activeVarsOrdered() con
             }
         } catch (...) { /* env does not exist -> skip */ }
     };
-    merge("Global");                         // base
-    if (!active.empty() && active != "Global") merge(active); // override
+    if (!active.empty()) merge(active);      // no special base env: vars come only from the active env
     return vars;
 }
 
