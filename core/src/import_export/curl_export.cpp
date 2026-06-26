@@ -78,12 +78,12 @@ std::string curlHttp(const HttpRequest& h) {
     else if (b.mode == "text") cmd += " \\\n  --data " + shq(b.text);
     else if (b.mode == "xml") cmd += ct("application/xml") + " \\\n  --data " + shq(b.xml);
     else if (b.mode == "graphql") cmd += ct("application/json") + " \\\n  --data " + shq(b.graphqlQuery);
-    else if (b.mode == "form-urlencoded")
+    else if (b.mode == "form-urlencoded") {
         for (const auto& kv : b.formUrlEncoded) if (kv.enabled) cmd += " \\\n  --data-urlencode " + shq(kv.key + "=" + kv.value);
-    else if (b.mode == "multipart")
+    } else if (b.mode == "multipart") {
         for (const auto& p : b.multipart) if (p.enabled)
             cmd += " \\\n  -F " + shq(p.key + "=" + (p.type == "file" ? "@" + p.filePath : p.value));
-    else if (b.mode == "binary") cmd += " \\\n  --data-binary " + shq("@" + b.binaryFilePath);
+    } else if (b.mode == "binary") cmd += " \\\n  --data-binary " + shq("@" + b.binaryFilePath);
 
     return cmd;
 }

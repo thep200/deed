@@ -29,6 +29,6 @@ typedef NS_ENUM(NSInteger, OS9AlertIcon) {
                            placeholder:(nullable NSString *)placeholder
                               okButton:(nonnull NSString *)ok
                           cancelButton:(nonnull NSString *)cancel
-                              validate:(nullable NSString *(^)(NSString *_Nonnull input))validate
+                              validate:(NSString *_Nullable (^_Nullable)(NSString *_Nonnull input))validate
                                 parent:(nullable NSWindow *)parent;
 @end

@@ -181,7 +181,8 @@ extern NSString *const StrGrpcTagClientStream;   // [S <-C]
 extern NSString *const StrGrpcTagBidiStream;     // [S<->C]
 
 // --- gRPC streaming: status line (fields separated by '|') ---
-extern NSString *const StrFmtStreamReceived;     // "Received %llu events"
+extern NSString *const StrFmtReqElapsed;         // live elapsed only (unary in-flight)
+extern NSString *const StrFmtStreamLive;         // live elapsed | size | events (streaming in-flight)
 extern NSString *const StrFmtStreamOk;           // "OK%@ | %@ | %llu events | %lldms"  (trunc | size | events | ms)
 extern NSString *const StrStreamTruncated;       // " (truncated)"
 extern NSString *const StrFmtStreamCancelled;    // "%@ | %@ | %llu events"  (Cancelled | size | events)

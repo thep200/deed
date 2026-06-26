@@ -79,6 +79,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     core::StreamHandle _streamHandle;      // handle to cancel the active stream
     core::SessionHandle _wsSession;        // active WebSocket session (SPEC_websocket §4); channel = send side
     uint64_t _streamEvents;                // events received so far (status line)
+    int64_t  _streamBytes;                 // running response size (bytes) received so far — live size counter
     uint64_t _streamToken;                 // C2: identity of the current stream; bumped on each open, stale callbacks drop
     std::vector<core::GrpcMethodInfo> _grpcMethods; // parallel to _servicePopup items (ONLY the current request's)
     uint64_t _grpcMethodsReqSeq;  // race guard: apply only the latest listGrpcMethods result
@@ -160,6 +161,8 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     BOOL _sending;
     NSTimer *_spinTimer;   // animate loading icon in the Send button
     CGFloat _spinPhase;
+    NSTimer *_liveTimer;          // live status ticker while a request is in flight (elapsed + size)
+    NSTimeInterval _reqStartTime; // monotonic start (systemUptime) of the in-flight request
     NSUInteger _urlPrevLen; // previous URL length -> detect "paste" (sudden jump)
     NSTextView *_fieldEditor; // shared field editor, all auto-features disabled
     NSString *_bodyMode;    // current body mode: json | binary(file) | form-urlencoded(form)
@@ -278,6 +281,10 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)finishSending;
 - (void)startSendSpinner;
 - (void)stopSendSpinner;
+- (void)beginRequestTiming;   // reset live counters + start the live status ticker (elapsed/size)
+- (void)stopLiveTimer;
+- (void)liveTick;
+- (NSString *)humanSize:(int64_t)bytes;   // "1.2kb" / "345b"
 - (void)rebuildResponseBuffers;
 - (void)rebuildResponseBuffersAsync;   // U2: format response off the main thread
 - (NSArray<NSString *> *)computeResponseBuffersFor:(const core::ApiResponse &)r

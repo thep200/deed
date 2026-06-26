@@ -35,6 +35,7 @@
         _streaming = NO;
         _currentHandle = _engine->send(_model, _bridge);
     }
+    [self beginRequestTiming];   // live elapsed (+ size while streaming) on the status line
 }
 
 - (void)cancelClicked:(id)sender {
@@ -64,6 +65,7 @@
     [self updateStatus:@""];
     _bridge->setStreamToken(++_streamToken);   // C2: stamp this session
     _wsSession = _engine->openSession(_model, _bridge);
+    [self beginRequestTiming];   // live elapsed + size on the status line
 }
 
 - (void)onCoreResponse:(uint64_t)handle response:(const core::ApiResponse &)resp {
@@ -97,20 +99,21 @@
     if (token != _streamToken) return;   // C2: a stale stream's open -> ignore
     _hasResp = NO;
     _streamEvents = 0;
+    _streamBytes = 0;   // reset live size counter for this stream
     // Show the streaming text in the body tab (tab 0) and select it.
     _activeRespTab = 0;
     [self highlightActiveTab:_respTabButtons active:0];
     [_respText beginStreaming];   // seeds "[\n]" -> the response is a valid JSON array from the start
-    _statusLabel.stringValue = [NSString stringWithFormat:StrFmtStreamReceived, 0ULL];
-    _statusLabel.textColor = [NSColor blackColor];
+    [self liveTick];              // paint the live status (elapsed | size | events) immediately
 }
 
-// Coalesced append (already comma-joined per Appendix A). Update the live counter.
+// Coalesced append (already comma-joined "ev_N" members per Appendix A). Update the live counters;
+// the live timer (liveTick) renders the status line so frequent chunks don't each touch the label (perf).
 - (void)onStreamChunk:(NSString *)chunk events:(uint64_t)totalEvents token:(uint64_t)token {
     if (token != _streamToken || !_streaming || !chunk.length) return;   // C2: drop a prior stream's chunk
     [_respText insertStreamChunk:chunk];   // inserted before the trailing "]" -> stays valid live (doc is the array, H3)
     _streamEvents = totalEvents;
-    _statusLabel.stringValue = [NSString stringWithFormat:StrFmtStreamReceived, (unsigned long long)totalEvents];
+    _streamBytes += (int64_t)[chunk lengthOfBytesUsingEncoding:NSUTF8StringEncoding];   // running size (live)
 }
 
 // ']' + finalize status; swap the live text for the normal formatted buffers; cache the array (§8).
@@ -127,6 +130,13 @@
     _wsSession = core::SessionHandle{};   // release the WS channel/session (no-op for gRPC streams)
     [self finishSending];
 
+    // SSE (an HTTP stream) is open-ended: pressing Cancel/Stop is the NORMAL way to end it, not a failure.
+    // Report it as Ok so the live status matches the cached restore (which reopens as Ok) — the status no
+    // longer flips Cancelled->OK on re-view. gRPC/WebSocket cancel still reports Cancelled.
+    core::StreamStatus effStatus = (_model.type == core::RequestType::Http &&
+                                    status == core::StreamStatus::Cancelled)
+                                       ? core::StreamStatus::Ok : status;
+
     // Build a neutral ApiResponse from the assembled array so the normal tab/cache pipeline takes over.
     core::ApiResponse resp;
     resp.statusCode = 0;
@@ -136,7 +146,7 @@
     resp.sizeBytes = (std::int64_t)resp.body.size();
     resp.wasStreamed = true;
     resp.eventCount = events;
-    resp.partial = (status != core::StreamStatus::Ok);
+    resp.partial = (effStatus != core::StreamStatus::Ok);
 
     _lastResp = resp;
     _hasResp = YES;
@@ -145,20 +155,19 @@
     // Status line, fields separated by '|'. Size is shown for Ok AND Cancelled — so a stream stopped
     // mid-way still reports how much was received.
     int64_t sz = (int64_t)resp.body.size();
-    NSString *sizeStr = (sz >= 1024) ? [NSString stringWithFormat:@"%.1fkb", sz / 1024.0]
-                                     : [NSString stringWithFormat:@"%lldb", (long long)sz];
+    NSString *sizeStr = [self humanSize:sz];
     NSString *line;
     NSColor *color;
     NSString *trunc = truncated ? StrStreamTruncated : @"";
-    if (status == core::StreamStatus::Ok) {
+    if (effStatus == core::StreamStatus::Ok) {
         line = [NSString stringWithFormat:StrFmtStreamOk, trunc, sizeStr, (unsigned long long)events, elapsedMs];
         color = [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1.0];
-    } else if (status == core::StreamStatus::Cancelled) {
+    } else if (effStatus == core::StreamStatus::Cancelled) {
         line = [NSString stringWithFormat:StrFmtStreamCancelled, StrStatusCancelled, sizeStr,
                                           (unsigned long long)events];
         color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
     } else {
-        NSString *kind = (status == core::StreamStatus::Timeout) ? StrStreamKindTimeout : StrStreamKindError;
+        NSString *kind = (effStatus == core::StreamStatus::Timeout) ? StrStreamKindTimeout : StrStreamKindError;
         line = [NSString stringWithFormat:StrFmtStreamError, kind, code, message ?: @""];
         color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
         if (_model.type == core::RequestType::Grpc) _grpcMethodsFetched = NO;   // re-fetch RPCs next open
@@ -166,8 +175,9 @@
     _statusLabel.stringValue = line;
     _statusLabel.textColor = color;
 
-    // Stream responses (gRPC stream / WS / SSE) are NOT cached — they are live, open-ended and can be
-    // huge; persisting them would bloat the cache (and a partial/cancelled capture is rarely useful).
+    // Cache the assembled stream (the captured array) keyed by request id, exactly like a unary
+    // response — so re-opening the request restores what was received (incl. partial/cancelled).
+    [self cacheResponseAsync:resp forId:_currentId];
 }
 
 // Display the error state in the response pane (shared by new errors and cached errors).
@@ -211,6 +221,7 @@
 
 - (void)finishSending {
     _sending = NO;
+    [self stopLiveTimer];   // freeze the live ticker; the final status line is set by the caller next
     [self stopSendSpinner];
     _sendButton.enabledState = _hasRequest;
     _sendButton.icon = OS9SendImage(16);   // restore the send icon
@@ -232,6 +243,44 @@
     }];
 }
 - (void)stopSendSpinner { [_spinTimer invalidate]; _spinTimer = nil; }
+
+#pragma mark Live request timing (elapsed + size)
+
+// Reset live counters + start the status ticker. Cheap: ONE repeating timer (~20Hz) that recomputes the
+// line from a monotonic start mark + running counters — chunks don't write the label themselves (perf).
+- (void)beginRequestTiming {
+    _reqStartTime = NSProcessInfo.processInfo.systemUptime;   // monotonic (immune to wall-clock changes)
+    _streamBytes = 0;
+    _streamEvents = 0;
+    [self stopLiveTimer];
+    __weak MainWindowController *ws = self;
+    _liveTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *t) {
+        MainWindowController *s = ws; if (!s) { [t invalidate]; return; }
+        [s liveTick];
+    }];
+    _liveTimer.tolerance = 0.02;   // let the runloop coalesce wakeups (perf)
+    [self liveTick];               // paint frame 0 now (don't wait for the first interval)
+}
+
+- (void)stopLiveTimer { [_liveTimer invalidate]; _liveTimer = nil; }
+
+// One live status frame: elapsed ms always; for streams also the running size + event count.
+- (void)liveTick {
+    if (!_sending) return;   // defensive: never paint after the request settled
+    long ms = (long)((NSProcessInfo.processInfo.systemUptime - _reqStartTime) * 1000.0);
+    if (ms < 0) ms = 0;
+    if (_streaming)
+        _statusLabel.stringValue = [NSString stringWithFormat:StrFmtStreamLive, ms,
+                                    [self humanSize:_streamBytes], (unsigned long long)_streamEvents];
+    else
+        _statusLabel.stringValue = [NSString stringWithFormat:StrFmtReqElapsed, ms];
+    _statusLabel.textColor = [NSColor blackColor];
+}
+
+- (NSString *)humanSize:(int64_t)bytes {
+    return (bytes >= 1024) ? [NSString stringWithFormat:@"%.1fkb", bytes / 1024.0]
+                           : [NSString stringWithFormat:@"%lldb", (long long)bytes];
+}
 
 // Compute the display buffers (format JSON body/headers/cookie) — the HEAVY part, does NOT touch UI ->
 // callable from a background thread. Depends only on params (r/type/prettyMode), reads no ivars.
@@ -313,8 +362,7 @@
 // status | size | time | start - end. endMs = time response received; start = end - elapsed.
 - (void)updateStatusFromResponse:(const core::ApiResponse &)r error:(BOOL)isErr endMs:(int64_t)endMs {
     NSString *code = r.statusCode ? [NSString stringWithFormat:@"%d", r.statusCode] : StrOK;
-    NSString *size = (r.sizeBytes >= 1024) ? [NSString stringWithFormat:@"%.1fkb", r.sizeBytes / 1024.0]
-                                           : [NSString stringWithFormat:@"%lldb", (long long)r.sizeBytes];
+    NSString *size = [self humanSize:(int64_t)r.sizeBytes];
     int64_t startMs = (endMs > 0) ? endMs - (int64_t)r.elapsedMs : 0;   // derive the start mark
     NSString *range = [NSString stringWithFormat:@"%@ - %@",
                        [self clockFromEpochMs:startMs], [self clockFromEpochMs:endMs]];

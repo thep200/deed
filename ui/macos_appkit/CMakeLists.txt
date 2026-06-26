@@ -69,7 +69,7 @@ target_include_directories(deed PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
-target_link_libraries(deed PRIVATE core scintilla "-framework Cocoa" "-framework QuartzCore")
+target_link_libraries(deed PRIVATE core scintilla "-framework Cocoa" "-framework QuartzCore" "-framework UniformTypeIdentifiers")
 
 # ARC for Objective-C++ (manages retain/release + __weak in CoreBridge).
 target_compile_options(deed PRIVATE -fobjc-arc -fobjc-weak)

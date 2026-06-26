@@ -1,5 +1,7 @@
 #import "windows/MainWindowControllerPrivate.h"
 
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>   // UTType (NSOpenPanel.allowedContentTypes)
+
 // Base column: internal KEY "Global" (keeps {{var}} resolve semantics) but DISPLAYED as "Local"
 // (SPEC §T4). Mapped both ways at the UI layer.
 static NSString *const kBaseEnvKey = @"Global";
@@ -114,7 +116,8 @@ static NSString *EnvKeyFromDisplay(NSString *disp) {
     if (_model.type != core::RequestType::Grpc) return;
     if (_protoPopup.selectedIndex == 1) {
         NSOpenPanel *p = [NSOpenPanel openPanel];
-        p.allowedFileTypes = @[ @"proto" ];
+        UTType *protoType = [UTType typeWithFilenameExtension:@"proto"];   // .proto descriptor files
+        if (protoType) p.allowedContentTypes = @[ protoType ];
         if ([p runModal] == NSModalResponseOK) {
             core::ProtoSource ps;
             ps.mode = "protoFiles";

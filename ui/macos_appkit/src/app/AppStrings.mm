@@ -164,7 +164,8 @@ NSString *const StrGrpcTagServerStream = @"[S-> C]";
 NSString *const StrGrpcTagClientStream = @"[S <-C]";
 NSString *const StrGrpcTagBidiStream = @"[S<->C]";
 
-NSString *const StrFmtStreamReceived = @"Received %llu events";
+NSString *const StrFmtReqElapsed = @"%ldms";                       // live: elapsed only (unary in-flight)
+NSString *const StrFmtStreamLive = @"%ldms | %@ | %llu events";    // live: elapsed | size | events (streaming)
 NSString *const StrFmtStreamOk = @"OK%@ | %@ | %llu events | %lldms";   // trunc | size | events | ms
 NSString *const StrStreamTruncated = @" (truncated)";
 NSString *const StrFmtStreamCancelled = @"%@ | %@ | %llu events";       // Cancelled | size | events
