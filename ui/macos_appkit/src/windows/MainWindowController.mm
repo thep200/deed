@@ -469,12 +469,15 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
 }
 
 - (void)layoutConfig {
+    DeedConfig *cfg = [DeedConfig shared];
     CGFloat W = _configPane.bounds.size.width, H = _configPane.bounds.size.height;
-    CGFloat pad = 12;
-    _backButton.frame = NSMakeRect(pad, pad, 90, 24);                 // ← Back (top-left); title in the title bar
+    CGFloat pad = [cfg floatFor:@"PADDING" def:8];
+    CGFloat side = [OS9TitleBar iconSideInset];   // align L/R margins with the title-bar close/hide icons
+    CGFloat btnH = [cfg floatFor:@"BUTTON_HEIGHT" def:22];
+    _backButton.frame = NSMakeRect(side, pad, 90, btnH);             // ← Back (top-left); title in the title bar
 
-    CGFloat top = pad + 34;
-    NSRect body = NSMakeRect(pad, top, W - 2 * pad, H - top - pad);
+    CGFloat top = pad + btnH + pad;
+    NSRect body = NSMakeRect(side, top, W - 2 * side, H - top - pad);
     if (_configKind == 0) {                                          // Environments
         if (_envVC.view) { _envVC.view.frame = body; [_envVC layout]; }
     } else {                                                         // Settings

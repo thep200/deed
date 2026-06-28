@@ -1,6 +1,8 @@
 #include "sending/grpc_sender.hpp"
 
 #include <chrono>
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -148,6 +150,305 @@ bool serializeMessages(const std::vector<std::string>& jsons, const gp::Descript
     return true;
 }
 
+// Load descriptors + find the requested method. Returns nullptr and sets `err` on any failure.
+const gp::MethodDescriptor* resolveMethod(const GrpcRequest& g, DescriptorContext& ctx, std::string& err) {
+    if (!grpcdesc::buildDescriptors(g, ctx)) { err = ctx.error; return nullptr; }
+    const gp::ServiceDescriptor* svc = ctx.activePool->FindServiceByName(g.service);
+    if (!svc) { err = "service not found: " + g.service; return nullptr; }
+    const gp::MethodDescriptor* mth = svc->FindMethodByName(g.method);
+    if (!mth) { err = "method not found: " + g.method; return nullptr; }
+    return mth;
+}
+
+// Apply the per-call deadline (Config timeout, default 30s) + request metadata to a fresh ClientContext.
+void applyCallContext(grpc::ClientContext& ctx, const GrpcRequest& g) {
+    int deadlineMs = g.settings.deadlineMs > 0 ? g.settings.deadlineMs : 30000;
+    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadlineMs));
+    for (const auto& md : g.metadata)
+        if (md.enabled && !md.key.empty()) ctx.AddMetadata(md.key, md.value);
+}
+
+// protobuf Message -> pretty JSON (unary/client-stream responses). false + err on failure.
+bool messageToPrettyJson(const gp::Message& msg, std::string& out, std::string& err) {
+    gp::util::JsonPrintOptions jopts;
+    jopts.add_whitespace = true;
+    jopts.always_print_fields_with_no_presence = true;
+    auto st = gp::util::MessageToJsonString(msg, &out, jopts);
+    if (!st.ok()) { err = "failed to convert response to JSON: " + std::string(st.message()); return false; }
+    return true;
+}
+
+// Parse unary response bytes into a fresh output message and convert to pretty JSON. false + err on failure.
+bool decodeUnaryResponse(gp::DynamicMessageFactory& factory, const gp::MethodDescriptor* mth,
+                         const grpc::ByteBuffer& respBuffer, std::string& jsonOut, std::string& err) {
+    std::unique_ptr<gp::Message> respMsg(factory.GetPrototype(mth->output_type())->New());
+    if (!respMsg->ParseFromString(byteBufferToString(respBuffer))) {
+        err = "failed to parse protobuf response";
+        return false;
+    }
+    return messageToPrettyJson(*respMsg, jsonOut, err);
+}
+
+// Deliver a successful unary/client-stream result (gRPC OK, JSON body) to the delegate.
+void deliverUnaryOk(IUiDelegate& delegate, RequestHandle handle, const RequestModel& model,
+                    const std::string& jsonOut, long elapsedMs) {
+    ApiResponse resp;
+    resp.statusCode = 0;   // gRPC OK
+    resp.statusText = "OK";
+    resp.body = jsonOut;
+    resp.elapsedMs = elapsedMs;
+    resp.sizeBytes = static_cast<std::int64_t>(jsonOut.size());
+    resp.resolvedRequestDump = codec::dumpRequest(model);
+    delegate.onResponse(handle, resp);
+}
+
+// JSON request -> serialized protobuf wire bytes for the method's input type. false + err on failure.
+bool buildRequestBytes(gp::DynamicMessageFactory& factory, const gp::MethodDescriptor* mth,
+                       const std::string& messageJson, std::string& outBytes, std::string& err) {
+    std::unique_ptr<gp::Message> reqMsg(factory.GetPrototype(mth->input_type())->New());
+    gp::util::JsonParseOptions popts;
+    popts.ignore_unknown_fields = true;
+    auto st = gp::util::JsonStringToMessage(messageJson.empty() ? "{}" : messageJson, reqMsg.get(), popts);
+    if (!st.ok()) {
+        err = "invalid JSON message for " + std::string(mth->input_type()->full_name()) + ": " +
+              std::string(st.message());
+        return false;
+    }
+    if (!reqMsg->SerializeToString(&outBytes)) { err = "failed to serialize protobuf request"; return false; }
+    return true;
+}
+
+// Drive the CQ for a unary call until the single Finish event arrives (or CQ shutdown); cancel -> TryCancel.
+// Shuts the CQ down and drains it before returning.
+void awaitUnaryFinish(grpc::CompletionQueue& cq, grpc::ClientContext& ctx,
+                      const std::shared_ptr<CancelToken>& cancel) {
+    bool done = false;
+    while (!done) {
+        void* tag = nullptr;
+        bool ok = false;
+        auto deadline = std::chrono::system_clock::now() + std::chrono::milliseconds(100);
+        auto next = cq.AsyncNext(&tag, &ok, deadline);
+        if (next == grpc::CompletionQueue::GOT_EVENT) done = true;
+        else if (next == grpc::CompletionQueue::SHUTDOWN) break;
+        else if (cancel && cancel->isCancelled()) ctx.TryCancel();   // TIMEOUT
+    }
+    cq.Shutdown();
+    { void* t; bool o; while (cq.Next(&t, &o)) {} }   // drain
+}
+
+// The async machinery for one generic streaming call (bundled to keep helper signatures small).
+struct GrpcCall {
+    GenericRW& rw;
+    grpc::CompletionQueue& cq;
+    grpc::ClientContext& ctx;
+    const std::shared_ptr<CancelToken>& cancel;
+};
+
+using EmitFn = std::function<bool(const grpc::ByteBuffer&)>;
+
+// Client-streaming wire dance: StartCall, Write each message, WritesDone, Read ONE response, Finish.
+// Fills respBuf/gotResp/status; shuts down + drains the CQ.
+void runClientStreamCall(GrpcCall& call, const std::vector<std::string>& wire,
+                         grpc::ByteBuffer& respBuf, bool& gotResp, grpc::Status& status) {
+    void* tag = reinterpret_cast<void*>(1);
+    call.rw.StartCall(tag);
+    bool failed = (pumpCq(call.cq, call.cancel, call.ctx) != 1);
+    for (size_t i = 0; !failed && i < wire.size(); ++i) {
+        if (call.cancel && call.cancel->cancelled()) break;
+        grpc::Slice sl(wire[i]);
+        grpc::ByteBuffer buf(&sl, 1);
+        call.rw.Write(buf, tag);
+        if (pumpCq(call.cq, call.cancel, call.ctx) != 1) { failed = true; break; }
+    }
+    if (!failed) { call.rw.WritesDone(tag); pumpCq(call.cq, call.cancel, call.ctx); }
+    gotResp = false;
+    if (!failed) { call.rw.Read(&respBuf, tag); gotResp = (pumpCq(call.cq, call.cancel, call.ctx) == 1); }
+    call.rw.Finish(&status, tag);
+    pumpCq(call.cq, call.cancel, call.ctx);
+    call.cq.Shutdown();
+    { void* t; bool o; while (call.cq.Next(&t, &o)) {} }   // drain
+}
+
+// Server-streaming read loop: write the single request, half-close, then read until the server closes
+// (or a ceiling is hit — `emit` returns false). Drives the CQ via pumpCq; cancel -> TryCancel.
+void runServerStreamReads(GrpcCall& call, const std::string& reqWire, const EmitFn& emit) {
+    void* kTag = reinterpret_cast<void*>(1);
+    grpc::Slice sl(reqWire);
+    grpc::ByteBuffer reqBuffer(&sl, 1);
+    call.rw.Write(reqBuffer, kTag);
+    if (pumpCq(call.cq, call.cancel, call.ctx) != 1) return;
+    call.rw.WritesDone(kTag);
+    if (pumpCq(call.cq, call.cancel, call.ctx) != 1) return;
+    while (true) {
+        if (call.cancel && call.cancel->cancelled()) { call.ctx.TryCancel(); break; }
+        grpc::ByteBuffer msg;
+        call.rw.Read(&msg, kTag);
+        if (pumpCq(call.cq, call.cancel, call.ctx) != 1) break;   // !ok -> server closed (or CQ shutdown)
+        if (!emit(msg)) break;
+    }
+}
+
+// --- Bidi dispatch state + per-tag handlers (extracted so the loop stays flat). ---
+// Three distinct tags so write/read/writes-done completions never alias each other (M9).
+void* bidiTag(int n) { return reinterpret_cast<void*>(static_cast<std::intptr_t>(n)); }
+
+struct BidiPump {
+    GenericRW& rw;
+    const std::vector<std::string>& wire;
+    grpc::ByteBuffer writeBuf;
+    grpc::ByteBuffer readBuf;
+    size_t widx = 0;
+    enum WState { WRITING, WDONE_PENDING, WDONE_DONE };
+    WState wstate = WRITING; // M9: never read uninitialized
+    bool reading = true;
+};
+
+void bidiStartWrite(BidiPump& p, size_t idx) {
+    grpc::Slice sl(p.wire[idx]);
+    p.writeBuf = grpc::ByteBuffer(&sl, 1);
+    p.rw.Write(p.writeBuf, bidiTag(1));
+}
+
+// A write completed: advance to the next message, or half-close when the last one is out.
+void bidiOnWrite(BidiPump& p, bool ok) {
+    if (!ok) { p.wstate = BidiPump::WDONE_DONE; return; }     // write side broke -> stop writing
+    if (++p.widx < p.wire.size()) { bidiStartWrite(p, p.widx); return; }
+    p.rw.WritesDone(bidiTag(3));
+    p.wstate = BidiPump::WDONE_PENDING;
+}
+
+// A read completed: emit it and queue the next read, or stop reading on end/cancel/ceiling.
+void bidiOnRead(BidiPump& p, bool ok, GrpcCall& call, const EmitFn& emit) {
+    if (!ok) { p.reading = false; return; }                  // server finished its side
+    if (call.cancel && call.cancel->cancelled()) { call.ctx.TryCancel(); p.reading = false; return; }
+    if (!emit(p.readBuf)) { p.reading = false; return; }     // ceiling hit (TryCancel already done)
+    p.rw.Read(&p.readBuf, bidiTag(2));                        // keep reading
+}
+
+// Bidi dispatch loop: keep ONE write-side op and ONE read-side op outstanding, dispatch by tag so writes
+// and reads interleave freely (avoids the write-all-then-read deadlock on ping-pong RPCs).
+void runBidiStream(GrpcCall& call, const std::vector<std::string>& wire, const EmitFn& emit) {
+    BidiPump p{call.rw, wire};
+    if (!wire.empty()) bidiStartWrite(p, 0);
+    else { call.rw.WritesDone(bidiTag(3)); p.wstate = BidiPump::WDONE_PENDING; }
+    call.rw.Read(&p.readBuf, bidiTag(2));
+
+    while (p.wstate != BidiPump::WDONE_DONE || p.reading) {
+        void* tag = nullptr;
+        bool ok = false;
+        auto deadline = std::chrono::system_clock::now() + std::chrono::milliseconds(100);
+        auto st = call.cq.AsyncNext(&tag, &ok, deadline);
+        if (st == grpc::CompletionQueue::SHUTDOWN) break;
+        if (st == grpc::CompletionQueue::TIMEOUT) {
+            if (call.cancel && call.cancel->cancelled()) call.ctx.TryCancel();
+            continue;
+        }
+        if (tag == bidiTag(1)) bidiOnWrite(p, ok);
+        else if (tag == bidiTag(3)) p.wstate = BidiPump::WDONE_DONE;
+        else if (tag == bidiTag(2)) bidiOnRead(p, ok, call, emit);
+        if (call.cancel && call.cancel->cancelled()) call.ctx.TryCancel();
+    }
+}
+
+// Decode one streamed protobuf message into a compact JSON element; on failure return a VALID error
+// element (keeps the array valid, §10). Reuses `outMsg` (Clear() per call) to avoid per-event allocs.
+std::string decodeStreamMessage(gp::Message& outMsg, const grpc::ByteBuffer& msg, std::uint64_t seq) {
+    outMsg.Clear();
+    bool decoded = outMsg.ParseFromString(byteBufferToString(msg));
+    std::string json;
+    if (decoded) {
+        gp::util::JsonPrintOptions jopts;
+        jopts.add_whitespace = false;   // compact per element; the UI lays out the array
+        jopts.always_print_fields_with_no_presence = true;
+        decoded = gp::util::MessageToJsonString(outMsg, &json, jopts).ok();
+    }
+    if (!decoded)
+        json = "{\"__decode_error__\":\"failed to decode protobuf message\",\"seq\":" +
+               std::to_string(seq) + "}";
+    return json;
+}
+
+// Accumulates streamed events: decode -> emit as a StreamEvent -> enforce the §9 event/byte ceilings.
+struct StreamEmitter {
+    IStreamSink& sink;
+    grpc::ClientContext& ctx;
+    gp::Message& outMsg;
+    std::uint64_t maxEvents;
+    std::uint64_t maxBytes;
+    std::function<long long()> offsetMs;
+    std::uint64_t seq = 0;
+    std::uint64_t bytes = 0;
+    bool truncated = false;
+
+    // Returns false once a ceiling is hit (TryCancel already issued) so the caller stops reading.
+    bool emit(const grpc::ByteBuffer& msg) {
+        std::string json = decodeStreamMessage(outMsg, msg, seq);
+        StreamEvent ev;
+        ev.seq = seq;
+        ev.kind = StreamPayloadKind::Json;
+        ev.payload = json;
+        ev.name = "message";
+        ev.offsetMs = offsetMs();
+        sink.onStreamEvent(ev);
+        ++seq;
+        bytes += json.size();
+        if (seq >= maxEvents || bytes >= maxBytes) { truncated = true; ctx.TryCancel(); return false; }
+        return true;
+    }
+};
+
+// Serialize the request message(s) to wire bytes up front (so a bad message fails before opening the call).
+// server-streaming: exactly one (object); bidi: a JSON ARRAY (single object = one). false + err on failure.
+bool serializeStreamRequests(const GrpcRequest& g, const gp::MethodDescriptor* mth, bool isBidi,
+                             gp::DynamicMessageFactory& factory, std::vector<std::string>& wire,
+                             std::string& err) {
+    if (isBidi) {
+        std::vector<std::string> jsons;
+        return splitMessages(g.message, jsons, err) &&
+               serializeMessages(jsons, mth->input_type(), factory, wire, err);
+    }
+    std::string b;
+    if (!buildRequestBytes(factory, mth, g.message, b, err)) return false;
+    wire.push_back(std::move(b));
+    return true;
+}
+
+// StartCall, then drive the appropriate read/write loop once the call is live. M9: Start uses tag 10,
+// outside the run* helpers' in-loop tag space (1/2/3), so a delayed StartCall can't be misread as a write.
+void driveStream(GrpcCall& call, bool isBidi, const std::vector<std::string>& wire, const EmitFn& emit) {
+    void* kStartTag = reinterpret_cast<void*>(10);
+    call.rw.StartCall(kStartTag);
+    if (pumpCq(call.cq, call.cancel, call.ctx) != 1) return;   // call never became live
+    if (isBidi) runBidiStream(call, wire, emit);
+    else runServerStreamReads(call, wire[0], emit);
+}
+
+// Finish the call (tag 11, distinct from the loop tags), pump it, then shut down + drain the CQ.
+void finishStreamCall(GrpcCall& call, grpc::Status& status) {
+    void* kFinishTag = reinterpret_cast<void*>(11);
+    call.rw.Finish(&status, kFinishTag);
+    pumpCq(call.cq, call.cancel, call.ctx);
+    call.cq.Shutdown();
+    { void* t; bool o; while (call.cq.Next(&t, &o)) {} }   // drain remaining tags
+}
+
+// Build + emit the terminal StreamEnd from the final status and the emitter's counters (§3 close contract).
+void closeStream(IStreamSink& sink, grpc::ClientContext& ctx, const grpc::Status& status,
+                 const StreamEmitter& em, bool cancelled, long long elapsedMs) {
+    StreamEnd end;
+    end.status = mapStreamStatus(status, cancelled && !em.truncated);
+    end.statusCode = status.error_code();
+    end.statusMessage = status.error_message();
+    end.trailing = trailingToKv(ctx.GetServerTrailingMetadata());
+    end.totalEvents = em.seq;
+    end.totalBytes = em.bytes;
+    end.elapsedMs = elapsedMs;
+    end.truncated = em.truncated;
+    // Truncation is a successful cap-hit, not a failure: report Ok so the array stays valid (§10).
+    if (em.truncated && end.status != StreamStatus::Cancelled) end.status = StreamStatus::Ok;
+    sink.onStreamClose(end);
+}
+
 // Client-streaming: write N request messages, half-close, read ONE response (SPEC §0 — v2 scope).
 // `message` is a JSON array of request messages (single object = one message; empty = zero). Result is
 // unary-shaped -> delivered via onResponse/onError, so the UI/CLI need no new receive path.
@@ -173,42 +474,19 @@ void sendClientStream(const ResolvedRequest& req, const gp::MethodDescriptor* mt
     auto channel = grpc::CreateCustomChannel(g.target, makeCreds(g.tls), streamChannelArgs());
     grpc::GenericStub stub(channel);
     grpc::ClientContext clientCtx;
-    int deadlineMs = g.settings.deadlineMs > 0 ? g.settings.deadlineMs : 30000;
-    clientCtx.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadlineMs));
-    for (const auto& md : g.metadata)
-        if (md.enabled && !md.key.empty()) clientCtx.AddMetadata(md.key, md.value);
+    applyCallContext(clientCtx, g);
 
     const std::string methodPath = "/" + g.service + "/" + g.method;
     grpc::CompletionQueue cq;
     std::unique_ptr<GenericRW> rw = stub.PrepareCall(&clientCtx, methodPath, &cq);
+    GrpcCall call{*rw, cq, clientCtx, cancel};
 
+    // 4+5. Write N messages, half-close, read ONE response, Finish.
     const auto start = std::chrono::steady_clock::now();
-    void* tag = reinterpret_cast<void*>(1);
-
-    // 4. StartCall -> Write each message -> WritesDone (half-close).
-    rw->StartCall(tag);
-    bool failed = (pumpCq(cq, cancel, clientCtx) != 1);
-    for (size_t i = 0; !failed && i < wire.size(); ++i) {
-        if (cancel && cancel->cancelled()) break;
-        grpc::Slice sl(wire[i]);
-        grpc::ByteBuffer buf(&sl, 1);
-        rw->Write(buf, tag);
-        if (pumpCq(cq, cancel, clientCtx) != 1) { failed = true; break; }
-    }
-    if (!failed) { rw->WritesDone(tag); pumpCq(cq, cancel, clientCtx); }
-
-    // 5. Read the single response, then Finish.
     grpc::ByteBuffer respBuf;
     bool gotResp = false;
-    if (!failed) {
-        rw->Read(&respBuf, tag);
-        gotResp = (pumpCq(cq, cancel, clientCtx) == 1);
-    }
     grpc::Status status;
-    rw->Finish(&status, tag);
-    pumpCq(cq, cancel, clientCtx);
-    cq.Shutdown();
-    { void* t; bool o; while (cq.Next(&t, &o)) {} }   // drain
+    runClientStreamCall(call, wire, respBuf, gotResp, status);
 
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - start).count();
@@ -226,33 +504,11 @@ void sendClientStream(const ResolvedRequest& req, const gp::MethodDescriptor* mt
 
     // 6. Response message -> JSON.
     std::string jsonOut;
-    if (gotResp) {
-        std::unique_ptr<gp::Message> respMsg(factory.GetPrototype(mth->output_type())->New());
-        std::string respBytes = byteBufferToString(respBuf);
-        if (!respMsg->ParseFromString(respBytes)) {
-            delegate.onError(handle, ApiError{ErrorKind::Parse, "failed to parse protobuf response"});
-            return;
-        }
-        gp::util::JsonPrintOptions jopts;
-        jopts.add_whitespace = true;
-        jopts.always_print_fields_with_no_presence = true;
-        auto st = gp::util::MessageToJsonString(*respMsg, &jsonOut, jopts);
-        if (!st.ok()) {
-            delegate.onError(handle, ApiError{ErrorKind::Parse,
-                                              "failed to convert response to JSON: " +
-                                                  std::string(st.message())});
-            return;
-        }
+    if (gotResp && !decodeUnaryResponse(factory, mth, respBuf, jsonOut, err)) {
+        delegate.onError(handle, ApiError{ErrorKind::Parse, err});
+        return;
     }
-
-    ApiResponse resp;
-    resp.statusCode = 0;   // gRPC OK
-    resp.statusText = "OK";
-    resp.body = jsonOut;
-    resp.elapsedMs = static_cast<long>(elapsed);
-    resp.sizeBytes = static_cast<std::int64_t>(jsonOut.size());
-    resp.resolvedRequestDump = codec::dumpRequest(req.model);
-    delegate.onResponse(handle, resp);
+    deliverUnaryOk(delegate, handle, req.model, jsonOut, static_cast<long>(elapsed));
 }
 
 } // namespace
@@ -261,22 +517,12 @@ void GrpcSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
                       const std::shared_ptr<CancelToken>& cancel) {
     const GrpcRequest& g = req.model.grpc;
 
-    // Load descriptors (protoFiles | descriptorSet | reflection).
+    // Load descriptors (protoFiles | descriptorSet | reflection) + find the method.
     DescriptorContext ctx;
-    if (!grpcdesc::buildDescriptors(g, ctx)) {
-        delegate.onError(handle, ApiError{ErrorKind::Parse, ctx.error});
-        return;
-    }
-
-    // Find service + method.
-    const gp::ServiceDescriptor* svc = ctx.activePool->FindServiceByName(g.service);
-    if (!svc) {
-        delegate.onError(handle, ApiError{ErrorKind::Parse, "service not found: " + g.service});
-        return;
-    }
-    const gp::MethodDescriptor* mth = svc->FindMethodByName(g.method);
+    std::string err;
+    const gp::MethodDescriptor* mth = resolveMethod(g, ctx, err);
     if (!mth) {
-        delegate.onError(handle, ApiError{ErrorKind::Parse, "method not found: " + g.method});
+        delegate.onError(handle, ApiError{ErrorKind::Parse, err});
         return;
     }
     // Server-streaming has its own receive path (Engine::openStream / IStreamSink); not on send().
@@ -285,7 +531,6 @@ void GrpcSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
                                           "server-streaming uses the stream path, not send()."});
         return;
     }
-
     // Client-streaming: N request messages -> ONE response. Unary-shaped result, so it rides send()
     // and reports via onResponse/onError. The `message` field is a JSON ARRAY of request messages
     // (a single object is also accepted = one message; empty = zero messages).
@@ -294,41 +539,22 @@ void GrpcSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
         return;
     }
 
-    // JSON message -> protobuf (DynamicMessage).
+    // JSON message -> protobuf wire bytes.
     gp::DynamicMessageFactory factory(ctx.activePool);
-    std::unique_ptr<gp::Message> reqMsg(factory.GetPrototype(mth->input_type())->New());
-    {
-        gp::util::JsonParseOptions popts;
-        popts.ignore_unknown_fields = true;
-        auto st = gp::util::JsonStringToMessage(g.message.empty() ? "{}" : g.message, reqMsg.get(), popts);
-        if (!st.ok()) {
-            delegate.onError(handle, ApiError{ErrorKind::Parse,
-                                              "invalid JSON message for " +
-                                                  std::string(mth->input_type()->full_name()) + ": " +
-                                                  std::string(st.message())});
-            return;
-        }
-    }
     std::string reqBytes;
-    if (!reqMsg->SerializeToString(&reqBytes)) {
-        delegate.onError(handle, ApiError{ErrorKind::Parse, "failed to serialize protobuf request"});
+    if (!buildRequestBytes(factory, mth, g.message, reqBytes, err)) {
+        delegate.onError(handle, ApiError{ErrorKind::Parse, err});
         return;
     }
 
-    // Channel + generic stub.
+    // Channel + generic stub + context.
     auto channel = grpc::CreateCustomChannel(g.target, makeCreds(g.tls), streamChannelArgs());
     grpc::GenericStub stub(channel);
-
     grpc::ClientContext clientCtx;
-    int deadlineMs = g.settings.deadlineMs > 0 ? g.settings.deadlineMs : 30000;
-    clientCtx.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadlineMs));
-    for (const auto& md : g.metadata) {
-        if (md.enabled && !md.key.empty()) clientCtx.AddMetadata(md.key, md.value);
-    }
+    applyCallContext(clientCtx, g);
 
     grpc::Slice reqSlice(reqBytes);
     grpc::ByteBuffer reqBuffer(&reqSlice, 1);
-
     std::string methodPath = "/" + g.service + "/" + g.method;
 
     grpc::CompletionQueue cq;
@@ -340,24 +566,7 @@ void GrpcSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
     grpc::Status status;
     void* finishTag = reinterpret_cast<void*>(1);
     reader->Finish(&respBuffer, &status, finishTag);
-
-    // Poll CQ + support cancel.
-    bool done = false;
-    while (!done) {
-        void* tag = nullptr;
-        bool ok = false;
-        auto deadline = std::chrono::system_clock::now() + std::chrono::milliseconds(100);
-        auto next = cq.AsyncNext(&tag, &ok, deadline);
-        if (next == grpc::CompletionQueue::GOT_EVENT) {
-            done = true;
-        } else if (next == grpc::CompletionQueue::SHUTDOWN) {
-            break;
-        } else { // TIMEOUT
-            if (cancel && cancel->isCancelled()) clientCtx.TryCancel();
-        }
-    }
-    cq.Shutdown();
-    { void* t; bool o; while (cq.Next(&t, &o)) {} } // drain
+    awaitUnaryFinish(cq, clientCtx, cancel);   // poll CQ + honor cancel, then shutdown + drain
 
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start).count();
@@ -374,34 +583,12 @@ void GrpcSender::send(const ResolvedRequest& req, RequestHandle handle, IUiDeleg
     }
 
     // protobuf response -> JSON.
-    std::unique_ptr<gp::Message> respMsg(factory.GetPrototype(mth->output_type())->New());
-    std::string respBytes = byteBufferToString(respBuffer);
-    if (!respMsg->ParseFromString(respBytes)) {
-        delegate.onError(handle, ApiError{ErrorKind::Parse, "failed to parse protobuf response"});
+    std::string jsonOut;
+    if (!decodeUnaryResponse(factory, mth, respBuffer, jsonOut, err)) {
+        delegate.onError(handle, ApiError{ErrorKind::Parse, err});
         return;
     }
-    std::string jsonOut;
-    {
-        gp::util::JsonPrintOptions jopts;
-        jopts.add_whitespace = true;
-        jopts.always_print_fields_with_no_presence = true;
-        auto st = gp::util::MessageToJsonString(*respMsg, &jsonOut, jopts);
-        if (!st.ok()) {
-            delegate.onError(handle, ApiError{ErrorKind::Parse,
-                                              "failed to convert response to JSON: " +
-                                                  std::string(st.message())});
-            return;
-        }
-    }
-
-    ApiResponse resp;
-    resp.statusCode = 0; // gRPC OK
-    resp.statusText = "OK";
-    resp.body = jsonOut;
-    resp.elapsedMs = static_cast<long>(elapsed);
-    resp.sizeBytes = static_cast<std::int64_t>(jsonOut.size());
-    resp.resolvedRequestDump = codec::dumpRequest(req.model);
-    delegate.onResponse(handle, resp);
+    deliverUnaryOk(delegate, handle, req.model, jsonOut, static_cast<long>(elapsed));
 }
 
 bool GrpcSender::isStreaming(const ResolvedRequest& req) const {
@@ -439,13 +626,11 @@ void GrpcSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
         sink.onStreamClose(end);
     };
 
-    // Descriptors (reflection | protoFiles | descriptorSet) — same path as unary.
+    // Descriptors (reflection | protoFiles | descriptorSet) + method — same path as unary.
     DescriptorContext dctx;
-    if (!grpcdesc::buildDescriptors(g, dctx)) { openThenError(dctx.error); return; }
-    const gp::ServiceDescriptor* svc = dctx.activePool->FindServiceByName(g.service);
-    if (!svc) { openThenError("service not found: " + g.service); return; }
-    const gp::MethodDescriptor* mth = svc->FindMethodByName(g.method);
-    if (!mth) { openThenError("method not found: " + g.method); return; }
+    std::string err;
+    const gp::MethodDescriptor* mth = resolveMethod(g, dctx, err);
+    if (!mth) { openThenError(err); return; }
     // openStream serves methods that STREAM responses: server-streaming (1 request) and bidi (N requests).
     const bool isBidi = mth->client_streaming();
     if (!mth->server_streaming()) {
@@ -454,45 +639,16 @@ void GrpcSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
     }
 
     // Request message(s) -> wire bytes (serialize up front so a bad message fails before opening the call).
-    // server-streaming: exactly one (object); bidi: a JSON ARRAY of messages (single object = one).
     gp::DynamicMessageFactory factory(dctx.activePool);
     std::vector<std::string> wire;
-    {
-        std::string err;
-        if (isBidi) {
-            std::vector<std::string> jsons;
-            if (!splitMessages(g.message, jsons, err) ||
-                !serializeMessages(jsons, mth->input_type(), factory, wire, err)) {
-                openThenError(err);
-                return;
-            }
-        } else {
-            std::unique_ptr<gp::Message> reqMsg(factory.GetPrototype(mth->input_type())->New());
-            gp::util::JsonParseOptions popts;
-            popts.ignore_unknown_fields = true;
-            auto st = gp::util::JsonStringToMessage(g.message.empty() ? "{}" : g.message, reqMsg.get(), popts);
-            if (!st.ok()) {
-                openThenError("invalid JSON message for " + std::string(mth->input_type()->full_name()) +
-                              ": " + std::string(st.message()));
-                return;
-            }
-            std::string b;
-            if (!reqMsg->SerializeToString(&b)) { openThenError("failed to serialize protobuf request"); return; }
-            wire.push_back(std::move(b));
-        }
-    }
+    if (!serializeStreamRequests(g, mth, isBidi, factory, wire, err)) { openThenError(err); return; }
 
-    // Channel + generic stub + context (metadata + deadline).
+    // Channel + generic stub + context. M10: for a stream the deadline is a MAX-DURATION cap from the
+    // per-request Config (timeout_ms, default 30 min), not a hard 30s — cancel + the §9 ceilings also bound it.
     auto channel = grpc::CreateCustomChannel(g.target, makeCreds(g.tls), streamChannelArgs());
     grpc::GenericStub stub(channel);
     grpc::ClientContext ctx;
-    // M10: for a stream this deadline is a MAX-DURATION cap, sourced from the per-request Config (timeout_ms,
-    // default 30 min) — no longer a hard 30s that silently kills healthy long streams. A user wanting an
-    // open-ended stream sets a large timeout_ms; cancel + the §9 event/byte ceilings also bound it.
-    int deadlineMs = g.settings.deadlineMs > 0 ? g.settings.deadlineMs : 30000;
-    ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadlineMs));
-    for (const auto& md : g.metadata)
-        if (md.enabled && !md.key.empty()) ctx.AddMetadata(md.key, md.value);
+    applyCallContext(ctx, g);
 
     const std::string methodPath = "/" + g.service + "/" + g.method;
     grpc::CompletionQueue cq;
@@ -501,128 +657,18 @@ void GrpcSender::openStream(const ResolvedRequest& req, IStreamSink& sink,
     // From here on the §3 contract is live: exactly one open, then events, then exactly one close.
     sink.onStreamOpen(meta);
 
-    std::uint64_t seq = 0, bytes = 0;
-    bool truncated = false;
-
-    auto makeBuf = [](const std::string& s) { grpc::Slice sl(s); return grpc::ByteBuffer(&sl, 1); };
-
     // Reuse ONE response message across the whole stream (Clear() per event) instead of allocating a new
     // DynamicMessage each time — cuts allocator churn on high-frequency streams (perf spec §2.8).
     std::unique_ptr<gp::Message> outMsg(factory.GetPrototype(mth->output_type())->New());
+    StreamEmitter emitter{sink, ctx, *outMsg, kMaxEvents, kMaxBytes, offsetMs};
+    auto emit = [&](const grpc::ByteBuffer& m) { return emitter.emit(m); };
 
-    // Decode one response message -> JSON, emit as a StreamEvent. Returns false if a ceiling was hit
-    // (caller stops reading). On decode failure emits a VALID error element (keeps the array valid, §10).
-    auto emitMessage = [&](const grpc::ByteBuffer& msg) -> bool {
-        std::string json;
-        outMsg->Clear();
-        std::string raw = byteBufferToString(msg);
-        bool decoded = outMsg->ParseFromString(raw);
-        if (decoded) {
-            gp::util::JsonPrintOptions jopts;
-            jopts.add_whitespace = false;   // compact per element; the UI lays out the array
-            jopts.always_print_fields_with_no_presence = true;
-            decoded = gp::util::MessageToJsonString(*outMsg, &json, jopts).ok();
-        }
-        if (!decoded)
-            json = "{\"__decode_error__\":\"failed to decode protobuf message\",\"seq\":" +
-                   std::to_string(seq) + "}";
-        StreamEvent ev;
-        ev.seq = seq;
-        ev.kind = StreamPayloadKind::Json;
-        ev.payload = json;
-        ev.name = "message";
-        ev.offsetMs = offsetMs();
-        sink.onStreamEvent(ev);
-        ++seq;
-        bytes += json.size();
-        if (seq >= kMaxEvents || bytes >= kMaxBytes) { truncated = true; ctx.TryCancel(); return false; }
-        return true;
-    };
+    GrpcCall call{*rw, cq, ctx, cancel};
+    driveStream(call, isBidi, wire, emit);   // StartCall + the server-streaming/bidi read-write loop
 
-    // Distinct tag constants (M9): StartCall/Finish never share a value with the in-loop write/read/wdone
-    // tags, so a delayed StartCall completion can't be misread as a write inside the bidi dispatch loop.
-    void* kTag = reinterpret_cast<void*>(1);          // server-streaming sequential ops (one outstanding)
-    void* kStartTag = reinterpret_cast<void*>(10);
-    void* kFinishTag = reinterpret_cast<void*>(11);
-    bool startupFailed = false;
-    rw->StartCall(kStartTag);
-    if (pumpCq(cq, cancel, ctx) != 1) startupFailed = true;
-
-    if (!startupFailed && !isBidi) {
-        // --- Server-streaming: write the single request, half-close, then read until the server closes.
-        grpc::ByteBuffer reqBuffer = makeBuf(wire[0]);
-        rw->Write(reqBuffer, kTag);
-        if (pumpCq(cq, cancel, ctx) != 1) startupFailed = true;
-        if (!startupFailed) { rw->WritesDone(kTag); if (pumpCq(cq, cancel, ctx) != 1) startupFailed = true; }
-        while (!startupFailed) {
-            if (cancel && cancel->cancelled()) { ctx.TryCancel(); break; }
-            grpc::ByteBuffer msg;
-            rw->Read(&msg, kTag);
-            if (pumpCq(cq, cancel, ctx) != 1) break;   // !ok -> server closed the stream (or CQ shutdown)
-            if (!emitMessage(msg)) break;
-        }
-    } else if (!startupFailed && isBidi) {
-        // --- Bidi: keep ONE write-side op and ONE read-side op outstanding at once, dispatch by tag.
-        // Writes and reads interleave freely (avoids the deadlock of write-all-then-read on ping-pong RPCs).
-        void* T_WRITE = reinterpret_cast<void*>(1);
-        void* T_READ = reinterpret_cast<void*>(2);
-        void* T_WDONE = reinterpret_cast<void*>(3);
-        grpc::ByteBuffer writeBuf, readBuf;
-        size_t widx = 0;
-        enum WState { WRITING, WDONE_PENDING, WDONE_DONE } wstate = WRITING;   // M9: never read uninitialized
-
-        if (!wire.empty()) { writeBuf = makeBuf(wire[widx]); rw->Write(writeBuf, T_WRITE); wstate = WRITING; }
-        else { rw->WritesDone(T_WDONE); wstate = WDONE_PENDING; }
-        bool reading = true;
-        rw->Read(&readBuf, T_READ);
-
-        while (wstate != WDONE_DONE || reading) {
-            void* tag = nullptr;
-            bool ok = false;
-            auto deadline = std::chrono::system_clock::now() + std::chrono::milliseconds(100);
-            auto st = cq.AsyncNext(&tag, &ok, deadline);
-            if (st == grpc::CompletionQueue::SHUTDOWN) break;
-            if (st == grpc::CompletionQueue::TIMEOUT) {
-                if (cancel && cancel->cancelled()) ctx.TryCancel();
-                continue;
-            }
-            // GOT_EVENT
-            if (tag == T_WRITE) {
-                if (!ok) { wstate = WDONE_DONE; }                       // write side broke -> stop writing
-                else if (++widx < wire.size()) { writeBuf = makeBuf(wire[widx]); rw->Write(writeBuf, T_WRITE); }
-                else { rw->WritesDone(T_WDONE); wstate = WDONE_PENDING; }
-            } else if (tag == T_WDONE) {
-                wstate = WDONE_DONE;
-            } else if (tag == T_READ) {
-                if (!ok) { reading = false; }                          // server finished its side
-                else if (cancel && cancel->cancelled()) { ctx.TryCancel(); reading = false; }
-                else if (!emitMessage(readBuf)) { reading = false; }    // ceiling hit (TryCancel already done)
-                else { rw->Read(&readBuf, T_READ); }                    // keep reading
-            }
-            if (cancel && cancel->cancelled()) ctx.TryCancel();
-        }
-    }
-
-    // Finish -> trailing status + metadata.
     grpc::Status status;
-    rw->Finish(&status, kFinishTag);
-    pumpCq(cq, cancel, ctx);
-    cq.Shutdown();
-    { void* t; bool o; while (cq.Next(&t, &o)) {} }   // drain remaining tags
-
-    const bool wasCancelled = cancel && cancel->cancelled() && !truncated;
-    StreamEnd end;
-    end.status = mapStreamStatus(status, wasCancelled);
-    end.statusCode = status.error_code();
-    end.statusMessage = status.error_message();
-    end.trailing = trailingToKv(ctx.GetServerTrailingMetadata());
-    end.totalEvents = seq;
-    end.totalBytes = bytes;
-    end.elapsedMs = offsetMs();
-    end.truncated = truncated;
-    // Truncation is a successful cap-hit, not a failure: report Ok so the array stays valid (§10).
-    if (truncated && end.status != StreamStatus::Cancelled) end.status = StreamStatus::Ok;
-    sink.onStreamClose(end);
+    finishStreamCall(call, status);          // Finish -> trailing status + metadata; shutdown + drain
+    closeStream(sink, ctx, status, emitter, cancel && cancel->cancelled(), offsetMs());
 }
 
 } // namespace core

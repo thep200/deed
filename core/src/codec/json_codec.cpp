@@ -366,7 +366,8 @@ std::string dumpRequest(const RequestModel& m) { return toJson(m).dump(2); }
 json toJson(const Environment& e) {
     json keys = json::array();
     for (const auto& k : e.keys) {
-        keys.push_back(json{{"key", k.key}, {"value", k.value}, {"enabled", k.enabled ? 1 : 0}});
+        keys.push_back(json{{"key", k.key}, {"value", k.value}, {"enabled", k.enabled ? 1 : 0},
+                            {"secret", k.secret ? 1 : 0}});
     }
     // No "name" field: the env name is the FILENAME (EnvironmentStore sets it on load). Don't duplicate it.
     return json{{"schemaVersion", e.schemaVersion}, {"keys", keys}};
@@ -383,6 +384,7 @@ Environment envFromJson(const json& j) {
             ek.value = getStr(k, "value");   // old env files may lack value if it was once a secret;
                                              // migrateLegacySecrets() already merged the value back in earlier.
             ek.enabled = getBool(k, "enabled", true);
+            ek.secret = getBool(k, "secret", false);
             e.keys.push_back(ek);
         }
     }

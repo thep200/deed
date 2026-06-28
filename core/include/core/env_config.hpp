@@ -13,6 +13,7 @@ struct EnvKey {
   std::string key;
   std::string value;
   bool enabled = true;
+  bool secret = false; // user-marked "secret" alias (flag only — persisted, no behavior yet)
 };
 
 struct Environment {

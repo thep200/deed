@@ -150,7 +150,8 @@ static const CGFloat kPadR = 14;   // right padding
         NSColor *fg = hot ? [NSColor whiteColor] : [NSColor blackColor];
         NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : fg};
         if (e.checked)
-            [@"✓" drawAtPoint:NSMakePoint(row.origin.x + 7, row.origin.y + (kRowH - 12) / 2) withAttributes:attrs];
+            [OS9Theme drawCheckInRect:NSMakeRect(row.origin.x + 6, row.origin.y + (kRowH - 11) / 2, 11, 11)
+                                color:fg];
         NSString *title = e.title ?: @"";
         NSSize sz = [title sizeWithAttributes:attrs];
         [title drawAtPoint:NSMakePoint(row.origin.x + kPadL, row.origin.y + floor((kRowH - sz.height) / 2))

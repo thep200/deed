@@ -79,33 +79,55 @@ bool EnvironmentStore::renameEnv(const std::string& oldName, const std::string& 
     return true;
 }
 
+namespace {
+// True if renaming oldAlias->newAlias inside `e` would collide (both keys already present).
+bool aliasRenameCollides(const Environment& e, const std::string& oldAlias, const std::string& newAlias) {
+    bool hasOld = false, hasNew = false;
+    for (const auto& k : e.keys) {
+        if (k.key == oldAlias) hasOld = true;
+        if (k.key == newAlias) hasNew = true;
+    }
+    return hasOld && hasNew;
+}
+// Rename every oldAlias key to newAlias in `e`; returns true if any key changed.
+bool renameAliasInEnv(Environment& e, const std::string& oldAlias, const std::string& newAlias) {
+    bool changed = false;
+    for (auto& k : e.keys)
+        if (k.key == oldAlias) { k.key = newAlias; changed = true; }
+    return changed;
+}
+// Set key=val in `e` (update in place if present, else append).
+void upsertEnvKey(Environment& e, const std::string& key, const std::string& val) {
+    for (auto& ek : e.keys)
+        if (ek.key == key) { ek.value = val; return; }
+    e.keys.push_back(EnvKey{key, val, true});
+}
+// Merge one legacy { "<key>": "<value>" } object into env `envName` and save it.
+void migrateLegacyEnv(EnvironmentStore& store, const std::string& envName, const nlohmann::json& obj) {
+    Environment e;
+    try { e = store.load(envName); } catch (...) { e.name = envName; }
+    for (auto kit = obj.begin(); kit != obj.end(); ++kit)
+        if (kit->is_string()) upsertEnvKey(e, kit.key(), kit->get<std::string>());
+    if (!e.name.empty()) store.save(e);
+}
+} // namespace
+
 bool EnvironmentStore::renameAlias(const std::string& oldAlias, const std::string& newAlias) {
     if (newAlias.empty() || oldAlias.empty()) return false;
     if (oldAlias == newAlias) return true;
     // Cross-env: check for collisions across ALL envs first, then write (logically atomic).
-    auto names = list();
     std::vector<Environment> envs;
-    envs.reserve(names.size());
-    for (const auto& n : names) {
+    for (const auto& n : list()) {
         Environment e;
         try { e = load(n); } catch (...) { continue; }
-        bool hasOld = false, hasNew = false;
-        for (const auto& k : e.keys) {
-            if (k.key == oldAlias) hasOld = true;
-            if (k.key == newAlias) hasNew = true;
-        }
-        if (hasOld && hasNew) return false; // would create a duplicate key -> reject
+        if (aliasRenameCollides(e, oldAlias, newAlias)) return false; // duplicate key -> reject
         envs.push_back(std::move(e));
     }
+    // M16: write directly (no per-env epoch bump) so a rename touching K envs does K writes but only
+    // ONE epoch bump + cache invalidation at the end, instead of K.
     bool changedAny = false;
     for (auto& e : envs) {
-        bool changed = false;
-        for (auto& k : e.keys) {
-            if (k.key == oldAlias) { k.key = newAlias; changed = true; }
-        }
-        // M16: write directly (no per-env epoch bump) so a rename touching K envs does K writes but only
-        // ONE epoch bump + cache invalidation at the end, instead of K.
-        if (changed) {
+        if (renameAliasInEnv(e, oldAlias, newAlias)) {
             fsutil::writeFileAtomic(envFile(root_, e.name), codec::toJson(e).dump(2));
             changedAny = true;
         }
@@ -124,25 +146,9 @@ void EnvironmentStore::migrateLegacySecrets() {
     if (fsutil::readFile(secretsFile.string(), txt)) {
         try {
             auto j = codec::parseGuarded(txt);
-            if (j.is_object()) {
-                // Old layout: { "<env>": { "<key>": "<value>" } }
-                for (auto it = j.begin(); it != j.end(); ++it) {
-                    const std::string& envName = it.key();
-                    if (!it->is_object()) continue;
-                    Environment e;
-                    try { e = load(envName); } catch (...) { e.name = envName; }
-                    for (auto kit = it->begin(); kit != it->end(); ++kit) {
-                        if (!kit->is_string()) continue;
-                        const std::string& key = kit.key();
-                        const std::string val = kit->get<std::string>();
-                        bool found = false;
-                        for (auto& ek : e.keys)
-                            if (ek.key == key) { ek.value = val; found = true; break; }
-                        if (!found) e.keys.push_back(EnvKey{key, val, true});
-                    }
-                    if (!e.name.empty()) save(e);
-                }
-            }
+            if (j.is_object())   // Old layout: { "<env>": { "<key>": "<value>" } }
+                for (auto it = j.begin(); it != j.end(); ++it)
+                    if (it->is_object()) migrateLegacyEnv(*this, it.key(), *it);
         } catch (...) { /* corrupt .secrets -> skip, still allow opening the app (SPEC edge case) */ }
     }
     // Delete .secrets/ -> this also acts as the "migrated" flag (next time exists() == false -> no-op).

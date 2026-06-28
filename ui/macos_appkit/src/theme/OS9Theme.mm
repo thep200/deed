@@ -470,4 +470,21 @@ static NSColor *kPressBot(void)    { return G(0.612); }  // #9C9C9C — pressed 
     return p;
 }
 
++ (void)drawCheckInRect:(NSRect)r color:(NSColor *)c {
+    [NSGraphicsContext saveGraphicsState];
+    [[NSGraphicsContext currentContext] setShouldAntialias:NO];   // pixel-crisp edges (Platinum)
+    NSBezierPath *p = [NSBezierPath bezierPath];
+    p.lineWidth = 2.0;
+    p.lineCapStyle = NSLineCapStyleSquare;
+    p.lineJoinStyle = NSLineJoinStyleMiter;
+    CGFloat x = NSMinX(r), y = NSMinY(r), w = r.size.width, h = r.size.height;
+    // Flipped coords (y grows downward): short arm DOWN to the bottom vertex, then long arm UP to the right.
+    [p moveToPoint:NSMakePoint(x + w * 0.16, y + h * 0.52)];
+    [p lineToPoint:NSMakePoint(x + w * 0.40, y + h * 0.76)];
+    [p lineToPoint:NSMakePoint(x + w * 0.86, y + h * 0.22)];
+    [c set];
+    [p stroke];
+    [NSGraphicsContext restoreGraphicsState];
+}
+
 @end

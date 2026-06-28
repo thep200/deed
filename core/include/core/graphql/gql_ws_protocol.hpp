@@ -32,6 +32,8 @@ public:
 private:
     void openOnce();
     void closeOnce(StreamStatus status, int code, const std::string& msg);
+    void sendSubscribe();                    // on connection_ack: send subscribe/start{query,variables}
+    void emitDataPayload(const std::string& payloadJson); // on next/data: forward one StreamEvent
     const char* tInit() const;      // connection_init
     const char* tSubscribe() const; // subscribe | start
     const char* tComplete() const;  // complete | stop

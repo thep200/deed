@@ -26,6 +26,7 @@ static NSString *Key(NSString *env, NSString *alias) {
     NSMutableDictionary<NSString *, NSString *> *_values; // Key(env,alias) -> value
     NSMutableSet<NSString *> *_dirtyEnvs;
     NSMutableSet<NSString *> *_removedEnvs; // envs whose file to delete on save (rename/delete)
+    NSMutableSet<NSString *> *_secretAliases; // aliases marked "secret" (per-alias flag)
 }
 
 - (instancetype)initWithEngine:(core::Engine *)engine {
@@ -36,6 +37,7 @@ static NSString *Key(NSString *env, NSString *alias) {
         _values = [NSMutableDictionary dictionary];
         _dirtyEnvs = [NSMutableSet set];
         _removedEnvs = [NSMutableSet set];
+        _secretAliases = [NSMutableSet set];
     }
     return self;
 }
@@ -68,6 +70,7 @@ static NSString *Key(NSString *env, NSString *alias) {
     [_values removeAllObjects];
     [_dirtyEnvs removeAllObjects];
     [_removedEnvs removeAllObjects];
+    [_secretAliases removeAllObjects];
     if (!_engine) return;
 
     for (const auto &n : _engine->environments().list())
@@ -82,6 +85,7 @@ static NSString *Key(NSString *env, NSString *alias) {
             NSString *alias = [NSString stringWithUTF8String:k.key.c_str()];
             if (![aliasOrder containsObject:alias]) [aliasOrder addObject:alias];
             _values[Key(env, alias)] = [NSString stringWithUTF8String:k.value.c_str()];
+            if (k.secret) [_secretAliases addObject:alias];   // secret if any env marks it
         }
     }
     [_aliases addObjectsFromArray:aliasOrder];
@@ -100,6 +104,7 @@ static NSString *Key(NSString *env, NSString *alias) {
             k.key = alias.uppercaseString.UTF8String;   // variables always stored UPPER
             k.enabled = true;
             k.value = (_values[Key(env, alias)] ?: @"").UTF8String;
+            k.secret = [_secretAliases containsObject:alias];   // per-alias flag, mirrored into every env
             e.keys.push_back(k);
         }
         try { _engine->environments().save(e); } catch (...) {}
@@ -124,6 +129,18 @@ static NSString *Key(NSString *env, NSString *alias) {
     [g reloadData];
 }
 
+- (BOOL)envGrid:(OS9EnvGrid *)g isSecretForAlias:(NSString *)alias {
+    return [_secretAliases containsObject:alias];
+}
+
+- (void)envGrid:(OS9EnvGrid *)g setSecret:(BOOL)secret forAlias:(NSString *)alias {
+    if (secret) [_secretAliases addObject:alias];
+    else [_secretAliases removeObject:alias];
+    // The flag is written into every env's copy of this key -> mark all (non-removed) envs dirty.
+    for (NSString *env in _envNames)
+        if (![_removedEnvs containsObject:env]) [_dirtyEnvs addObject:env];
+}
+
 - (void)envGrid:(OS9EnvGrid *)g renameAlias:(NSString *)oldAlias to:(NSString *)newAlias {
     newAlias = [newAlias uppercaseString];               // variables always stored UPPER
     if ([newAlias isEqualToString:oldAlias]) return;     // uppercased matches old name -> no change
@@ -141,6 +158,10 @@ static NSString *Key(NSString *env, NSString *alias) {
     }
     NSInteger idx = [_aliases indexOfObject:oldAlias];
     if (idx != NSNotFound) _aliases[idx] = newAlias;
+    if ([_secretAliases containsObject:oldAlias]) {   // carry the secret flag to the new name
+        [_secretAliases removeObject:oldAlias];
+        [_secretAliases addObject:newAlias];
+    }
     [self pushToGrid];
     [self warnVarRename:oldAlias];
 }
@@ -209,6 +230,7 @@ static NSString *Key(NSString *env, NSString *alias) {
     if (r != 1) return;
     for (NSString *env in _envNames) { [_values removeObjectForKey:Key(env, alias)]; [_dirtyEnvs addObject:env]; }
     [_aliases removeObject:alias];
+    [_secretAliases removeObject:alias];
     [self pushToGrid];
 }
 

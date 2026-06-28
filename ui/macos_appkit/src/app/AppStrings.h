@@ -101,6 +101,8 @@ extern NSString *const StrTabConfig;
 extern NSString *const StrBodyJson;
 extern NSString *const StrBodyFile;
 extern NSString *const StrBodyForm;
+extern NSString *const StrBodyText;
+extern NSString *const StrBodyXml;
 
 #pragma mark - Config screen titles
 extern NSString *const StrTitleSettings;

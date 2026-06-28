@@ -2,6 +2,7 @@
 #import "app/AppStrings.h"
 #import "theme/OS9Theme.h"
 #import "widgets/OS9Scroller.h"
+#import "widgets/OS9Toggle.h"
 #import "dialogs/OS9Dialog.h"
 
 // ---- Geometry ----
@@ -9,11 +10,12 @@ static const CGFloat kHeaderH  = 22;
 static const CGFloat kRowH     = 24;
 static const CGFloat kAliasW0  = 170;   // default Alias column width
 static const CGFloat kColW0    = 150;   // default env column width
-static const CGFloat kAddEnvW  = 30;    // "+" add-env column at far right of header
 static const CGFloat kAddRowH  = 24;    // "+ alias" row at bottom of table
 static const CGFloat kGlyph    = 13;    // × glyph hot-zone
 static const CGFloat kMinColW  = 60;    // minimum column width when dragging
 static const CGFloat kGrabW    = 5;     // grab zone for column resize (each side of divider)
+static const CGFloat kToggleH  = 18;    // secret OS9Toggle height (fits the label)
+static NSString *const kSecretLabel = @"Hid";   // short label carried on the secret toggle's knob
 
 typedef NS_ENUM(NSInteger, EnvZone) {
     EnvZoneNone = 0,
@@ -24,6 +26,7 @@ typedef NS_ENUM(NSInteger, EnvZone) {
     EnvZoneDeleteAlias,
     EnvZoneAddEnv,
     EnvZoneAddAlias,
+    EnvZoneToggleSecret,
 };
 
 typedef struct { EnvZone zone; NSInteger row; NSInteger col; } EnvHit;
@@ -159,6 +162,8 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     NSInteger _hoverRow;
     NSInteger _hoverEnvCol;              // env column hovered in header (-1 = none) -> shows × delete
     NSArray<NSArray<NSString *> *> *_cellCache;   // H8: value matrix [row][col], rebuilt on reloadData
+    NSArray<NSNumber *> *_secretCache;            // per-row secret flag, rebuilt on reloadData
+    NSMutableArray<OS9Toggle *> *_secretToggles;  // one live OS9Toggle per alias row (Secret column)
 }
 
 - (instancetype)initWithFrame:(NSRect)frame {
@@ -171,6 +176,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         _aliases = @[];
         _aliasW = kAliasW0;
         _colW = [NSMutableArray array];
+        _secretToggles = [NSMutableArray array];
         _autoFitCols = YES;
 
         _header = [[OS9EnvGridHeader alloc] initWithFrame:NSZeroRect];
@@ -230,10 +236,24 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 - (NSRect)envRectAtIndex:(NSInteger)e height:(CGFloat)h {
     return NSMakeRect([self envContentX:e], 0, [self envWidth:e], h);
 }
-- (CGFloat)contentWidth {
+- (CGFloat)trailingX {   // x at start of the trailing column ("+" header + per-row secret toggles)
     CGFloat x = _aliasW;
     for (NSInteger i = 0; i < (NSInteger)_envNames.count; i++) x += [self envWidth:i];
-    return x + kAddEnvW;
+    return x;
+}
+// Width of the secret toggle, sized to carry the label with a tight margin (two knob-cells).
+- (CGFloat)secretToggleW {
+    CGFloat lw = [kSecretLabel sizeWithAttributes:@{NSFontAttributeName : [OS9Theme uiFont]}].width;
+    return (ceil(lw) + 5) * 2;   // ~2.5px label margin each side of the knob -> shorter toggle
+}
+// Trailing column width: the labelled toggle + side padding (also hosts the "+" add-env in the header).
+- (CGFloat)trailingColW { return [self secretToggleW] + 12; }
+- (CGFloat)contentWidth { return [self trailingX] + [self trailingColW]; }
+// Centered OS9Toggle frame for the secret switch in the alias row `row` (body content coords).
+- (NSRect)secretToggleFrameForRow:(NSInteger)row {
+    CGFloat w = [self secretToggleW];
+    CGFloat x = [self trailingX] + ([self trailingColW] - w) / 2;
+    return NSMakeRect(floor(x), floor(row * kRowH + (kRowH - kToggleH) / 2), w, kToggleH);
 }
 - (CGFloat)bodyHeight { return _aliases.count * kRowH + kAddRowH; }
 - (CGFloat)scrollX { return _scroll.contentView.bounds.origin.x; }
@@ -242,7 +262,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 - (void)applyEvenColumnsForWidth:(CGFloat)W {
     NSInteger n = _envNames.count;
     if (n == 0) return;
-    CGFloat avail = W - _aliasW - kAddEnvW;
+    CGFloat avail = W - _aliasW - [self trailingColW];
     CGFloat each = floor(avail / n);
     if (each < kMinColW) each = kMinColW;
     for (NSInteger i = 0; i < n; i++) {
@@ -263,8 +283,44 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     CGFloat docW = MAX([self contentWidth], _scroll.contentView.bounds.size.width);
     CGFloat docH = MAX([self bodyHeight], _scroll.contentView.bounds.size.height);
     _body.frame = NSMakeRect(0, 0, docW, docH);
+    [self layoutSecretToggles];
     [_header setNeedsDisplay:YES];
     [_body setNeedsDisplay:YES];
+}
+
+// Sync the per-row secret toggles (create/remove to match alias count) and position them in the Secret
+// column. Each toggle owns its click/animation and reports back via secretToggleClicked:.
+- (void)layoutSecretToggles {
+    NSInteger n = _aliases.count;
+    while ((NSInteger)_secretToggles.count < n) {
+        OS9Toggle *t = [[OS9Toggle alloc] initWithLabel:kSecretLabel target:self action:@selector(secretToggleClicked:)];
+        [_secretToggles addObject:t];
+        [_body addSubview:t];
+    }
+    while ((NSInteger)_secretToggles.count > n) {
+        [_secretToggles.lastObject removeFromSuperview];
+        [_secretToggles removeLastObject];
+    }
+    for (NSInteger row = 0; row < n; row++) {
+        OS9Toggle *t = _secretToggles[row];
+        t.tag = row;
+        BOOL on = (row < (NSInteger)_secretCache.count) && _secretCache[row].boolValue;
+        if (t.on != on) t.on = on;   // setOn snaps without animation — correct for (re)layout
+        t.frame = [self secretToggleFrameForRow:row];
+    }
+}
+
+- (void)secretToggleClicked:(OS9Toggle *)t {
+    NSInteger row = t.tag;
+    if (row < 0 || row >= (NSInteger)_aliases.count) return;
+    BOOL on = t.on;   // OS9Toggle flips its state BEFORE sending the action
+    self.selectedRow = row;
+    [self.delegate envGrid:self setSecret:on forAlias:_aliases[row]];
+    // Update the cache in place — do NOT reloadData here (it would destroy `t` mid-click).
+    NSMutableArray<NSNumber *> *sc = [_secretCache mutableCopy] ?: [NSMutableArray array];
+    while ((NSInteger)sc.count <= row) [sc addObject:@NO];
+    sc[row] = @(on);
+    _secretCache = sc;
 }
 
 - (void)reloadData {
@@ -278,13 +334,16 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 // the hot path during resize-drag (displayIfNeeded per mouse-move).
 - (void)rebuildCellCache {
     NSMutableArray<NSArray<NSString *> *> *rows = [NSMutableArray arrayWithCapacity:_aliases.count];
+    NSMutableArray<NSNumber *> *secrets = [NSMutableArray arrayWithCapacity:_aliases.count];
     for (NSString *alias in _aliases) {
         NSMutableArray<NSString *> *cols = [NSMutableArray arrayWithCapacity:_envNames.count];
         for (NSString *env in _envNames)
             [cols addObject:([self.delegate envGrid:self valueForAlias:alias env:env] ?: @"")];
         [rows addObject:cols];
+        [secrets addObject:@([self.delegate envGrid:self isSecretForAlias:alias])];
     }
     _cellCache = rows;
+    _secretCache = secrets;
 }
 
 - (void)setEnvNames:(NSArray<NSString *> *)e {
@@ -361,9 +420,11 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         DrawCellText([self displayForEnv:e], txt, fg);
         if (showX) DrawClose([self closeBoxInRect:r], [OS9Theme shadow]);
     }
-    CGFloat addX = _aliasW + dx;
-    for (NSInteger i = 0; i < (NSInteger)_envNames.count; i++) addX += [self envWidth:i];
-    DrawPlus(NSInsetRect(NSMakeRect(addX, 0, kAddEnvW, kHeaderH), 8, 4), [OS9Theme frame]);
+    // Trailing column: "+" add-env in the header, the per-row secret toggles below it (body).
+    CGFloat addX = [self trailingX] + dx;
+    CGFloat trailW = [self trailingColW];
+    [self drawVDivAt:addX height:kHeaderH];
+    DrawPlus(NSInsetRect(NSMakeRect(addX, 0, trailW, kHeaderH), (trailW - kGlyph) / 2, 4), [OS9Theme frame]);
 
     [self drawHDivAt:kHeaderH width:b.size.width];
 }
@@ -387,7 +448,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     [[OS9Theme face] set];
     NSRectFill(NSMakeRect(0, nRows * kRowH, cw, kAddRowH));
 
-    // vertical grid.
+    // vertical grid (alias edge + each env edge; the last env edge is also the trailing column's left edge).
     [self drawVDivAt:_aliasW height:[self bodyHeight]];
     for (NSInteger e = 0; e < nCols; e++)
         [self drawVDivAt:[self envContentX:e] + [self envWidth:e] height:[self bodyHeight]];
@@ -419,6 +480,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
             NSString *val = (rowVals && e < (NSInteger)rowVals.count) ? rowVals[e] : @"";
             DrawCellText(val, NSMakeRect([self envContentX:e], y, [self envWidth:e], kRowH), fg);
         }
+        // The Secret column holds a live OS9Toggle subview (positioned in -layoutSecretToggles).
     }
 
     // "+ alias" row drawn only when dirty reaches it (unchanged by hover/selection -> skipped on 1-row redraw).
@@ -445,14 +507,18 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         CGFloat x0 = [self envContentX:e];
         if (p.x >= x0 && p.x < x0 + [self envWidth:e]) { h.zone = EnvZoneCellValue; h.col = e; break; }
     }
+    if (h.zone == EnvZoneNone) {   // trailing column (holds the secret toggle)
+        CGFloat tx = [self trailingX];
+        if (p.x >= tx && p.x < tx + [self trailingColW]) h.zone = EnvZoneToggleSecret;
+    }
     return h;
 }
 
 - (EnvHit)hitHeader:(NSPoint)p {   // p in content coords
     EnvHit h = {EnvZoneNone, -1, -1};
     if (p.x < _aliasW) return h;
-    CGFloat addX = [self envContentX:_envNames.count];
-    if (p.x >= addX && p.x < addX + kAddEnvW) { h.zone = EnvZoneAddEnv; return h; }
+    CGFloat addX = [self trailingX];   // "+" sits in the trailing column
+    if (p.x >= addX && p.x < addX + [self trailingColW]) { h.zone = EnvZoneAddEnv; return h; }
     for (NSInteger e = 0; e < (NSInteger)_envNames.count; e++) {
         NSRect r = [self envRectAtIndex:e height:kHeaderH];
         if (p.x < NSMinX(r) || p.x >= NSMaxX(r)) continue;
@@ -490,6 +556,10 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         case EnvZoneCellValue:
             self.selectedRow = h.row;
             if (dbl) [self promptEditValueAtRow:h.row col:h.col];
+            break;
+        case EnvZoneToggleSecret:
+            // The live OS9Toggle handles its own click; a click beside it just selects the row.
+            self.selectedRow = h.row;
             break;
         default: self.selectedRow = -1; break;
     }

@@ -76,4 +76,9 @@
 
 // ▾ arrow + divider line for dropdown (method/env) — per dropdown.svg.
 + (void)drawDropdownArrowInRect:(NSRect)r;
+
+// Vintage Mac OS 9 checkmark: a chunky, aliased (pixel-crisp) ✓ stroked inside `r`, in color `c`.
+// Used for selection ticks (dropdown/menu) and the env "secret" checkbox. Drawn for FLIPPED views
+// (top-left origin) — all our self-drawn views are flipped.
++ (void)drawCheckInRect:(NSRect)r color:(NSColor *)c;
 @end

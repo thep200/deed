@@ -2,33 +2,39 @@
 
 namespace core {
 
+namespace {
+// Try to expand a "{{name}}" placeholder starting at tpl[i]. On a match, append the resolved value
+// (or the literal "{{X}}" if the key is missing) to `r` and return the index just past "}}".
+// Returns npos when tpl[i] is not the start of a complete placeholder (caller copies one char).
+size_t tryExpandPlaceholder(const std::string& tpl, size_t i, size_t n,
+                            const std::map<std::string, std::string>& vars, ResolveResult& r) {
+    if (!(i + 1 < n && tpl[i] == '{' && tpl[i + 1] == '{')) return std::string::npos;
+    size_t close = tpl.find("}}", i + 2);
+    if (close == std::string::npos) return std::string::npos;
+    // trim whitespace around the name
+    std::string name = tpl.substr(i + 2, close - (i + 2));
+    size_t a = name.find_first_not_of(" \t");
+    size_t b = name.find_last_not_of(" \t");
+    std::string key = (a == std::string::npos) ? "" : name.substr(a, b - a + 1);
+    auto it = vars.find(key);
+    if (it != vars.end()) {
+        r.text += it->second; // exists (including empty -> "")
+    } else {
+        r.text += tpl.substr(i, close + 2 - i); // keep literal "{{X}}"
+        r.missing.push_back(key);
+    }
+    return close + 2;
+}
+} // namespace
+
 ResolveResult VariableResolver::resolve(const std::string& tpl,
                                         const std::map<std::string, std::string>& vars) {
     ResolveResult r;
     r.text.reserve(tpl.size());
-    size_t i = 0;
     const size_t n = tpl.size();
-    while (i < n) {
-        // find "{{"
-        if (i + 1 < n && tpl[i] == '{' && tpl[i + 1] == '{') {
-            size_t close = tpl.find("}}", i + 2);
-            if (close != std::string::npos) {
-                std::string name = tpl.substr(i + 2, close - (i + 2));
-                // trim whitespace around the name
-                size_t a = name.find_first_not_of(" \t");
-                size_t b = name.find_last_not_of(" \t");
-                std::string key = (a == std::string::npos) ? "" : name.substr(a, b - a + 1);
-                auto it = vars.find(key);
-                if (it != vars.end()) {
-                    r.text += it->second;           // exists (including empty -> "")
-                } else {
-                    r.text += tpl.substr(i, close + 2 - i); // keep literal "{{X}}"
-                    r.missing.push_back(key);
-                }
-                i = close + 2;
-                continue;
-            }
-        }
+    for (size_t i = 0; i < n;) {
+        size_t next = tryExpandPlaceholder(tpl, i, n, vars, r);
+        if (next != std::string::npos) { i = next; continue; }
         r.text += tpl[i++];
     }
     return r;

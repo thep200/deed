@@ -52,45 +52,45 @@ void SseParser::finish(const Emit& emit) {
     dispatch(emit);   // flush a final event that had no terminating blank line
 }
 
+void SseParser::handleDataField(const std::string& value) {
+    if (maxEventBytes_ != 0 && dataBuf_.size() >= maxEventBytes_) {
+        truncated_ = true; // cap hit -> stop accumulating (no OOM)
+        return;
+    }
+    dataBuf_ += value;
+    dataBuf_ += '\n';
+    if (maxEventBytes_ != 0 && dataBuf_.size() > maxEventBytes_) {
+        dataBuf_.resize(maxEventBytes_);
+        truncated_ = true;
+    }
+}
+
+void SseParser::handleRetryField(const std::string& value) {
+    bool allDigit = !value.empty();
+    for (char c : value) if (c < '0' || c > '9') { allDigit = false; break; }
+    if (!allDigit) return;
+    // Clamp to a sane ceiling (M11): a hostile/huge `retry:` must not make the I/O thread sleep for
+    // days (cancel latency) — overflow from stol also lands on the max.
+    try { long v = std::stol(value); retryMs_ = v < 0 ? 0 : (v > 60000 ? 60000 : v); }
+    catch (...) { retryMs_ = 60000; }
+}
+
 void SseParser::onLine(const std::string& line, const Emit& emit) {
     if (line.empty()) { dispatch(emit); return; }   // blank line -> dispatch
     if (line[0] == ':') return;                      // comment / heartbeat -> ignore (idle reset is upstream)
 
     std::size_t colon = line.find(':');
-    std::string field, value;
-    if (colon == std::string::npos) {
-        field = line;                                // field with no value
-    } else {
-        field = line.substr(0, colon);
+    std::string field = (colon == std::string::npos) ? line : line.substr(0, colon);
+    std::string value;
+    if (colon != std::string::npos) {
         value = line.substr(colon + 1);
         if (!value.empty() && value[0] == ' ') value.erase(0, 1);   // strip ONE leading space
     }
 
-    if (field == "event") {
-        eventType_ = value;
-    } else if (field == "data") {
-        if (maxEventBytes_ != 0 && dataBuf_.size() >= maxEventBytes_) {
-            truncated_ = true;                       // cap hit -> stop accumulating (no OOM)
-        } else {
-            dataBuf_ += value;
-            dataBuf_ += '\n';
-            if (maxEventBytes_ != 0 && dataBuf_.size() > maxEventBytes_) {
-                dataBuf_.resize(maxEventBytes_);
-                truncated_ = true;
-            }
-        }
-    } else if (field == "id") {
-        if (value.find('\0') == std::string::npos) lastEventId_ = value;  // empty id is valid
-    } else if (field == "retry") {
-        bool allDigit = !value.empty();
-        for (char c : value) if (c < '0' || c > '9') { allDigit = false; break; }
-        // Clamp to a sane ceiling (M11): a hostile/huge `retry:` must not make the I/O thread sleep for
-        // days (cancel latency) — overflow from stol also lands on the max.
-        if (allDigit) {
-            try { long v = std::stol(value); retryMs_ = v < 0 ? 0 : (v > 60000 ? 60000 : v); }
-            catch (...) { retryMs_ = 60000; }
-        }
-    }
+    if (field == "event") eventType_ = value;
+    else if (field == "data") handleDataField(value);
+    else if (field == "id") { if (value.find('\0') == std::string::npos) lastEventId_ = value; } // empty id valid
+    else if (field == "retry") handleRetryField(value);
     // unknown field -> ignore (spec)
 }
 

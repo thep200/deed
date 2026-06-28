@@ -251,13 +251,13 @@
 
 #pragma mark Tabs
 
-#pragma mark Body dropdown (json/file/form)
+#pragma mark Body dropdown (json/text/xml/file/form)
 
-// Body button display name per current mode: "Body (JSON)" / "Body (FILE)" / "Body (FORM)".
+// Body button display name per current mode: "JSON" / "Text" / "XML" / "File" / "Form".
 - (NSString *)bodyButtonTitle {
     NSString *m = _bodyMode.length ? _bodyMode : @"json";
     for (NSDictionary *d in BodyModeTable()) if ([d[@"mode"] isEqualToString:m]) return d[@"label"];
-    return StrBodyJson;   // text/xml/none -> JSON (keep old behavior)
+    return StrBodyJson;   // none/unknown -> JSON (keep old behavior)
 }
 - (NSInteger)bodyTabIndex { return [_reqTabTitles indexOfObject:StrTabBody]; } // 0 for HTTP, NSNotFound for gRPC
 - (void)updateBodyButtonLabel {
@@ -267,9 +267,10 @@
 }
 // Body template per mode — does NOT wrap a "mode" key (the app holds the mode), but DOES include
 // hint keys so the user knows what to fill in.
-//   json -> raw JSON.   form -> 1 sample key/value entry.   file -> object with a filePath key.
+//   json -> raw JSON.   text -> empty.   xml -> empty <root>.   form -> 1 sample key/value entry.
+//   file -> object with a filePath key.
 static NSString *const kFormBodyTemplate =
-    @"[\n  {\n    \"key\": \"\",\n    \"value\": \"\",\n    \"enabled\": true\n  }\n]";
+    @"[\n  {\n    \"key\": \"\",\n    \"value\": \"\",\n    \"enabled\": 1\n  }\n]";
 static NSString *const kFileBodyTemplate = @"{\n  \"filePath\": \"\"\n}";
 
 // SINGLE SOURCE for the Body dropdown: internal mode <-> option/label/template.
@@ -278,6 +279,8 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     static NSArray *t;
     if (!t) t = @[
         @{@"mode" : @"json",            @"opt" : StrBodyJson, @"label" : StrBodyJson, @"tpl" : @"{}"},
+        @{@"mode" : @"text",            @"opt" : StrBodyText, @"label" : StrBodyText, @"tpl" : @""},
+        @{@"mode" : @"xml",             @"opt" : StrBodyXml,  @"label" : StrBodyXml,  @"tpl" : @"<root>\n</root>"},
         @{@"mode" : @"binary",          @"opt" : StrBodyFile, @"label" : StrBodyFile, @"tpl" : kFileBodyTemplate},
         @{@"mode" : @"form-urlencoded", @"opt" : StrBodyForm, @"label" : StrBodyForm, @"tpl" : kFormBodyTemplate},
     ];

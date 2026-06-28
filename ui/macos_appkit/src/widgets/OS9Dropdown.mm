@@ -133,7 +133,8 @@
         if (hot) { [[NSColor colorWithCalibratedRed:0.2 green:0.2 blue:0.6 alpha:1.0] set]; NSRectFill(row); }
         NSDictionary *attrs = hot ? hi : norm;
         if (i == _selected)
-            [@"✓" drawAtPoint:NSMakePoint(row.origin.x + 7, row.origin.y + (_rowH - 12) / 2) withAttributes:attrs];
+            [OS9Theme drawCheckInRect:NSMakeRect(row.origin.x + 6, row.origin.y + (_rowH - 11) / 2, 11, 11)
+                                color:(hot ? [NSColor whiteColor] : [NSColor blackColor])];
         // Truncate "…" to row width.
         NSDictionary *trAttrs = hot ? hiTr : normTr;
         CGFloat textX = row.origin.x + 22;

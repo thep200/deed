@@ -37,6 +37,8 @@ public:
 
 private:
     void onLine(const std::string& line, const Emit& emit);
+    void handleDataField(const std::string& value); // accumulate `data:` honoring the byte cap
+    void handleRetryField(const std::string& value); // parse + clamp `retry:`
     void dispatch(const Emit& emit);
 
     std::string buf_;          // bytes not yet forming a complete line

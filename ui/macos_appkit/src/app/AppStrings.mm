@@ -86,6 +86,8 @@ NSString *const StrTabConfig = @"Config";
 NSString *const StrBodyJson = @"JSON";
 NSString *const StrBodyFile = @"File";
 NSString *const StrBodyForm = @"Form";
+NSString *const StrBodyText = @"Text";
+NSString *const StrBodyXml = @"XML";
 
 #pragma mark - Config screen titles
 NSString *const StrTitleSettings = @"Settings";

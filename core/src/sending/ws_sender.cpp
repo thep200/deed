@@ -156,48 +156,214 @@ void wsRequestClose(const std::shared_ptr<WsSession>& session, int code, const s
     session->cv.notify_all();
 }
 
-void wsRun(const ResolvedRequest& req, IStreamSink& sink,
-           const std::shared_ptr<WsSession>& session, const std::string& sessionId) {
-    const WsRequest& w = req.model.ws;
-    const WsConfig& cfg = session->cfg;
-    const long long t0 = nowMs();
-    auto offsetMs = [&] { return nowMs() - t0; };
-    std::uint64_t seq = 0, bytes = 0;
+namespace {
 
-    StreamMeta meta;
-    meta.streamId = sessionId;
-    meta.transport = StreamTransport::WebSocket;
-    meta.startedAtEpochMs = nowEpochMs();
+struct WsResult {
+    StreamStatus status = StreamStatus::Ok;
+    int code = 1000;
+    std::string msg;
+    std::uint64_t seq = 0;
+    std::uint64_t bytes = 0;
+};
 
-    auto closeWith = [&](StreamStatus st, int code, const std::string& msg) {
-        StreamEnd end;
-        end.status = st;
-        end.statusCode = code;
-        end.statusMessage = msg;
-        end.totalEvents = seq;
-        end.totalBytes = bytes;
-        end.elapsedMs = offsetMs();
-        sink.onStreamClose(end);
-        session->open.store(false);
-        session->done.store(true);
-    };
+// Drives the post-handshake WebSocket pump loop (SPEC §5): one tick = recv inbound, honor a close
+// request, drain the outbound queue, keepalive-ping, idle-check. Owns the per-session loop state so the
+// six phases stay as small methods. The CURL handle is BORROWED (freed by the caller's RAII guards).
+class WsPump {
+public:
+    WsPump(CURL* curl, curl_socket_t sock, const std::shared_ptr<WsSession>& session,
+           IStreamSink& sink, long long t0)
+        : curl_(curl), sock_(sock), session_(session), sink_(sink), cfg_(session->cfg), t0_(t0),
+          lastPing_(nowMs()), lastActivity_(nowMs()) {}
 
-    if (!curlHasWebSocket()) {
-        sink.onStreamOpen(meta);
-        closeWith(StreamStatus::Error, 0,
-                  "libcurl was built without WebSocket support (need curl[websockets], libcurl >= 8.11)");
-        return;
+    WsResult run() {
+        while (running_) {
+            waitReadable();         // 1) block up to one tick on readability (also paces send/ping)
+            drainInbound();         // 2) recv + reassemble frames; sets the result on close/error
+            if (!running_) break;
+            if (handleCloseRequest()) break;   // 3) UI Disconnect/cancel -> send CLOSE, stop
+            drainOutbound();        // 4) flush queued outbound frames
+            if (!running_) break;
+            keepalive();            // 5) periodic PING (libcurl never pings on its own, §3.1)
+            if (idleExpired()) break;          // 6) no activity for too long -> dead connection
+        }
+        result_.seq = seq_;
+        result_.bytes = bytes_;
+        return result_;
     }
 
-    // RAII (L13): the easy handle + header slist free themselves on EVERY return path, so a future early
-    // return between here and the end can't leak.
-    auto curlDel = [](CURL* c) { if (c) curl_easy_cleanup(c); };
-    std::unique_ptr<CURL, decltype(curlDel)> curlGuard(curl_easy_init(), curlDel);
-    CURL* curl = curlGuard.get();
-    if (!curl) { sink.onStreamOpen(meta); closeWith(StreamStatus::Error, 0, "curl init failed"); return; }
+private:
+    long long offsetMs() const { return nowMs() - t0_; }
 
-    auto slistDel = [](struct curl_slist* s) { if (s) curl_slist_free_all(s); };
-    std::unique_ptr<struct curl_slist, decltype(slistDel)> hdrsGuard(nullptr, slistDel);
+    void fail(int code, std::string msg) {
+        result_.status = StreamStatus::Error;
+        result_.code = code;
+        result_.msg = std::move(msg);
+        running_ = false;
+    }
+
+    // Build + deliver one neutral frame log element (shared by inbound + outbound).
+    void emitData(StreamDirection dir, unsigned flags, const std::uint8_t* data, std::size_t n) {
+        bool binary = (flags & CURLWS_BINARY) != 0;
+        std::string payload = frameEnvelope(dir, binary, offsetMs(), data, n);
+        StreamEvent ev;
+        ev.seq = seq_;
+        ev.direction = dir;
+        ev.frameType = binary ? StreamFrameType::Binary : StreamFrameType::Text;
+        ev.kind = binary ? StreamPayloadKind::Binary : StreamPayloadKind::Text;
+        ev.payload = payload;
+        ev.offsetMs = offsetMs();
+        sink_.onStreamEvent(ev);
+        ++seq_;
+        bytes_ += payload.size();
+    }
+
+    void waitReadable() {
+        if (sock_ == CURL_SOCKET_BAD) return;
+        fd_set rfd;
+        FD_ZERO(&rfd);
+        FD_SET(sock_, &rfd);
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 50 * 1000;   // 50ms tick
+        select((int)sock_ + 1, &rfd, nullptr, nullptr, &tv);
+    }
+
+    // A received CLOSE frame -> record the peer's code/reason and stop.
+    void onInboundClose(const char* buf, std::size_t nread) {
+        int code = 1005;
+        std::string reason;
+        if (nread >= 2) {
+            code = ((unsigned char)buf[0] << 8) | (unsigned char)buf[1];
+            reason.assign(buf + 2, nread - 2);
+        }
+        result_.status = (code == 1000) ? StreamStatus::Ok : StreamStatus::Error;
+        result_.code = code;
+        result_.msg = reason;
+        running_ = false;
+    }
+
+    // Accumulate a data frame (TEXT/BINARY/CONT) until complete, then emit it. Returns false on overflow.
+    bool accumulateFrame(const char* buf, std::size_t nread, unsigned f, const struct curl_ws_frame* m) {
+        if (frameBuf_.empty()) frameFlags_ = f;
+        frameBuf_.append(buf, nread);
+        if (frameBuf_.size() > cfg_.maxFrameBytes) {
+            fail(1009, "inbound frame exceeded WS_MAX_FRAME_BYTES");   // 1009 = message too big
+            return false;
+        }
+        if (m && m->bytesleft == 0) {   // frame fully received -> emit one log element
+            emitData(StreamDirection::Inbound, frameFlags_,
+                     reinterpret_cast<const std::uint8_t*>(frameBuf_.data()), frameBuf_.size());
+            frameBuf_.clear();
+            frameFlags_ = 0;
+        }
+        return true;
+    }
+
+    // Drain all available inbound data (non-blocking; CONNECT_ONLY sockets return CURLE_AGAIN).
+    void drainInbound() {
+        while (running_) {
+            char buf[16384];
+            std::size_t nread = 0;
+            const struct curl_ws_frame* m = nullptr;
+            CURLcode r = curl_ws_recv(curl_, buf, sizeof(buf), &nread, &m);
+            if (r == CURLE_AGAIN) break;
+            if (r != CURLE_OK) {   // closed/broken without a CLOSE frame -> abnormal (1006)
+                fail(1006, std::string("connection lost: ") + curl_easy_strerror(r));
+                break;
+            }
+            lastActivity_ = nowMs();
+            unsigned f = m ? (unsigned)m->flags : 0;
+            if (f & CURLWS_CLOSE) { onInboundClose(buf, nread); break; }
+            if (f & (CURLWS_PING | CURLWS_PONG)) continue;   // libcurl auto-PONGs; count as activity only
+            if (!accumulateFrame(buf, nread, f, m)) break;
+        }
+    }
+
+    // Graceful close requested (UI Disconnect / cancel) -> send CLOSE. Returns true if we should stop.
+    bool handleCloseRequest() {
+        bool doClose = false;
+        int reqCode = 1000;
+        std::string reqReason;
+        {
+            std::lock_guard<std::mutex> lk(session_->mu);
+            if (session_->wantClose) { doClose = true; reqCode = session_->closeCode; reqReason = session_->closeReason; }
+        }
+        if (!doClose) return false;
+        std::vector<std::uint8_t> payload;
+        payload.push_back((std::uint8_t)((reqCode >> 8) & 0xFF));
+        payload.push_back((std::uint8_t)(reqCode & 0xFF));
+        payload.insert(payload.end(), reqReason.begin(), reqReason.end());
+        std::size_t sent = 0;
+        curl_ws_send(curl_, payload.data(), payload.size(), &sent, 0, CURLWS_CLOSE);
+        result_.status = StreamStatus::Ok;
+        result_.code = reqCode;
+        result_.msg = reqReason;
+        return true;
+    }
+
+    // Drain the outbound queue (one frame at a time; CURLE_AGAIN -> retry next tick).
+    void drainOutbound() {
+        while (running_) {
+            OutFrame f;
+            {
+                std::lock_guard<std::mutex> lk(session_->mu);
+                if (session_->out.empty()) break;
+                f = session_->out.front();
+            }
+            std::size_t sent = 0;
+            CURLcode sr = curl_ws_send(curl_, f.data.data(), f.data.size(), &sent, 0, f.flags);
+            if (sr == CURLE_AGAIN) break;   // socket not writable now -> keep queued, try later
+            {
+                std::lock_guard<std::mutex> lk(session_->mu);
+                if (!session_->out.empty()) {
+                    session_->outBytes -= session_->out.front().data.size();
+                    session_->out.pop_front();
+                }
+            }
+            if (sr != CURLE_OK) { fail(1006, std::string("send failed: ") + curl_easy_strerror(sr)); break; }
+            lastActivity_ = nowMs();
+            if (f.flags & (CURLWS_TEXT | CURLWS_BINARY))   // log only data frames (not ping/close)
+                emitData(StreamDirection::Outbound, f.flags, f.data.data(), f.data.size());
+        }
+    }
+
+    void keepalive() {
+        if (cfg_.pingIntervalMs > 0 && nowMs() - lastPing_ >= cfg_.pingIntervalMs) {
+            std::size_t sent = 0;
+            curl_ws_send(curl_, "", 0, &sent, 0, CURLWS_PING);
+            lastPing_ = nowMs();
+        }
+    }
+
+    bool idleExpired() {
+        if (cfg_.idleTimeoutMs > 0 && nowMs() - lastActivity_ >= cfg_.idleTimeoutMs) {
+            result_.status = StreamStatus::Timeout;
+            result_.code = 1006;
+            result_.msg = "idle timeout";
+            return true;
+        }
+        return false;
+    }
+
+    CURL* curl_;
+    curl_socket_t sock_;
+    std::shared_ptr<WsSession> session_;
+    IStreamSink& sink_;
+    const WsConfig& cfg_;
+    long long t0_;
+    long long lastPing_;
+    long long lastActivity_;
+    std::uint64_t seq_ = 0;
+    std::uint64_t bytes_ = 0;
+    std::string frameBuf_;       // inbound reassembly (per frame, until bytesleft==0)
+    unsigned frameFlags_ = 0;
+    bool running_ = true;
+    WsResult result_;
+};
+
+// Build the handshake header list (auth + custom headers + Sec-WebSocket-Protocol). Caller owns the list.
+struct curl_slist* buildWsHandshakeHeaders(const WsRequest& w) {
     struct curl_slist* hdrs = nullptr;
     std::vector<KeyValue> headers = w.headers;
     applyAuthHeaders(w.auth, headers);   // bearer/basic/apikey -> handshake header (no per-message headers)
@@ -209,15 +375,73 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
         for (std::size_t i = 0; i < w.subprotocols.size(); ++i) sp += (i ? ", " : "") + w.subprotocols[i];
         hdrs = curl_slist_append(hdrs, sp.c_str());
     }
-    hdrsGuard.reset(hdrs);   // L13: guard owns the list now (curl_easy_setopt only borrows the pointer)
+    return hdrs;
+}
 
+// Apply the WebSocket handshake options to the easy handle (CONNECT_ONLY=2 -> handshake then hand back).
+void configureWsHandshake(CURL* curl, const WsRequest& w, const WsConfig& cfg, struct curl_slist* hdrs) {
     curl_easy_setopt(curl, CURLOPT_URL, w.url.c_str());
-    curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);             // WebSocket: handshake then hand back control
+    curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
     if (hdrs) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)cfg.connectTimeoutMs);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, cfg.verifyTls ? 1L : 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, cfg.verifyTls ? 2L : 0L);
-    curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);             // small frames not held by Nagle (perf §11)
+    curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);   // small frames not held by Nagle (perf §11)
+}
+
+// Emit the terminal StreamEnd and mark the session closed/done (§3 close contract).
+void wsEmitClose(IStreamSink& sink, const std::shared_ptr<WsSession>& session, const WsResult& r,
+                 long long elapsedMs) {
+    StreamEnd end;
+    end.status = r.status;
+    end.statusCode = r.code;
+    end.statusMessage = r.msg;
+    end.totalEvents = r.seq;
+    end.totalBytes = r.bytes;
+    end.elapsedMs = elapsedMs;
+    sink.onStreamClose(end);
+    session->open.store(false);
+    session->done.store(true);
+}
+
+} // namespace
+
+void wsRun(const ResolvedRequest& req, IStreamSink& sink,
+           const std::shared_ptr<WsSession>& session, const std::string& sessionId) {
+    const WsRequest& w = req.model.ws;
+    const WsConfig& cfg = session->cfg;
+    const long long t0 = nowMs();
+    auto offsetMs = [&] { return nowMs() - t0; };
+
+    StreamMeta meta;
+    meta.streamId = sessionId;
+    meta.transport = StreamTransport::WebSocket;
+    meta.startedAtEpochMs = nowEpochMs();
+
+    if (!curlHasWebSocket()) {
+        sink.onStreamOpen(meta);
+        wsEmitClose(sink, session, WsResult{StreamStatus::Error, 0,
+                    "libcurl was built without WebSocket support (need curl[websockets], libcurl >= 8.11)",
+                    0, 0}, offsetMs());
+        return;
+    }
+
+    // RAII (L13): the easy handle + header slist free themselves on EVERY return path, so a future early
+    // return between here and the end can't leak.
+    auto curlDel = [](CURL* c) { if (c) curl_easy_cleanup(c); };
+    std::unique_ptr<CURL, decltype(curlDel)> curlGuard(curl_easy_init(), curlDel);
+    CURL* curl = curlGuard.get();
+    if (!curl) {
+        sink.onStreamOpen(meta);
+        wsEmitClose(sink, session, WsResult{StreamStatus::Error, 0, "curl init failed", 0, 0}, offsetMs());
+        return;
+    }
+
+    auto slistDel = [](struct curl_slist* s) { if (s) curl_slist_free_all(s); };
+    struct curl_slist* hdrs = buildWsHandshakeHeaders(w);
+    // L13: guard owns the list now (curl_easy_setopt only borrows the pointer).
+    std::unique_ptr<struct curl_slist, decltype(slistDel)> hdrsGuard(hdrs, slistDel);
+    configureWsHandshake(curl, w, cfg, hdrs);
 
     CURLcode rc = curl_easy_perform(curl);                        // handshake
     long httpCode = 0;
@@ -227,7 +451,8 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
     if (rc != CURLE_OK) {
         std::string msg = std::string("WebSocket handshake failed: ") + curl_easy_strerror(rc);
         if (httpCode) msg += " (HTTP " + std::to_string(httpCode) + ")";
-        closeWith(StreamStatus::Error, (int)httpCode, msg);   // curl + hdrs freed by their RAII guards (L13)
+        // curl + hdrs freed by their RAII guards (L13).
+        wsEmitClose(sink, session, WsResult{StreamStatus::Error, (int)httpCode, msg, 0, 0}, offsetMs());
         return;
     }
     session->open.store(true);
@@ -239,179 +464,8 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
     curl_socket_t sock = CURL_SOCKET_BAD;
     curl_easy_getinfo(curl, CURLINFO_ACTIVESOCKET, &sock);
 
-    // Result state filled by the pump.
-    StreamStatus endStatus = StreamStatus::Ok;
-    int endCode = 1000;
-    std::string endMsg;
-
-    std::string frameBuf;       // inbound reassembly (per frame, until bytesleft==0)
-    unsigned frameFlags = 0;
-    long long lastPing = nowMs(), lastActivity = nowMs();
-    bool sentClose = false;
-    bool running = true;
-
-    while (running) {
-        // 1) Wait briefly for readability (also our tick for send/ping). select gives a ~tick even idle.
-        if (sock != CURL_SOCKET_BAD) {
-            fd_set rfd;
-            FD_ZERO(&rfd);
-            FD_SET(sock, &rfd);
-            struct timeval tv;
-            tv.tv_sec = 0;
-            tv.tv_usec = 50 * 1000;   // 50ms tick
-            select((int)sock + 1, &rfd, nullptr, nullptr, &tv);
-        }
-
-        // 2) Drain all available inbound data (non-blocking; CONNECT_ONLY sockets return CURLE_AGAIN).
-        while (running) {
-            char buf[16384];
-            std::size_t nread = 0;
-            const struct curl_ws_frame* m = nullptr;
-            CURLcode r = curl_ws_recv(curl, buf, sizeof(buf), &nread, &m);
-            if (r == CURLE_AGAIN) break;
-            if (r != CURLE_OK) {
-                // Connection closed/broken without a CLOSE frame -> abnormal (1006).
-                endStatus = StreamStatus::Error;
-                endCode = 1006;
-                endMsg = std::string("connection lost: ") + curl_easy_strerror(r);
-                running = false;
-                break;
-            }
-            lastActivity = nowMs();
-            unsigned f = m ? (unsigned)m->flags : 0;
-
-            if (f & CURLWS_CLOSE) {
-                int code = 1005;
-                std::string reason;
-                if (nread >= 2) {
-                    code = ((unsigned char)buf[0] << 8) | (unsigned char)buf[1];
-                    reason.assign(buf + 2, nread - 2);
-                }
-                endStatus = (code == 1000) ? StreamStatus::Ok : StreamStatus::Error;
-                endCode = code;
-                endMsg = reason;
-                running = false;
-                break;
-            }
-            if (f & (CURLWS_PING | CURLWS_PONG)) {
-                continue;   // libcurl auto-PONGs server PINGs; we just count as activity (not shown §5)
-            }
-
-            // Data frame (TEXT/BINARY/CONT): accumulate until the frame completes.
-            if (frameBuf.empty()) frameFlags = f;
-            frameBuf.append(buf, nread);
-            if (frameBuf.size() > cfg.maxFrameBytes) {
-                endStatus = StreamStatus::Error;
-                endCode = 1009;   // message too big
-                endMsg = "inbound frame exceeded WS_MAX_FRAME_BYTES";
-                running = false;
-                break;
-            }
-            if (m && m->bytesleft == 0) {   // frame fully received -> emit one log element
-                bool binary = (frameFlags & CURLWS_BINARY) != 0;
-                std::string payload = frameEnvelope(StreamDirection::Inbound, binary, offsetMs(),
-                                                    reinterpret_cast<const std::uint8_t*>(frameBuf.data()),
-                                                    frameBuf.size());
-                StreamEvent ev;
-                ev.seq = seq;
-                ev.direction = StreamDirection::Inbound;
-                ev.frameType = binary ? StreamFrameType::Binary : StreamFrameType::Text;
-                ev.kind = binary ? StreamPayloadKind::Binary : StreamPayloadKind::Text;
-                ev.payload = payload;
-                ev.offsetMs = offsetMs();
-                sink.onStreamEvent(ev);
-                ++seq;
-                bytes += payload.size();
-                frameBuf.clear();
-                frameFlags = 0;
-            }
-        }
-        if (!running) break;
-
-        // 3) Graceful close requested (UI Disconnect / cancel) -> send CLOSE, then stop.
-        bool doClose = false;
-        int reqCode = 1000;
-        std::string reqReason;
-        {
-            std::lock_guard<std::mutex> lk(session->mu);
-            if (session->wantClose) { doClose = true; reqCode = session->closeCode; reqReason = session->closeReason; }
-        }
-        if (doClose) {
-            std::vector<std::uint8_t> payload;
-            payload.push_back((std::uint8_t)((reqCode >> 8) & 0xFF));
-            payload.push_back((std::uint8_t)(reqCode & 0xFF));
-            payload.insert(payload.end(), reqReason.begin(), reqReason.end());
-            std::size_t sent = 0;
-            curl_ws_send(curl, payload.data(), payload.size(), &sent, 0, CURLWS_CLOSE);
-            sentClose = true;
-            endStatus = StreamStatus::Ok;
-            endCode = reqCode;
-            endMsg = reqReason;
-            break;
-        }
-
-        // 4) Drain outbound queue (one frame at a time; CURLE_AGAIN -> retry next tick).
-        while (running) {
-            OutFrame f;
-            {
-                std::lock_guard<std::mutex> lk(session->mu);
-                if (session->out.empty()) break;
-                f = session->out.front();
-            }
-            std::size_t sent = 0;
-            CURLcode sr = curl_ws_send(curl, f.data.data(), f.data.size(), &sent, 0, f.flags);
-            if (sr == CURLE_AGAIN) break;   // socket not writable now -> keep queued, try later
-            {
-                std::lock_guard<std::mutex> lk(session->mu);
-                if (!session->out.empty()) {
-                    session->outBytes -= session->out.front().data.size();
-                    session->out.pop_front();
-                }
-            }
-            if (sr != CURLE_OK) {
-                endStatus = StreamStatus::Error;
-                endCode = 1006;
-                endMsg = std::string("send failed: ") + curl_easy_strerror(sr);
-                running = false;
-                break;
-            }
-            lastActivity = nowMs();
-            bool binary = (f.flags & CURLWS_BINARY) != 0;
-            if (f.flags & (CURLWS_TEXT | CURLWS_BINARY)) {   // log only data frames (not ping/close)
-                std::string payload = frameEnvelope(StreamDirection::Outbound, binary, offsetMs(),
-                                                    f.data.data(), f.data.size());
-                StreamEvent ev;
-                ev.seq = seq;
-                ev.direction = StreamDirection::Outbound;
-                ev.frameType = binary ? StreamFrameType::Binary : StreamFrameType::Text;
-                ev.kind = binary ? StreamPayloadKind::Binary : StreamPayloadKind::Text;
-                ev.payload = payload;
-                ev.offsetMs = offsetMs();
-                sink.onStreamEvent(ev);
-                ++seq;
-                bytes += payload.size();
-            }
-        }
-        if (!running) break;
-
-        // 5) Keepalive PING (libcurl never pings on its own, §3.1).
-        if (cfg.pingIntervalMs > 0 && nowMs() - lastPing >= cfg.pingIntervalMs) {
-            std::size_t sent = 0;
-            curl_ws_send(curl, "", 0, &sent, 0, CURLWS_PING);
-            lastPing = nowMs();
-        }
-
-        // 6) Idle timeout -> dead connection.
-        if (cfg.idleTimeoutMs > 0 && nowMs() - lastActivity >= cfg.idleTimeoutMs) {
-            endStatus = StreamStatus::Timeout;
-            endCode = 1006;
-            endMsg = "idle timeout";
-            break;
-        }
-    }
-
-    (void)sentClose;
-    closeWith(endStatus, endCode, endMsg);   // curl + hdrs freed by their RAII guards on return (L13)
+    WsResult res = WsPump(curl, sock, session, sink, t0).run();
+    wsEmitClose(sink, session, res, offsetMs());   // curl + hdrs freed by their RAII guards on return (L13)
 }
 
 } // namespace core

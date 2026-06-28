@@ -246,7 +246,9 @@ static const CGFloat kFieldH = 22;
     NSRect mb = message.length ? [self measureMessage:message width:contentW - 2 * kPad] : NSZeroRect;
     CGFloat msgH = message.length ? MAX(16, ceil(mb.size.height)) : 0;
 
-    CGFloat contentH = topInset + (msgH ? msgH + kBtnGap : 0) + kFieldH + 4 + 16 /*err*/ + kPad + kBtnH + kPad;
+    // Error line uses the dialog's UI font (was a small fixed 10pt) -> size the row to fit it.
+    CGFloat errH = ceil([[OS9Theme uiFont] ascender] - [[OS9Theme uiFont] descender]) + 4;
+    CGFloat contentH = topInset + (msgH ? msgH + kBtnGap : 0) + kFieldH + 4 + errH + kPad + kBtnH + kPad;
     [self buildWindowWidth:contentW height:contentH movable:YES title:title icon:OS9AlertNone];
 
     if (msgH) {
@@ -275,9 +277,8 @@ static const CGFloat kFieldH = 22;
     [_view addSubview:fieldInset];
     y += kFieldH + 4;
 
-    _errorLabel = [self labelWithText:@"" frame:NSMakeRect(kPad, y, contentW - 2 * kPad, 16)];
-    _errorLabel.textColor = [self errorColor];
-    _errorLabel.font = [OS9Theme uiFontOfSize:10 bold:NO];
+    _errorLabel = [self labelWithText:@"" frame:NSMakeRect(kPad, y, contentW - 2 * kPad, errH)];
+    _errorLabel.textColor = [self errorColor];   // font = uiFont (set by labelWithText:), matching the dialog body
     _errorLabel.hidden = YES;
     [_view addSubview:_errorLabel];
 

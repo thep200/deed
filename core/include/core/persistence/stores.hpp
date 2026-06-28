@@ -71,6 +71,7 @@ private:
     mutable bool idIndexBuilt_ = false;
     void buildIdIndexLocked() const;     // rebuild idIndex_ (call WHILE holding idMu_)
     void invalidateIdIndex() const;      // mark for rebuild (after mutation)
+    bool migrateOneFile(const std::string& relPath) const;  // rename one legacy file to embed its id
 };
 
 // SessionStore — app-state (.session/session.json), NOT git-versioned.

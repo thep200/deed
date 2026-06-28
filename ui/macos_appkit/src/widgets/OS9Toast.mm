@@ -51,12 +51,18 @@ static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClo
     [[self accentColor] set];
     [bp stroke];
 
-    // status icon on the left (bold)
-    NSDictionary *ga = @{NSFontAttributeName : [OS9Theme uiFontOfSize:13 bold:YES],
-                         NSForegroundColorAttributeName : [NSColor blackColor]};
-    NSSize gs = [[self glyph] sizeWithAttributes:ga];
-    [[self glyph] drawAtPoint:NSMakePoint(kToastPadL + (kToastIcon - gs.width) / 2,
-                                          (body.size.height - gs.height) / 2) withAttributes:ga];
+    // status icon on the left. Success (kind 1) uses the vintage Platinum check; others a bold glyph.
+    if (_kind == 1) {
+        CGFloat s = 13;
+        [OS9Theme drawCheckInRect:NSMakeRect(kToastPadL + (kToastIcon - s) / 2, (body.size.height - s) / 2, s, s)
+                            color:[NSColor blackColor]];
+    } else {
+        NSDictionary *ga = @{NSFontAttributeName : [OS9Theme uiFontOfSize:13 bold:YES],
+                             NSForegroundColorAttributeName : [NSColor blackColor]};
+        NSSize gs = [[self glyph] sizeWithAttributes:ga];
+        [[self glyph] drawAtPoint:NSMakePoint(kToastPadL + (kToastIcon - gs.width) / 2,
+                                              (body.size.height - gs.height) / 2) withAttributes:ga];
+    }
     // text (truncate with … if too long) — shared paragraph style
     NSDictionary *ta = @{NSFontAttributeName : [OS9Toast textFont],
                          NSForegroundColorAttributeName : [NSColor blackColor],

@@ -13,7 +13,7 @@ namespace core {
 // adapter must implement them (a no-op is fine if the adapter never streams).
 class IUiDelegate : public IStreamSink {
 public:
-    virtual ~IUiDelegate() = default;
+    ~IUiDelegate() override = default;
 
     // Optional for POC — upload/download progress.
     virtual void onProgress(RequestHandle, const Progress&) {}

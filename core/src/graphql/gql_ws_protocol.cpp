@@ -53,63 +53,58 @@ void GraphQlWsProtocol::onOpen() {
     sendRaw_(init.dump());
 }
 
+void GraphQlWsProtocol::sendSubscribe() {
+    // subscribe with the operation. payload = {query, variables, operationName}.
+    json sub;
+    sub["id"] = id_;
+    sub["type"] = tSubscribe();
+    json payload;
+    payload["query"] = req_.query;
+    try { payload["variables"] = json::parse(req_.variablesJson.empty() ? "{}" : req_.variablesJson); }
+    catch (...) { payload["variables"] = json::object(); }
+    if (!req_.operationName.empty()) payload["operationName"] = req_.operationName;
+    sub["payload"] = payload;
+    sendRaw_(sub.dump());
+}
+
+void GraphQlWsProtocol::emitDataPayload(const std::string& payloadJson) {
+    StreamEvent ev;
+    ev.seq = seq_++;
+    ev.direction = StreamDirection::Inbound;
+    ev.frameType = StreamFrameType::Message;
+    ev.kind = StreamPayloadKind::Json;
+    ev.payload = payloadJson;
+    if (sink_) sink_->onStreamEvent(ev);
+}
+
 void GraphQlWsProtocol::onFrame(const std::string& text) {
     if (closed_) return;
     json msg;
     try { msg = json::parse(text); } catch (...) { return; }   // ignore non-JSON / partial
     std::string type = msg.value("type", "");
+    auto payloadDump = [&](const char* def) {
+        return msg.contains("payload") ? msg["payload"].dump() : std::string(def);
+    };
 
     if (type == "connection_ack") {
         acked_ = true;
-        // subscribe with the operation. payload = {query, variables, operationName}.
-        json sub;
-        sub["id"] = id_;
-        sub["type"] = tSubscribe();
-        json payload;
-        payload["query"] = req_.query;
-        try { payload["variables"] = json::parse(req_.variablesJson.empty() ? "{}" : req_.variablesJson); }
-        catch (...) { payload["variables"] = json::object(); }
-        if (!req_.operationName.empty()) payload["operationName"] = req_.operationName;
-        sub["payload"] = payload;
-        sendRaw_(sub.dump());
-        return;
-    }
-    if (type == "ping") {                       // keepalive -> pong (modern); legacy "ka" needs no reply
+        sendSubscribe();
+    } else if (type == "ping") {                // keepalive -> pong (modern); legacy "ka" needs no reply
         json pong; pong["type"] = "pong";
         sendRaw_(pong.dump());
-        return;
-    }
-    if (type == "pong" || type == "ka") return;
-
-    // A result for our subscription: modern "next" | legacy "data". payload = ExecutionResult {data,errors}.
-    if (type == "next" || type == "data") {
-        if (msg.value("id", "") != id_) return;
-        std::string payload = msg.contains("payload") ? msg["payload"].dump() : std::string("null");
-        StreamEvent ev;
-        ev.seq = seq_++;
-        ev.direction = StreamDirection::Inbound;
-        ev.frameType = StreamFrameType::Message;
-        ev.kind = StreamPayloadKind::Json;
-        ev.payload = payload;
-        if (sink_) sink_->onStreamEvent(ev);
-        return;
-    }
-    if (type == "error") {                      // subscribe-level error: payload = [GraphQLError]
-        std::string detail = msg.contains("payload") ? msg["payload"].dump() : std::string();
-        closeOnce(StreamStatus::Error, 0, detail);
-        return;
-    }
-    if (type == "complete") {                   // server finished this subscription
+    } else if (type == "pong" || type == "ka") {
+        // no-op
+    } else if (type == "next" || type == "data") {
+        // A result for our subscription. payload = ExecutionResult {data,errors}.
+        if (msg.value("id", "") == id_) emitDataPayload(payloadDump("null"));
+    } else if (type == "error") {              // subscribe-level error: payload = [GraphQLError]
+        closeOnce(StreamStatus::Error, 0, payloadDump(""));
+    } else if (type == "complete") {           // server finished this subscription
         // L9: only a complete carrying OUR id closes us. A missing id is malformed per graphql-transport-ws
         // and must NOT terminate the subscription (was a premature Ok close).
-        if (msg.value("id", "") != id_) return;
-        closeOnce(StreamStatus::Ok, 1000, "");
-        return;
-    }
-    if (type == "connection_error") {
-        std::string detail = msg.contains("payload") ? msg["payload"].dump() : std::string();
-        closeOnce(StreamStatus::Error, 0, detail);
-        return;
+        if (msg.value("id", "") == id_) closeOnce(StreamStatus::Ok, 1000, "");
+    } else if (type == "connection_error") {
+        closeOnce(StreamStatus::Error, 0, payloadDump(""));
     }
     // unknown type -> ignore
 }

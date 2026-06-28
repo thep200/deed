@@ -1,7 +1,5 @@
 #include "app/engine_impl.hpp"   // Engine::Impl + cache-config helpers (split per SPEC_refactor §4.1)
 
-#include <algorithm>
-#include <chrono>
 #include <map>
 #include <set>
 #include <string>
@@ -13,7 +11,6 @@
 #include "core/variables/variable_resolver.hpp"
 #include "graphql/graphql.hpp"
 #include "sending/grpc_descriptors.hpp"
-#include "codec/json_codec.hpp"
 
 namespace core {
 
@@ -94,20 +91,23 @@ std::map<std::string, std::string> Engine::activeVars() const {
     return *activeVarsSnapshot();   // public API: one copy (callers that need a mutable map)
 }
 
+// Set key=value in an ordered (key,value) list: override in place if present (keeping first position),
+// else append. Used to merge env keys so the active env wins the value but order is stable.
+static void upsertVar(std::vector<std::pair<std::string, std::string>>& vars,
+                      const std::string& key, const std::string& value) {
+    for (auto& p : vars)
+        if (p.first == key) { p.second = value; return; }
+    vars.emplace_back(key, value);
+}
+
 std::vector<std::pair<std::string, std::string>> Engine::activeVarsOrdered() const {
     std::string active = impl_->session.getActiveEnv();
     std::vector<std::pair<std::string, std::string>> vars;
     auto merge = [&](const std::string& name) {
         try {
             Environment e = impl_->environments.load(name);
-            for (const auto& k : e.keys) {
-                if (!k.enabled) continue;
-                // Same key in a later env -> override value, keep first position (active wins value).
-                auto it = std::find_if(vars.begin(), vars.end(),
-                                       [&](const auto& p) { return p.first == k.key; });
-                if (it != vars.end()) it->second = k.value;
-                else vars.emplace_back(k.key, k.value);
-            }
+            for (const auto& k : e.keys)
+                if (k.enabled) upsertVar(vars, k.key, k.value);
         } catch (...) { /* env does not exist -> skip */ }
     };
     if (!active.empty()) merge(active);      // no special base env: vars come only from the active env
@@ -273,6 +273,21 @@ std::vector<GrpcMethodInfo> Engine::listGrpcMethods(const GrpcRequest& grpc,
     return grpcdesc::listMethods(ctx);
 }
 
+// Worker-thread body for one unary send: deliver an immediate error, or run the sender and translate any
+// exception into onError. delegate may be null (owning window already gone).
+static void runSend(RequestHandle handle, IUiDelegate* delegate, IRequestSender* sender,
+                    const std::shared_ptr<ResolvedRequest>& rr,
+                    const std::shared_ptr<ApiError>& immediateError,
+                    const std::shared_ptr<CancelToken>& cancel) {
+    if (!delegate) return;
+    if (immediateError) { delegate->onError(handle, *immediateError); return; }
+    try {
+        sender->send(*rr, handle, *delegate, cancel);
+    } catch (const std::exception& e) {
+        delegate->onError(handle, ApiError{ErrorKind::Unknown, e.what()});
+    }
+}
+
 RequestHandle Engine::send(const RequestModel& model, std::shared_ptr<IUiDelegate> delegate) {
     RequestHandle handle = impl_->nextHandle.fetch_add(1);
     auto cancel = std::make_shared<CancelToken>();
@@ -307,17 +322,7 @@ RequestHandle Engine::send(const RequestModel& model, std::shared_ptr<IUiDelegat
     // whole call even if the owning window closes), inflight is a shared_ptr, the sender outlives the worker
     // (drained/joined in ~Impl before the registry destructs).
     auto task = [handle, delegate, cancel, inflight, sender, rr, immediateError]() {
-        if (delegate) {
-            if (immediateError) {
-                delegate->onError(handle, *immediateError);
-            } else {
-                try {
-                    sender->send(*rr, handle, *delegate, cancel);
-                } catch (const std::exception& e) {
-                    delegate->onError(handle, ApiError{ErrorKind::Unknown, e.what()});
-                }
-            }
-        }
+        runSend(handle, delegate.get(), sender, rr, immediateError, cancel);
         std::lock_guard<std::mutex> lk(inflight->mu);
         inflight->map.erase(handle);
     };
@@ -431,23 +436,52 @@ void Engine::cancelStream(const StreamHandle& h) {
 
 // --- Duplex session (SPEC_websocket §4) ---
 
-SessionHandle Engine::openSession(const RequestModel& model, std::shared_ptr<IStreamSink> inbound) {
-    SessionHandle h;
-    if (!inbound) return h;
-
-    // Build WS config: .env limits (0 -> WsSender default) + TLS verify from AppConfig.
+// Build the WS config: .env limits (0 -> WsSender default) overlaid with the per-request Config tab
+// (TLS verify + idle timeout).
+static WsConfig buildWsConfig(const WsLimits& wl, const RequestModel& model) {
     WsConfig cfg;
-    const WsLimits& wl = impl_->wsLimits;
     if (wl.pingIntervalMs > 0) cfg.pingIntervalMs = wl.pingIntervalMs;
     if (wl.idleTimeoutMs > 0) cfg.idleTimeoutMs = wl.idleTimeoutMs;
     if (wl.closeTimeoutMs > 0) cfg.closeTimeoutMs = wl.closeTimeoutMs;
     if (wl.maxFrameBytes > 0) cfg.maxFrameBytes = static_cast<std::uint64_t>(wl.maxFrameBytes);
     if (wl.sendQueueMaxFrames > 0) cfg.sendQueueMaxFrames = static_cast<std::size_t>(wl.sendQueueMaxFrames);
     if (wl.sendQueueMaxBytes > 0) cfg.sendQueueMaxBytes = static_cast<std::uint64_t>(wl.sendQueueMaxBytes);
-    // Per-request Config tab drives TLS verify + idle timeout for this WebSocket.
     cfg.verifyTls = model.config.tls;
     if (model.config.timeoutMs > 0) cfg.idleTimeoutMs = model.config.timeoutMs;
+    return cfg;
+}
 
+// Open + immediately close a stream with an error (used when a session can't start). §3 close contract.
+static void emitSessionError(IStreamSink& inbound, const std::string& sid, const std::string& msg) {
+    inbound.onStreamOpen(StreamMeta{sid, StreamTransport::WebSocket, {}, 0});
+    StreamEnd end;
+    end.status = StreamStatus::Error;
+    end.statusMessage = msg;
+    inbound.onStreamClose(end);
+}
+
+// Worker-thread body for one WebSocket session: deliver a resolve error, or run the pump; translate any
+// exception into a terminal error close.
+static void runWsSession(const std::shared_ptr<ResolvedRequest>& rr,
+                         const std::shared_ptr<IStreamSink>& inbound,
+                         const std::shared_ptr<WsSession>& session, const std::string& sid,
+                         const std::shared_ptr<std::string>& immediateError) {
+    try {
+        if (immediateError) emitSessionError(*inbound, sid, *immediateError);
+        else wsRun(*rr, *inbound, session, sid);
+    } catch (const std::exception& e) {
+        StreamEnd end;
+        end.status = StreamStatus::Error;
+        end.statusMessage = e.what();
+        inbound->onStreamClose(end);
+    }
+}
+
+SessionHandle Engine::openSession(const RequestModel& model, std::shared_ptr<IStreamSink> inbound) {
+    SessionHandle h;
+    if (!inbound) return h;
+
+    WsConfig cfg = buildWsConfig(impl_->wsLimits, model);
     h.sessionId = "ws-" + std::to_string(impl_->nextSessionId.fetch_add(1));
     auto session = wsMakeSession(cfg);
     h.channel = wsMakeChannel(session);
@@ -467,29 +501,12 @@ SessionHandle Engine::openSession(const RequestModel& model, std::shared_ptr<ISt
     // Sessions run on a DEDICATED thread (H1b) and the sink is held by shared_ptr (C1). On shutdown ~Impl
     // calls wsRequestClose on every live session then drains these threads (H2/M6).
     auto task = [rr, inbound, session, sid, sessions, immediateError]() {
-        try {
-            if (immediateError) {
-                inbound->onStreamOpen(StreamMeta{sid, StreamTransport::WebSocket, {}, 0});
-                StreamEnd end;
-                end.status = StreamStatus::Error;
-                end.statusMessage = *immediateError;
-                inbound->onStreamClose(end);
-            } else {
-                wsRun(*rr, *inbound, session, sid);
-            }
-        } catch (const std::exception& e) {
-            StreamEnd end;
-            end.status = StreamStatus::Error;
-            end.statusMessage = e.what();
-            inbound->onStreamClose(end);
-        }
+        runWsSession(rr, inbound, session, sid, immediateError);
         std::lock_guard<std::mutex> lk(sessions->mu);
         sessions->map.erase(sid);
     };
     if (!impl_->spawnTracked(std::move(task))) {
-        inbound->onStreamOpen(StreamMeta{sid, StreamTransport::WebSocket, {}, 0});
-        StreamEnd end; end.status = StreamStatus::Error; end.statusMessage = "engine shutting down";
-        inbound->onStreamClose(end);
+        emitSessionError(*inbound, sid, "engine shutting down");
         std::lock_guard<std::mutex> lk(sessions->mu);
         sessions->map.erase(sid);
     }

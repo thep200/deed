@@ -97,6 +97,179 @@ void applyAuthHeader(HttpRequest& h, const std::string& rawValue) {
     }
 }
 
+void pushHeader(HttpRequest& h, const char* key, const std::string& value) {
+    KeyValue kv; kv.enabled = true; kv.key = key; kv.value = value;
+    h.headers.push_back(kv);
+}
+
+// One -F/--form field: "key=value" (value "@path" -> file part, else text part).
+void addMultipart(HttpRequest& h, const std::string& f) {
+    size_t eq = f.find('=');
+    MultipartPart p;
+    p.key = eq == std::string::npos ? f : f.substr(0, eq);
+    std::string v = eq == std::string::npos ? "" : f.substr(eq + 1);
+    if (!v.empty() && v.front() == '@') { p.type = "file"; p.filePath = v.substr(1); }
+    else { p.type = "text"; p.value = v; }
+    h.body.multipart.push_back(p);
+    h.body.mode = "multipart";
+}
+
+// Split "a=b&c=d" into KeyValue pairs (value empty when '=' is missing). Empty input -> empty vector.
+std::vector<KeyValue> splitKvPairs(const std::string& joined) {
+    std::vector<KeyValue> out;
+    size_t pos = 0;
+    while (pos < joined.size()) {
+        size_t amp = joined.find('&', pos);
+        std::string seg = joined.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
+        size_t eq = seg.find('=');
+        KeyValue kv;
+        kv.key = eq == std::string::npos ? seg : seg.substr(0, eq);
+        kv.value = eq == std::string::npos ? "" : seg.substr(eq + 1);
+        out.push_back(kv);
+        if (amp == std::string::npos) break;
+        pos = amp + 1;
+    }
+    return out;
+}
+
+// Mutable accumulators threaded through the per-token handlers.
+struct CurlParseState {
+    HttpRequest& h;
+    ImportResult& res;
+    std::vector<std::string> dataParts;   // -d / --data
+    std::vector<KeyValue> urlEncodeParts; // --data-urlencode
+    bool getStyle = false;                // -G
+    bool explicitMethod = false;
+    std::string contentType;
+};
+
+// curl flags that consume the FOLLOWING token as their value (unless given inline as --flag=value).
+bool curlFlagTakesValue(const std::string& flag) {
+    return flag == "-X" || flag == "--request" || flag == "-H" || flag == "--header" ||
+           flag == "-u" || flag == "--user" || flag == "--data-binary" ||
+           flag == "-d" || flag == "--data" || flag == "--data-raw" || flag == "--data-ascii" ||
+           flag == "-A" || flag == "--user-agent" || flag == "-e" || flag == "--referer" ||
+           flag == "-b" || flag == "--cookie" || flag == "-m" || flag == "--max-time" ||
+           flag == "--connect-timeout" || flag == "--data-urlencode" || flag == "-F" || flag == "--form" ||
+           flag == "--url" || flag == "-o" || flag == "--output";
+}
+
+// output/log flags with no effect on the request model (any value is already consumed before dispatch).
+bool isIgnoredCurlFlag(const std::string& flag) {
+    return flag == "-s" || flag == "--silent" || flag == "-i" || flag == "--include" ||
+           flag == "-v" || flag == "--verbose" || flag == "-#" || flag == "--progress-bar" ||
+           flag == "-o" || flag == "--output" || flag == "-O" || flag == "--remote-name";
+}
+
+// Each handler returns true if it recognized `flag`. Grouped to keep every chain small.
+bool curlAuthMethodFlag(const std::string& flag, const std::string& value, CurlParseState& st) {
+    HttpRequest& h = st.h;
+    if (flag == "-X" || flag == "--request") { h.method = value; st.explicitMethod = true; }
+    else if (flag == "-I" || flag == "--head") { h.method = "HEAD"; st.explicitMethod = true; }
+    else if (flag == "-u" || flag == "--user") {
+        size_t c = value.find(':');
+        h.auth.type = "basic";
+        h.auth.basicUsername = c == std::string::npos ? value : value.substr(0, c);
+        h.auth.basicPassword = c == std::string::npos ? "" : value.substr(c + 1);
+    } else return false;
+    return true;
+}
+
+bool curlHeaderFlag(const std::string& flag, const std::string& value, CurlParseState& st) {
+    HttpRequest& h = st.h;
+    if (flag == "-H" || flag == "--header") {
+        KeyValue kv = parseHeader(value);
+        std::string lk = lower(kv.key);
+        if (lk == "content-type") st.contentType = lower(kv.value);
+        if (lk == "authorization") applyAuthHeader(h, kv.value);   // -> Auth tab (not the headers list)
+        else h.headers.push_back(kv);
+    } else if (flag == "-A" || flag == "--user-agent") pushHeader(h, "User-Agent", value);
+    else if (flag == "-e" || flag == "--referer") pushHeader(h, "Referer", value);
+    else if (flag == "-b" || flag == "--cookie") pushHeader(h, "Cookie", value);
+    else if (flag == "--compressed") pushHeader(h, "Accept-Encoding", "gzip, deflate");
+    else return false;
+    return true;
+}
+
+bool curlDataFlag(const std::string& flag, const std::string& value, CurlParseState& st) {
+    HttpRequest& h = st.h;
+    if (flag == "--data-binary") {
+        if (!value.empty() && value.front() == '@') { h.body.mode = "binary"; h.body.binaryFilePath = value.substr(1); }
+        else st.dataParts.push_back(value);
+    } else if (flag == "-d" || flag == "--data" || flag == "--data-raw" || flag == "--data-ascii") {
+        st.dataParts.push_back(value);
+    } else if (flag == "--data-urlencode") {
+        size_t eq = value.find('=');
+        KeyValue kv;
+        if (eq == std::string::npos) kv.value = value;
+        else { kv.key = value.substr(0, eq); kv.value = value.substr(eq + 1); }
+        st.urlEncodeParts.push_back(kv);
+    } else if (flag == "-F" || flag == "--form") {
+        addMultipart(h, value);
+    } else return false;
+    return true;
+}
+
+bool curlOptionFlag(const std::string& flag, const std::string& value, CurlParseState& st) {
+    HttpRequest& h = st.h;
+    if (flag == "-G" || flag == "--get") st.getStyle = true;
+    else if (flag == "-L" || flag == "--location") { h.settings.followRedirects = true; h.settings.followRedirectsSet = true; }
+    else if (flag == "-k" || flag == "--insecure") { h.settings.verifyTls = false; h.settings.verifyTlsSet = true; }
+    else if (flag == "--url") h.url = value;
+    else if (flag == "-m" || flag == "--max-time" || flag == "--connect-timeout") {
+        try { h.settings.timeoutMs = (int)(std::stod(value) * 1000); h.settings.timeoutMsSet = true; } catch (...) {}
+    } else if (isIgnoredCurlFlag(flag)) {
+        // no effect on the request model
+    } else return false;
+    return true;
+}
+
+// Process one token: split an inline --flag=value, fetch a value for value-flags, then dispatch.
+void applyCurlToken(const std::vector<std::string>& tokens, size_t& i, CurlParseState& st) {
+    const std::string& tk = tokens[i];
+    std::string flag = tk;
+    std::string value;
+    bool hasInline = false; // M14: track presence, not emptiness (so `--data=` -> empty value, not next token)
+    if (tk.rfind("--", 0) == 0) {
+        size_t eq = tk.find('=');
+        if (eq != std::string::npos) { flag = tk.substr(0, eq); value = tk.substr(eq + 1); hasInline = true; }
+    }
+    if (!hasInline && curlFlagTakesValue(flag))
+        value = (i + 1 < tokens.size()) ? tokens[++i] : "";
+
+    if (curlAuthMethodFlag(flag, value, st)) return;
+    if (curlHeaderFlag(flag, value, st)) return;
+    if (curlDataFlag(flag, value, st)) return;
+    if (curlOptionFlag(flag, value, st)) return;
+
+    if (!tk.empty() && tk[0] == '-') st.res.unknown.push_back(tk); // unknown flag
+    else if (st.h.url.empty()) st.h.url = tk;                      // first bare token = URL
+    else st.res.unknown.push_back(tk);
+}
+
+// Merge collected -d/--data (and --data-urlencode) into the request body or query (for -G).
+void applyCurlData(CurlParseState& st) {
+    HttpRequest& h = st.h;
+    if (!st.dataParts.empty()) {
+        std::string joined;
+        for (size_t i = 0; i < st.dataParts.size(); ++i) { if (i) joined += "&"; joined += st.dataParts[i]; }
+        if (st.getStyle) {
+            for (auto& kv : splitKvPairs(joined)) h.params.push_back(kv);     // -G: data -> query params
+        } else if (st.contentType.find("application/x-www-form-urlencoded") != std::string::npos) {
+            h.body.mode = "form-urlencoded";
+            for (auto& kv : splitKvPairs(joined)) h.body.formUrlEncoded.push_back(kv);
+        } else if (st.contentType.find("application/json") != std::string::npos || isJsonLike(joined)) {
+            h.body.mode = "json"; h.body.json = joined;
+        } else {
+            h.body.mode = "text"; h.body.text = joined;
+        }
+    }
+    if (!st.urlEncodeParts.empty() && h.body.mode != "form-urlencoded") {
+        h.body.mode = "form-urlencoded";
+        for (auto& kv : st.urlEncodeParts) h.body.formUrlEncoded.push_back(kv);
+    }
+}
+
 } // namespace
 
 bool CurlImporter::canHandle(const std::string& input) const {
@@ -117,155 +290,12 @@ ImportResult CurlImporter::parse(const std::string& input) const {
     m.name = "Imported cURL";
     HttpRequest& h = m.http;
 
-    std::vector<std::string> dataParts;     // -d / --data
-    std::vector<KeyValue> urlEncodeParts;    // --data-urlencode
-    bool getStyle = false;                   // -G
-    bool explicitMethod = false;
-    std::string contentType;
-
-    auto nextArg = [&](size_t& i) -> std::string {
-        if (i + 1 < tokens.size()) return tokens[++i];
-        return "";
-    };
-
-    for (size_t i = 1; i < tokens.size(); ++i) {
-        const std::string& tk = tokens[i];
-        std::string flag = tk;
-        std::string inlineVal;
-        bool hasInline = false;   // M14: track presence, not emptiness (so `--data=` -> empty value, not next token)
-        // support --flag=value
-        if (tk.rfind("--", 0) == 0) {
-            size_t eq = tk.find('=');
-            if (eq != std::string::npos) { flag = tk.substr(0, eq); inlineVal = tk.substr(eq + 1); hasInline = true; }
-        }
-        auto val = [&](size_t& idx) { return hasInline ? inlineVal : nextArg(idx); };
-
-        if (flag == "-X" || flag == "--request") {
-            h.method = val(i); explicitMethod = true;
-        } else if (flag == "-H" || flag == "--header") {
-            KeyValue kv = parseHeader(val(i));
-            std::string lk = lower(kv.key);
-            if (lk == "content-type") contentType = lower(kv.value);
-            if (lk == "authorization") { applyAuthHeader(h, kv.value); continue; }  // -> Auth tab
-            h.headers.push_back(kv);
-        } else if (flag == "-u" || flag == "--user") {
-            std::string up = val(i);
-            size_t c = up.find(':');
-            h.auth.type = "basic";
-            h.auth.basicUsername = c == std::string::npos ? up : up.substr(0, c);
-            h.auth.basicPassword = c == std::string::npos ? "" : up.substr(c + 1);
-        } else if (flag == "--data-binary") {
-            std::string v = val(i);
-            if (!v.empty() && v.front() == '@') { h.body.mode = "binary"; h.body.binaryFilePath = v.substr(1); }
-            else dataParts.push_back(v);
-        } else if (flag == "-d" || flag == "--data" || flag == "--data-raw" || flag == "--data-ascii") {
-            dataParts.push_back(val(i));
-        } else if (flag == "-A" || flag == "--user-agent") {
-            KeyValue kv; kv.enabled = true; kv.key = "User-Agent"; kv.value = val(i); h.headers.push_back(kv);
-        } else if (flag == "-e" || flag == "--referer") {
-            KeyValue kv; kv.enabled = true; kv.key = "Referer"; kv.value = val(i); h.headers.push_back(kv);
-        } else if (flag == "-b" || flag == "--cookie") {
-            KeyValue kv; kv.enabled = true; kv.key = "Cookie"; kv.value = val(i); h.headers.push_back(kv);
-        } else if (flag == "-I" || flag == "--head") {
-            h.method = "HEAD"; explicitMethod = true;
-        } else if (flag == "--compressed") {
-            KeyValue kv; kv.enabled = true; kv.key = "Accept-Encoding"; kv.value = "gzip, deflate"; h.headers.push_back(kv);
-        } else if (flag == "-m" || flag == "--max-time" || flag == "--connect-timeout") {
-            try { h.settings.timeoutMs = (int)(std::stod(val(i)) * 1000); h.settings.timeoutMsSet = true; } catch (...) {}
-        } else if (flag == "--data-urlencode") {
-            std::string kvs = val(i);
-            size_t eq = kvs.find('=');
-            KeyValue kv;
-            if (eq == std::string::npos) kv.value = kvs;
-            else { kv.key = kvs.substr(0, eq); kv.value = kvs.substr(eq + 1); }
-            urlEncodeParts.push_back(kv);
-        } else if (flag == "-F" || flag == "--form") {
-            std::string f = val(i);
-            size_t eq = f.find('=');
-            MultipartPart p;
-            p.key = eq == std::string::npos ? f : f.substr(0, eq);
-            std::string v = eq == std::string::npos ? "" : f.substr(eq + 1);
-            if (!v.empty() && v.front() == '@') { p.type = "file"; p.filePath = v.substr(1); }
-            else { p.type = "text"; p.value = v; }
-            h.body.multipart.push_back(p);
-            h.body.mode = "multipart";
-        } else if (flag == "-G" || flag == "--get") {
-            getStyle = true;
-        } else if (flag == "-L" || flag == "--location") {
-            h.settings.followRedirects = true; h.settings.followRedirectsSet = true;
-        } else if (flag == "-k" || flag == "--insecure") {
-            h.settings.verifyTls = false; h.settings.verifyTlsSet = true;
-        } else if (flag == "--url") {
-            h.url = val(i);
-        } else if (flag == "-s" || flag == "--silent" ||
-                   flag == "-i" || flag == "--include" || flag == "-v" || flag == "--verbose" ||
-                   flag == "-#" || flag == "--progress-bar" ||
-                   flag == "-o" || flag == "--output" || flag == "-O" || flag == "--remote-name") {
-            if (flag == "-o" || flag == "--output") (void)val(i); // consume output value, ignore
-            // ignore: output/log flags, no effect on request model
-        } else if (!tk.empty() && tk[0] == '-') {
-            res.unknown.push_back(tk); // unknown flag -> collect
-        } else {
-            // bare token = URL (take the first)
-            if (h.url.empty()) h.url = tk;
-            else res.unknown.push_back(tk);
-        }
-    }
-
-    // Merge data.
-    if (!dataParts.empty()) {
-        std::string joined;
-        for (size_t i = 0; i < dataParts.size(); ++i) {
-            if (i) joined += "&";
-            joined += dataParts[i];
-        }
-        if (getStyle) {
-            // -G: data becomes query string -> params (split k=v by &)
-            size_t pos = 0;
-            while (pos < joined.size()) {
-                size_t amp = joined.find('&', pos);
-                std::string seg = joined.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
-                size_t eq = seg.find('=');
-                KeyValue kv;
-                kv.key = eq == std::string::npos ? seg : seg.substr(0, eq);
-                kv.value = eq == std::string::npos ? "" : seg.substr(eq + 1);
-                h.params.push_back(kv);
-                if (amp == std::string::npos) break;
-                pos = amp + 1;
-            }
-        } else if (contentType.find("application/x-www-form-urlencoded") != std::string::npos) {
-            h.body.mode = "form-urlencoded";
-            size_t pos = 0;
-            while (pos < joined.size()) {
-                size_t amp = joined.find('&', pos);
-                std::string seg = joined.substr(pos, amp == std::string::npos ? std::string::npos : amp - pos);
-                size_t eq = seg.find('=');
-                KeyValue kv;
-                kv.key = eq == std::string::npos ? seg : seg.substr(0, eq);
-                kv.value = eq == std::string::npos ? "" : seg.substr(eq + 1);
-                h.body.formUrlEncoded.push_back(kv);
-                if (amp == std::string::npos) break;
-                pos = amp + 1;
-            }
-        } else if (contentType.find("application/json") != std::string::npos || isJsonLike(joined)) {
-            h.body.mode = "json";
-            h.body.json = joined;
-        } else {
-            h.body.mode = "text";
-            h.body.text = joined;
-        }
-    }
-
-    if (!urlEncodeParts.empty() && h.body.mode != "form-urlencoded") {
-        h.body.mode = "form-urlencoded";
-        for (auto& kv : urlEncodeParts) h.body.formUrlEncoded.push_back(kv);
-    }
+    CurlParseState st{h, res};
+    for (size_t i = 1; i < tokens.size(); ++i) applyCurlToken(tokens, i, st);
+    applyCurlData(st);
 
     // Infer method if not declared: body -> POST, otherwise GET.
-    if (!explicitMethod) {
-        bool hasBody = h.body.mode != "none";
-        h.method = hasBody ? "POST" : "GET";
-    }
+    if (!st.explicitMethod) h.method = (h.body.mode != "none") ? "POST" : "GET";
 
     if (h.url.empty()) {
         res.error = "no URL found in cURL command";

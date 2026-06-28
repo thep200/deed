@@ -47,6 +47,67 @@ bool GrpcImporter::canHandle(const std::string& input) const {
     return std::isupper(static_cast<unsigned char>(method[0])) != 0;   // Method PascalCase
 }
 
+namespace {
+
+// Push a "key: value" header token onto g.metadata (value may be empty / colon-less).
+void addGrpcMetadata(GrpcRequest& g, const std::string& hv) {
+    size_t colon = hv.find(':');
+    KeyValue kv;
+    kv.key = trim(colon == std::string::npos ? hv : hv.substr(0, colon));
+    kv.value = trim(colon == std::string::npos ? "" : hv.substr(colon + 1));
+    g.metadata.push_back(kv);
+}
+
+// grpcurl flags that consume the following token as their value.
+bool grpcurlFlagTakesValue(const std::string& tk) {
+    return tk == "-d" || tk == "-H" || tk == "-rpc-header" || tk == "-import-path" || tk == "-proto";
+}
+void applyGrpcurlValueFlag(const std::string& flag, const std::string& v, GrpcRequest& g) {
+    if (flag == "-d") g.message = v;
+    else if (flag == "-H" || flag == "-rpc-header") addGrpcMetadata(g, v);
+    else if (flag == "-import-path") { g.protoSource.importPaths.push_back(v); g.protoSource.mode = "protoFiles"; }
+    else if (flag == "-proto") { g.protoSource.files.push_back(v); g.protoSource.mode = "protoFiles"; }
+}
+
+// (a) grpcurl [-plaintext] -d '{...}' -H 'k: v' host:port pkg.Service/Method
+// Parses flags into g; unknown flags go to res.unknown. The RPC (Service/Method) is INTENTIONALLY
+// skipped on import — we only take target/message/metadata/tls; the user picks the RPC from the dropdown.
+void parseGrpcurl(const std::vector<std::string>& tokens, GrpcRequest& g, ImportResult& res) {
+    bool plaintext = false;
+    bool tlsSeen = false;
+    std::vector<std::string> positionals;
+    for (size_t i = 1; i < tokens.size(); ++i) {
+        const std::string& tk = tokens[i];
+        if (tk == "-plaintext") { plaintext = true; tlsSeen = true; }
+        else if (tk == "-insecure") { g.tls.insecureSkipVerify = true; tlsSeen = true; }
+        else if (grpcurlFlagTakesValue(tk)) { if (i + 1 < tokens.size()) applyGrpcurlValueFlag(tk, tokens[++i], g); }
+        else if (!tk.empty() && tk[0] == '-') res.unknown.push_back(tk);
+        else positionals.push_back(tk);
+    }
+    if (!positionals.empty()) g.target = positionals[0]; // positionals: host:port [pkg.Service/Method]
+    g.tls.enabled = tlsSeen ? !plaintext : true;         // grpcurl defaults to TLS unless -plaintext
+    if (g.message.empty()) g.message = "{}";
+}
+
+// (b) [grpc://|grpcs://]host:port/pkg.Service/Method. Sets g.target/tls, or res.error on a bad format.
+void parseGrpcShorthand(const std::string& trimmed, GrpcRequest& g, ImportResult& res) {
+    std::string s = trimmed;
+    bool secure = true;
+    if (lower(s).rfind("grpcs://", 0) == 0) { secure = true; s = s.substr(8); }
+    else if (lower(s).rfind("grpc://", 0) == 0) { secure = false; s = s.substr(7); }
+    g.tls.enabled = secure;
+
+    size_t slash = s.find('/'); // host:port is the part before the first '/'
+    if (slash == std::string::npos) {
+        res.error = "missing Service/Method (format host:port/pkg.Service/Method)";
+        return;
+    }
+    g.target = s.substr(0, slash);   // host:port only; Service/Method skipped (picked after import)
+    g.message = "{}";
+}
+
+} // namespace
+
 ImportResult GrpcImporter::parse(const std::string& input) const {
     ImportResult res;
     RequestModel m;
@@ -57,61 +118,9 @@ ImportResult GrpcImporter::parse(const std::string& input) const {
     g.protoSource.mode = "reflection";
 
     std::string trimmed = trim(input);
-    bool isGrpcurl = lower(trimmed).rfind("grpcurl", 0) == 0;
-
-    if (isGrpcurl) {
-        // (a) grpcurl [-plaintext] -d '{...}' -H 'k: v' host:port pkg.Service/Method
-        auto tokens = shellTokenize(trimmed);
-        bool plaintext = false;
-        bool tlsSeen = false;
-        std::vector<std::string> positionals;
-        for (size_t i = 1; i < tokens.size(); ++i) {
-            const std::string& tk = tokens[i];
-            if (tk == "-plaintext") { plaintext = true; tlsSeen = true; }
-            else if (tk == "-insecure") { g.tls.insecureSkipVerify = true; tlsSeen = true; }
-            else if (tk == "-d") {
-                if (i + 1 < tokens.size()) g.message = tokens[++i];
-            } else if (tk == "-H" || tk == "-rpc-header") {
-                if (i + 1 < tokens.size()) {
-                    std::string hv = tokens[++i];
-                    size_t colon = hv.find(':');
-                    KeyValue kv;
-                    kv.key = trim(colon == std::string::npos ? hv : hv.substr(0, colon));
-                    kv.value = trim(colon == std::string::npos ? "" : hv.substr(colon + 1));
-                    g.metadata.push_back(kv);
-                }
-            } else if (tk == "-import-path") {
-                if (i + 1 < tokens.size()) { g.protoSource.importPaths.push_back(tokens[++i]); g.protoSource.mode = "protoFiles"; }
-            } else if (tk == "-proto") {
-                if (i + 1 < tokens.size()) { g.protoSource.files.push_back(tokens[++i]); g.protoSource.mode = "protoFiles"; }
-            } else if (!tk.empty() && tk[0] == '-') {
-                res.unknown.push_back(tk);
-            } else {
-                positionals.push_back(tk);
-            }
-        }
-        // positionals: host:port  [pkg.Service/Method]. The RPC (Service/Method) is INTENTIONALLY skipped
-        // on import — we only import target/message/metadata/tls; the user picks the RPC from the dropdown.
-        if (positionals.size() >= 1) g.target = positionals[0];
-        g.tls.enabled = tlsSeen ? !plaintext : true; // grpcurl defaults to TLS unless -plaintext
-        if (g.message.empty()) g.message = "{}";
-    } else {
-        // (b) [grpc://|grpcs://]host:port/pkg.Service/Method
-        std::string s = trimmed;
-        bool secure = true;
-        if (lower(s).rfind("grpcs://", 0) == 0) { secure = true; s = s.substr(8); }
-        else if (lower(s).rfind("grpc://", 0) == 0) { secure = false; s = s.substr(7); }
-        g.tls.enabled = secure;
-
-        // host:port is the part before the first '/'.
-        size_t slash = s.find('/');
-        if (slash == std::string::npos) {
-            res.error = "missing Service/Method (format host:port/pkg.Service/Method)";
-            return res;
-        }
-        g.target = s.substr(0, slash);   // host:port only; Service/Method skipped (picked after import)
-        g.message = "{}";
-    }
+    if (lower(trimmed).rfind("grpcurl", 0) == 0) parseGrpcurl(shellTokenize(trimmed), g, res);
+    else parseGrpcShorthand(trimmed, g, res);
+    if (!res.error.empty()) return res;
 
     if (g.target.empty()) {   // only the target is required; Service/Method are picked after import
         res.error = "missing target (host:port)";
