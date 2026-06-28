@@ -205,6 +205,35 @@ static void test_filename_migration(const std::string& root) {
     CHECK(!store.findRelPathById(newId).empty(), "findRelPathById by id from filename");
 }
 
+// ---------------- Multi-mode HTTP body persistence ----------------
+// core::Body is a tagged union that keeps EVERY body type at once; saving in ONE active mode must NOT
+// drop the others (regression: switching Body mode after a reload showed an empty default — data lost on disk).
+static void test_body_multimode_roundtrip(const std::string& root) {
+    std::printf("[body_multimode]\n");
+    CollectionStore store(root);
+    std::string rel = store.createRequest("", RequestType::Http, "Multi Body");
+
+    RequestModel m = store.loadRequest(rel);
+    m.http.body.mode = "json";                  // enabled mode
+    m.http.body.json = "{\"k\":1}";
+    m.http.body.text = "hello text";
+    m.http.body.xml = "<root/>";
+    m.http.body.formUrlEncoded = {{"f1", "v1", true}, {"f2", "v2", false}};
+    rel = store.saveRequest(rel, m);
+
+    RequestModel r = store.loadRequest(rel);
+    CHECK_EQ(r.http.body.mode, std::string("json"), "enabled body mode round-trip");
+    CHECK_EQ(r.http.body.json, std::string("{\"k\":1}"), "active json kept");
+    CHECK_EQ(r.http.body.text, std::string("hello text"), "inactive text body kept across save");
+    CHECK_EQ(r.http.body.xml, std::string("<root/>"), "inactive xml body kept across save");
+    CHECK_EQ(r.http.body.formUrlEncoded.size(), (size_t)2, "inactive form body kept across save");
+    if (r.http.body.formUrlEncoded.size() == 2) {
+        CHECK_EQ(r.http.body.formUrlEncoded[0].key, std::string("f1"), "form entry 0 key kept");
+        CHECK_EQ(r.http.body.formUrlEncoded[0].value, std::string("v1"), "form entry 0 value kept");
+        CHECK(r.http.body.formUrlEncoded[1].enabled == false, "form entry enabled flag kept");
+    }
+}
+
 // ---------------- CollectionStore round-trip + CRUD ----------------
 static void test_collection_store(const std::string& root) {
     std::printf("[collection_store]\n");
@@ -861,6 +890,7 @@ int main() {
     test_cache_config_clamp(root);
     test_app_config_defaults(root);
     test_collection_store(root);
+    test_body_multimode_roundtrip(root);
     test_session_store(root);
     test_env_and_secret(root);
     test_secret_migration(root);

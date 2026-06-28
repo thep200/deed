@@ -115,6 +115,15 @@ public:
         cv_.wait(lk, [this] { return finished_; });
         return ok_;
     }
+    // Bounded wait: returns true if the call finished within `to`, false on timeout (caller cancels).
+    bool waitFor(std::chrono::milliseconds to) {
+        std::unique_lock<std::mutex> lk(m_);
+        return cv_.wait_for(lk, to, [this] { return finished_; });
+    }
+    bool ok() {
+        std::lock_guard<std::mutex> lk(m_);
+        return ok_;
+    }
 
 private:
     void done(bool ok) { finished_ = true; ok_ = ok; cv_.notify_all(); }
@@ -173,15 +182,30 @@ int main(int argc, char** argv) {
             Engine engine(EngineConfig{argv[2], ""});
             RequestModel m = engine.collection().loadRequest(argv[3]);
             std::cout << "Sending: " << m.name << " (" << toString(m.type) << ")\n";
-            CliDelegate del;
-            // Same routing the UI uses: methods that stream responses (server-streaming + bidi) ->
-            // openStream; unary + client-streaming (one response) -> send (§4).
+            // Same routing the UI uses (§4): WebSocket -> a duplex SESSION; methods that stream
+            // responses (server-streaming/bidi/SSE) -> openStream; unary + client-streaming -> send.
             InteractionKind kind = engine.interactionOf(m);
-            if (kind == InteractionKind::ServerStream || kind == InteractionKind::BiDi)
-                engine.openStream(m, borrowSink(&del));
-            else
+            int streamSecs = (argc >= 5) ? std::atoi(argv[4]) : 8;   // bound for open-ended streams (SSE/WS)
+            if (kind == InteractionKind::Duplex) {                   // WebSocket
+                CliWsSink sink;
+                SessionHandle h = engine.openSession(m, borrowSink(&sink));
+                sink.waitInbound(1, std::chrono::milliseconds(streamSecs * 1000));
+                engine.closeSession(h, 1000, "bye");
+                sink.waitClosed(std::chrono::milliseconds(4000));
+                return 0;
+            }
+            CliDelegate del;
+            if (kind == InteractionKind::ServerStream || kind == InteractionKind::BiDi) {
+                StreamHandle h = engine.openStream(m, borrowSink(&del));
+                if (!del.waitFor(std::chrono::milliseconds(streamSecs * 1000))) {
+                    engine.cancelStream(h);   // open-ended (e.g. SSE) -> Stop after the window
+                    del.wait();
+                }
+            } else {
                 engine.send(m, borrow(&del));
-            return del.wait() ? 0 : 1;
+                del.wait();
+            }
+            return del.ok() ? 0 : 1;
         }
         if (cmd == "resolve" && argc >= 4) {
             Engine engine(EngineConfig{argv[2], ""});

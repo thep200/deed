@@ -21,6 +21,7 @@
 
 #include "core/cache.hpp"
 #include "infra/fs_util.hpp"
+#include "sending/graphql_sender.hpp"
 #include "sending/grpc_sender.hpp"
 #include "sending/http_sender.hpp"
 #include "sending/sender_registry.hpp"
@@ -94,6 +95,7 @@ struct Engine::Impl {
         environments.migrateLegacySecrets();      // SPEC §T5: merge .secrets/ -> plaintext (one-time)
         registry.registerSender(RequestType::Http, std::make_unique<HttpSender>());
         registry.registerSender(RequestType::Grpc, std::make_unique<GrpcSender>());
+        registry.registerSender(RequestType::GraphQL, std::make_unique<GraphQlSender>());
         rebuildCache();
     }
 

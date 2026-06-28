@@ -5,9 +5,11 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
+#include "core/sending/cancel_token.hpp"
 #include "core/streaming/i_stream_channel.hpp"
 #include "core/streaming/i_stream_sink.hpp"
 #include "core/types.hpp"
@@ -40,5 +42,21 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
 
 // Request a graceful close from another thread (UI/Engine). Idempotent; wakes the I/O thread.
 void wsRequestClose(const std::shared_ptr<WsSession>& session, int code, const std::string& reason);
+
+// Frame-level hooks for a protocol that interprets the WS frames itself (e.g. graphql-transport-ws)
+// instead of the default frame-log stream. The pump calls onOpen after a successful handshake, onText for
+// each inbound text frame, and onClose exactly once at the end (incl. handshake failure) — so the protocol
+// owns the §3 open/close contract on its own sink. Outbound frames are NOT logged in this mode.
+struct WsFrameHooks {
+    std::function<void()> onOpen;
+    std::function<void(const std::string&)> onText;
+    std::function<void(StreamStatus, int, const std::string&)> onClose;
+};
+
+// Like wsRun, but drives `hooks` instead of emitting a frame-log stream. Honors `cancel` (graceful close).
+// Used by the GraphQL-over-WebSocket sender.
+void wsRunProtocol(const ResolvedRequest& req, const WsFrameHooks& hooks,
+                   const std::shared_ptr<WsSession>& session, const std::string& sessionId,
+                   const std::shared_ptr<CancelToken>& cancel);
 
 } // namespace core

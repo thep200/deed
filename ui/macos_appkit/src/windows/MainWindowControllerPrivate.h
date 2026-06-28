@@ -167,7 +167,12 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     NSTimeInterval _reqStartTime; // monotonic start (systemUptime) of the in-flight request
     NSUInteger _urlPrevLen; // previous URL length -> detect "paste" (sudden jump)
     NSTextView *_fieldEditor; // shared field editor, all auto-features disabled
-    NSString *_bodyMode;    // current body mode: json | binary(file) | form-urlencoded(form)
+    NSString *_bodyMode;    // ENABLED body mode for the open request: json | text | xml | binary(file) | form-urlencoded(form)
+    // Per-mode body drafts (mode -> editor text). The model's core::Body is a tagged union that stores
+    // EVERY mode's content at once (json/text/xml/form/binary) with `mode` marking the enabled one; this
+    // dict mirrors that so toggling Body mode (e.g. Form<->JSON) keeps each mode's content. Rebuilt fresh
+    // from the OPEN request's Body on every (re)load -> never carries content across requests.
+    NSMutableDictionary<NSString *, NSString *> *_bodyDrafts;
 }
 @end
 
@@ -240,8 +245,9 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (NSInteger)bodyTabIndex;
 - (void)updateBodyButtonLabel;
 - (NSString *)bodyTemplateForMode:(NSString *)mode;
-- (NSString *)bodyBufferFromModel:(const core::Body &)b;
+- (NSString *)bodyBufferForMode:(NSString *)mode fromModel:(const core::Body &)b;
 - (BOOL)syncBodyFromBuffer:(NSString *)buf into:(core::Body &)out err:(std::string &)err;
+- (BOOL)applyBodyDraft:(NSString *)buf mode:(NSString *)mode into:(core::Body &)nb err:(std::string &)err;
 - (void)bodyButtonClicked:(OS9BevelButton *)b;
 - (void)pickBodyMode:(NSString *)mode;
 - (void)reqTabClicked:(OS9BevelButton *)b;

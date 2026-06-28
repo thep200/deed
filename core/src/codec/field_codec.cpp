@@ -45,25 +45,29 @@ bool jsonToKeyValues(const std::string& text, std::vector<KeyValue>& out, std::s
 std::string bodyToJson(const Body& b) {
     json j;
     j["mode"] = b.mode;
-    if (b.mode == "json") j["json"] = b.json;
-    else if (b.mode == "text") j["text"] = b.text;
-    else if (b.mode == "xml") j["xml"] = b.xml;
-    else if (b.mode == "form-urlencoded") {
+    // Persist EVERY field that holds content — core::Body is a tagged union that keeps all body types at
+    // once and `mode` only marks the ENABLED one. Writing just the active field would drop the others on
+    // save (e.g. saving in "json" mode would erase a filled form), so switching mode after a reload would
+    // show an empty default. Symmetric with jsonToBody, which already reads every field back regardless of mode.
+    if (!b.json.empty()) j["json"] = b.json;
+    if (!b.text.empty()) j["text"] = b.text;
+    if (!b.xml.empty()) j["xml"] = b.xml;
+    if (!b.formUrlEncoded.empty()) {
         json a = json::array();
         for (const auto& kv : b.formUrlEncoded)
             a.push_back({{"key", kv.key}, {"value", kv.value}, {"enabled", kv.enabled ? 1 : 0}});
         j["formUrlEncoded"] = a;
-    } else if (b.mode == "multipart") {
+    }
+    if (!b.multipart.empty()) {
         json a = json::array();
         for (const auto& p : b.multipart)
             a.push_back({{"key", p.key}, {"value", p.value}, {"type", p.type},
                          {"filePath", p.filePath}, {"enabled", p.enabled ? 1 : 0}});
         j["multipart"] = a;
-    } else if (b.mode == "binary") {
-        j["binary"] = {{"filePath", b.binaryFilePath}};
-    } else if (b.mode == "graphql") {
-        j["graphql"] = {{"query", b.graphqlQuery}, {"variables", b.graphqlVariables}};
     }
+    if (!b.binaryFilePath.empty()) j["binary"] = {{"filePath", b.binaryFilePath}};
+    if (!b.graphqlQuery.empty() || !b.graphqlVariables.empty())
+        j["graphql"] = {{"query", b.graphqlQuery}, {"variables", b.graphqlVariables}};
     return j.dump(2);
 }
 

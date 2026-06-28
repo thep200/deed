@@ -183,6 +183,7 @@ bool applyRequestBody(cpr::Session& session, const HttpRequest& h,
     else if (b.mode == "form-urlencoded") applyFormBody(session, b);
     else if (b.mode == "multipart") applyMultipartBody(session, b);
     else if (b.mode == "binary") {
+        if (b.binaryFilePath.empty()) return true;   // no file chosen -> send no body (not an error)
         std::string data;
         if (!readBinaryFile(b.binaryFilePath, cancel, data, err)) return false;
         session.SetBody(cpr::Body{data});

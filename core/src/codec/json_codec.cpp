@@ -69,22 +69,25 @@ std::vector<KeyValue> kvFrom(const json& j) {
 json bodyToJson(const Body& b) {
     json j;
     j["mode"] = b.mode;
-    if (b.mode == "json") j["json"] = b.json;
-    else if (b.mode == "text") j["text"] = b.text;
-    else if (b.mode == "xml") j["xml"] = b.xml;
-    else if (b.mode == "form-urlencoded") j["formUrlEncoded"] = kvArray(b.formUrlEncoded);
-    else if (b.mode == "multipart") {
+    // Persist EVERY field that holds content — core::Body is a tagged union that keeps all body types at
+    // once and `mode` only marks the ENABLED one. Writing just the active field would drop the others on
+    // save (e.g. saving in "json" mode would erase a filled form), so switching mode after a reload would
+    // show an empty default. Symmetric with bodyFrom, which already reads every field back regardless of mode.
+    if (!b.json.empty()) j["json"] = b.json;
+    if (!b.text.empty()) j["text"] = b.text;
+    if (!b.xml.empty()) j["xml"] = b.xml;
+    if (!b.formUrlEncoded.empty()) j["formUrlEncoded"] = kvArray(b.formUrlEncoded);
+    if (!b.multipart.empty()) {
         json a = json::array();
         for (const auto& p : b.multipart) {
             a.push_back({{"key", p.key}, {"value", p.value}, {"type", p.type},
                          {"filePath", p.filePath}, {"enabled", p.enabled ? 1 : 0}});
         }
         j["multipart"] = a;
-    } else if (b.mode == "binary") {
-        j["binary"] = {{"filePath", b.binaryFilePath}};
-    } else if (b.mode == "graphql") {
-        j["graphql"] = {{"query", b.graphqlQuery}, {"variables", b.graphqlVariables}};
     }
+    if (!b.binaryFilePath.empty()) j["binary"] = {{"filePath", b.binaryFilePath}};
+    if (!b.graphqlQuery.empty() || !b.graphqlVariables.empty())
+        j["graphql"] = {{"query", b.graphqlQuery}, {"variables", b.graphqlVariables}};
     return j;
 }
 

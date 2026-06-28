@@ -28,6 +28,7 @@ public:
     void requestStop();                     // user Stop -> send complete{id}
 
     bool legacy() const;                     // true = subscriptions-transport-ws message names
+    bool closed() const { return closed_; }  // true once a terminal close was emitted (transport may stop)
 
 private:
     void openOnce();

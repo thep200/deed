@@ -1,5 +1,10 @@
 #import "windows/MainWindowControllerPrivate.h"
 
+// Body format registry (defined lower in this file) — forward-declared so the load/populate code can
+// enumerate every known body mode regardless of source order.
+static NSArray<NSDictionary *> *BodyModeTable(void);
+static NSArray<NSString *> *BodyAllModes(void);
+
 @implementation MainWindowController (Editor)
 
 #pragma mark Load / populate / sync
@@ -111,19 +116,29 @@
 
 - (void)populateEditorsFromModel {
     [_reqBuffers removeAllObjects];
+    _bodyDrafts = [NSMutableDictionary dictionary];   // fresh request -> drop stale per-mode body drafts
     using namespace core;
     if (_model.type == RequestType::Http) {
         HttpRequest &h = _model.http;
         // Body defaults to JSON: request has no body yet (mode none) -> show as JSON.
         if (h.body.mode == "none") { h.body = Body{}; h.body.mode = "json"; }
+        _bodyMode = N(h.body.mode);                    // the ENABLED mode for THIS request
+        // Seed a draft for EVERY mode the model actually holds content for (core::Body keeps all sub-fields
+        // at once). Switching Body mode then shows THIS request's own saved content per mode — never the
+        // previous request's, never a stale template for a mode the user already filled. Modes with no
+        // stored content are left unseeded -> fall back to their template on first switch.
+        for (NSString *mode in BodyAllModes()) {
+            NSString *txt = [self bodyBufferForMode:mode fromModel:h.body];
+            if (txt) _bodyDrafts[mode] = txt;
+        }
         // Body buffer = EXACTLY the content to send (no {"mode","json"} wrapper); mode held by the app.
-        [_reqBuffers addObject:[self bodyBufferFromModel:h.body]];     // 0 = Body (leftmost)
+        NSString *bodyText = _bodyDrafts[_bodyMode] ?: [self bodyTemplateForMode:_bodyMode];
+        [_reqBuffers addObject:bodyText];              // 0 = Body (leftmost, the enabled mode)
         [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(h.params))];   // 1
         [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(h.headers))];  // 2
         [_reqBuffers addObject:N(fieldcodec::authToJson(h.auth))];          // 3
         [_methodPopup selectTitle:N(h.method)];
         _urlField.stringValue = N(h.url); _urlPrevLen = _urlField.stringValue.length;
-        _bodyMode = N(h.body.mode);
         [self updateBodyButtonLabel];
     } else if (_model.type == RequestType::WebSocket) {
         const WsRequest &w = _model.ws;
@@ -270,7 +285,7 @@
 //   json -> raw JSON.   text -> empty.   xml -> empty <root>.   form -> 1 sample key/value entry.
 //   file -> object with a filePath key.
 static NSString *const kFormBodyTemplate =
-    @"[\n  {\n    \"key\": \"\",\n    \"value\": \"\",\n    \"enabled\": 1\n  }\n]";
+    @"[\n  {\n    \"key\": \"\",\n    \"value\": \"\",\n    \"enabled\": 0\n  }\n]";
 static NSString *const kFileBodyTemplate = @"{\n  \"filePath\": \"\"\n}";
 
 // SINGLE SOURCE for the Body dropdown: internal mode <-> option/label/template.
@@ -286,35 +301,63 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     ];
     return t;
 }
+// Every known body mode, in dropdown order — used to seed/sync drafts for all modes a request can hold.
+static NSArray<NSString *> *BodyAllModes(void) {
+    static NSArray *m;
+    if (!m) {
+        NSMutableArray *a = [NSMutableArray array];
+        for (NSDictionary *d in BodyModeTable()) [a addObject:d[@"mode"]];
+        m = [a copy];
+    }
+    return m;
+}
 - (NSString *)bodyTemplateForMode:(NSString *)mode {
     for (NSDictionary *d in BodyModeTable()) if ([d[@"mode"] isEqualToString:mode]) return d[@"tpl"];
     return @"{}";                                        // json (default for text/xml/none)
 }
 
-// Model.Body -> content shown in the editor (exactly what's sent, unwrapped).
-- (NSString *)bodyBufferFromModel:(const core::Body &)b {
-    if (b.mode == "form-urlencoded")
-        return b.formUrlEncoded.empty() ? kFormBodyTemplate
-                                        : N(core::fieldcodec::keyValuesToJson(b.formUrlEncoded));
-    if (b.mode == "binary") {
-        NSString *p = N(b.binaryFilePath);
-        return [NSString stringWithFormat:@"{\n  \"filePath\": \"%@\"\n}", p ?: @""];
-    }
-    if (b.mode == "text") return N(b.text);
-    if (b.mode == "xml") return N(b.xml);
-    return N(b.json.empty() ? "{}" : b.json);            // json (default)
+// One mode's stored content -> the text shown in the editor (exactly what's sent, unwrapped).
+// Returns nil when the model holds NO content for that mode -> caller leaves the draft unseeded and
+// shows the template on first switch (so untouched modes never get a template baked into the file).
+- (NSString *)bodyBufferForMode:(NSString *)mode fromModel:(const core::Body &)b {
+    using namespace core;
+    if ([mode isEqualToString:@"form-urlencoded"])
+        return b.formUrlEncoded.empty() ? nil : N(fieldcodec::keyValuesToJson(b.formUrlEncoded));
+    if ([mode isEqualToString:@"binary"])
+        return b.binaryFilePath.empty() ? nil
+             : [NSString stringWithFormat:@"{\n  \"filePath\": \"%@\"\n}", N(b.binaryFilePath)];
+    if ([mode isEqualToString:@"text"]) return b.text.empty() ? nil : N(b.text);
+    if ([mode isEqualToString:@"xml"])  return b.xml.empty()  ? nil : N(b.xml);
+    return b.json.empty() ? nil : N(b.json);             // json (default)
 }
 
-// Editor buffer -> Model.Body, parsed per _bodyMode (mode defined by the app, not in the text).
-- (BOOL)syncBodyFromBuffer:(NSString *)buf into:(core::Body &)out err:(std::string &)err {
+// Editor buffers -> Model.Body. core::Body is a tagged union that keeps EVERY mode's content with `mode`
+// marking the one that is enabled/sent. We write back ALL per-mode drafts (so toggling Form<->JSON<->… or
+// switching requests never drops a mode the user filled), then set `mode` to the active one. Only the
+// ENABLED mode must parse; an unparseable INACTIVE draft keeps its previously-saved value (start from `out`).
+- (BOOL)syncBodyFromBuffer:(NSString *)activeBuf into:(core::Body &)out err:(std::string &)err {
+    NSString *active = _bodyMode.length ? _bodyMode : @"json";
+    _bodyDrafts[active] = activeBuf ?: @"";          // the active tab's live text is the source for its mode
+    core::Body nb = out;                             // preserve fields with no draft / bad inactive draft
+    for (NSString *mode in _bodyDrafts) {
+        std::string e;
+        if (![self applyBodyDraft:_bodyDrafts[mode] mode:mode into:nb err:e] &&
+            [mode isEqualToString:active]) { err = e; return NO; }   // only the enabled mode blocks the save
+    }
+    nb.mode = S(active);
+    out = nb;
+    return YES;
+}
+
+// Parse ONE draft into its matching field of `nb` (leaving the other fields untouched). The mode tag is
+// NOT written here — the caller sets `nb.mode` to the enabled mode after applying every draft.
+- (BOOL)applyBodyDraft:(NSString *)buf mode:(NSString *)mode into:(core::Body &)nb err:(std::string &)err {
     using namespace core;
-    NSString *bm = _bodyMode.length ? _bodyMode : @"json";
-    Body nb;
-    if ([bm isEqualToString:@"form-urlencoded"]) {
-        nb.mode = "form-urlencoded";
-        if (!fieldcodec::jsonToKeyValues(S(buf), nb.formUrlEncoded, err)) return NO;
-    } else if ([bm isEqualToString:@"binary"]) {
-        nb.mode = "binary";
+    if ([mode isEqualToString:@"form-urlencoded"]) {
+        std::vector<KeyValue> kv;
+        if (!fieldcodec::jsonToKeyValues(S(buf), kv, err)) return NO;
+        nb.formUrlEncoded = std::move(kv);
+    } else if ([mode isEqualToString:@"binary"]) {
         // Accept both an object {"filePath": "..."} and a bare path string (backward compat).
         NSString *t = [buf stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         id obj = t.length ? [NSJSONSerialization JSONObjectWithData:[t dataUsingEncoding:NSUTF8StringEncoding]
@@ -325,14 +368,13 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
         } else {
             nb.binaryFilePath = S(t);   // treat the whole text as a path
         }
-    } else if ([bm isEqualToString:@"text"]) {
-        nb.mode = "text"; nb.text = S(buf);
-    } else if ([bm isEqualToString:@"xml"]) {
-        nb.mode = "xml"; nb.xml = S(buf);
+    } else if ([mode isEqualToString:@"text"]) {
+        nb.text = S(buf);
+    } else if ([mode isEqualToString:@"xml"]) {
+        nb.xml = S(buf);
     } else {
-        nb.mode = "json"; nb.json = S(buf);   // raw user-entered JSON, NOT encoded into a "json" key
+        nb.json = S(buf);   // raw user-entered JSON, NOT encoded into a "json" key
     }
-    out = nb;
     return YES;
 }
 
@@ -355,8 +397,14 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     NSInteger bi = [self bodyTabIndex];
     if (bi == NSNotFound) return;
     [self stashActiveReqBuffer];                 // save the currently-typed content into the current tab
-    if (![_bodyMode isEqualToString:mode])       // mode changed -> load the new template
-        _reqBuffers[bi] = [self bodyTemplateForMode:mode];
+    if (![_bodyMode isEqualToString:mode]) {
+        // Switching mode: keep the OLD mode's content as its draft, then restore the NEW mode's draft
+        // (falling back to its template the first time). This preserves Form<->JSON<->… round-trips.
+        NSString *cur = (bi < (NSInteger)_reqBuffers.count) ? _reqBuffers[bi] : @"";
+        if (_bodyMode.length) _bodyDrafts[_bodyMode] = cur ?: @"";
+        NSString *draft = _bodyDrafts[mode];     // seeded from the model on load / by a prior switch; nil = empty for this request
+        _reqBuffers[bi] = draft ?: [self bodyTemplateForMode:mode];
+    }
     _bodyMode = mode;
     [self updateBodyButtonLabel];
     _activeReqTab = bi;                          // activate + show body

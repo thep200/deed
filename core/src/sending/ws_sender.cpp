@@ -166,14 +166,23 @@ struct WsResult {
     std::uint64_t bytes = 0;
 };
 
+// Output wiring for the pump. Exactly one of {sink, hooks} is set: `sink` = default frame-log stream
+// (openSession); `hooks` = a protocol interprets frames itself (graphql-transport-ws). `cancel` (optional)
+// lets openStream-based callers stop the pump with a graceful close.
+struct WsPumpIO {
+    IStreamSink* sink = nullptr;
+    const WsFrameHooks* hooks = nullptr;
+    CancelToken* cancel = nullptr;
+};
+
 // Drives the post-handshake WebSocket pump loop (SPEC §5): one tick = recv inbound, honor a close
 // request, drain the outbound queue, keepalive-ping, idle-check. Owns the per-session loop state so the
 // six phases stay as small methods. The CURL handle is BORROWED (freed by the caller's RAII guards).
 class WsPump {
 public:
     WsPump(CURL* curl, curl_socket_t sock, const std::shared_ptr<WsSession>& session,
-           IStreamSink& sink, long long t0)
-        : curl_(curl), sock_(sock), session_(session), sink_(sink), cfg_(session->cfg), t0_(t0),
+           long long t0, const WsPumpIO& io)
+        : curl_(curl), sock_(sock), session_(session), io_(io), cfg_(session->cfg), t0_(t0),
           lastPing_(nowMs()), lastActivity_(nowMs()) {}
 
     WsResult run() {
@@ -202,8 +211,17 @@ private:
         running_ = false;
     }
 
-    // Build + deliver one neutral frame log element (shared by inbound + outbound).
+    bool cancelRequested() const { return io_.cancel && io_.cancel->cancelled(); }
+
+    // Deliver one data frame. Protocol mode: hand raw INBOUND text to the protocol (outbound not logged).
+    // Default mode: build a neutral frame-log element and emit it on the sink (in + out).
     void emitData(StreamDirection dir, unsigned flags, const std::uint8_t* data, std::size_t n) {
+        if (io_.hooks) {
+            if (dir == StreamDirection::Inbound && io_.hooks->onText)
+                io_.hooks->onText(std::string(reinterpret_cast<const char*>(data), n));
+            return;
+        }
+        if (!io_.sink) return;
         bool binary = (flags & CURLWS_BINARY) != 0;
         std::string payload = frameEnvelope(dir, binary, offsetMs(), data, n);
         StreamEvent ev;
@@ -213,7 +231,7 @@ private:
         ev.kind = binary ? StreamPayloadKind::Binary : StreamPayloadKind::Text;
         ev.payload = payload;
         ev.offsetMs = offsetMs();
-        sink_.onStreamEvent(ev);
+        io_.sink->onStreamEvent(ev);
         ++seq_;
         bytes_ += payload.size();
     }
@@ -280,7 +298,7 @@ private:
         }
     }
 
-    // Graceful close requested (UI Disconnect / cancel) -> send CLOSE. Returns true if we should stop.
+    // Graceful close requested (UI Disconnect / wantClose / cancel) -> send CLOSE. Returns true if we stop.
     bool handleCloseRequest() {
         bool doClose = false;
         int reqCode = 1000;
@@ -289,6 +307,8 @@ private:
             std::lock_guard<std::mutex> lk(session_->mu);
             if (session_->wantClose) { doClose = true; reqCode = session_->closeCode; reqReason = session_->closeReason; }
         }
+        bool cancelled = cancelRequested();
+        if (!doClose && cancelled) doClose = true;   // openStream cancel -> graceful close
         if (!doClose) return false;
         std::vector<std::uint8_t> payload;
         payload.push_back((std::uint8_t)((reqCode >> 8) & 0xFF));
@@ -296,7 +316,7 @@ private:
         payload.insert(payload.end(), reqReason.begin(), reqReason.end());
         std::size_t sent = 0;
         curl_ws_send(curl_, payload.data(), payload.size(), &sent, 0, CURLWS_CLOSE);
-        result_.status = StreamStatus::Ok;
+        result_.status = cancelled ? StreamStatus::Cancelled : StreamStatus::Ok;
         result_.code = reqCode;
         result_.msg = reqReason;
         return true;
@@ -349,7 +369,7 @@ private:
     CURL* curl_;
     curl_socket_t sock_;
     std::shared_ptr<WsSession> session_;
-    IStreamSink& sink_;
+    WsPumpIO io_;
     const WsConfig& cfg_;
     long long t0_;
     long long lastPing_;
@@ -464,8 +484,61 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
     curl_socket_t sock = CURL_SOCKET_BAD;
     curl_easy_getinfo(curl, CURLINFO_ACTIVESOCKET, &sock);
 
-    WsResult res = WsPump(curl, sock, session, sink, t0).run();
+    WsPumpIO io;
+    io.sink = &sink;
+    WsResult res = WsPump(curl, sock, session, t0, io).run();
     wsEmitClose(sink, session, res, offsetMs());   // curl + hdrs freed by their RAII guards on return (L13)
+}
+
+void wsRunProtocol(const ResolvedRequest& req, const WsFrameHooks& hooks,
+                   const std::shared_ptr<WsSession>& session, const std::string& sessionId,
+                   const std::shared_ptr<CancelToken>& cancel) {
+    (void)sessionId;
+    const WsRequest& w = req.model.ws;
+    const WsConfig& cfg = session->cfg;
+    const long long t0 = nowMs();
+    // On any terminal outcome, the protocol owns the §3 open/close contract via hooks.onClose.
+    auto finish = [&](StreamStatus st, int code, const std::string& msg) {
+        if (hooks.onClose) hooks.onClose(st, code, msg);
+        session->open.store(false);
+        session->done.store(true);
+    };
+
+    if (!curlHasWebSocket()) {
+        finish(StreamStatus::Error, 0,
+               "libcurl was built without WebSocket support (need curl[websockets], libcurl >= 8.11)");
+        return;
+    }
+    auto curlDel = [](CURL* c) { if (c) curl_easy_cleanup(c); };
+    std::unique_ptr<CURL, decltype(curlDel)> curlGuard(curl_easy_init(), curlDel);
+    CURL* curl = curlGuard.get();
+    if (!curl) { finish(StreamStatus::Error, 0, "curl init failed"); return; }
+
+    auto slistDel = [](struct curl_slist* s) { if (s) curl_slist_free_all(s); };
+    struct curl_slist* hdrs = buildWsHandshakeHeaders(w);   // auth + custom + Sec-WebSocket-Protocol
+    std::unique_ptr<struct curl_slist, decltype(slistDel)> hdrsGuard(hdrs, slistDel);
+    configureWsHandshake(curl, w, cfg, hdrs);
+
+    CURLcode rc = curl_easy_perform(curl);   // handshake
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+    if (rc != CURLE_OK) {
+        std::string msg = std::string("WebSocket handshake failed: ") + curl_easy_strerror(rc);
+        if (httpCode) msg += " (HTTP " + std::to_string(httpCode) + ")";
+        finish(StreamStatus::Error, (int)httpCode, msg);
+        return;
+    }
+    session->open.store(true);
+    if (hooks.onOpen) hooks.onOpen();   // protocol sends connection_init (enqueued; the pump drains it)
+
+    curl_socket_t sock = CURL_SOCKET_BAD;
+    curl_easy_getinfo(curl, CURLINFO_ACTIVESOCKET, &sock);
+
+    WsPumpIO io;
+    io.hooks = &hooks;
+    io.cancel = cancel.get();
+    WsResult res = WsPump(curl, sock, session, t0, io).run();
+    finish(res.status, res.code, res.msg);   // curl + hdrs freed by their RAII guards on return (L13)
 }
 
 } // namespace core
