@@ -17,8 +17,8 @@
 #include <vector>
 
 #include "core/cache.hpp"
-#include "core/engine.hpp"
 #include "core/import_export/importer.hpp"
+#include "core/persistence/stores.hpp" // CollectionStore (CRUD) — stress drives the store directly, no Engine
 #include "core/infra/mem_probe.hpp"
 #include "core/variables/variable_resolver.hpp"
 
@@ -101,9 +101,7 @@ ResponseRecord makeRecord(std::mt19937& rng, std::size_t bodyBytes) {
     ResponseRecord r;
     r.isError = false;
     r.response.statusCode = 200;
-    r.response.statusText = "OK";
     r.response.body = randBody(rng, bodyBytes);
-    r.response.sizeBytes = (std::int64_t)bodyBytes;
     r.receivedAt = 0;
     return r;
 }
@@ -143,7 +141,7 @@ int main(int argc, char** argv) {
     ThreadPool pool;
     std::atomic<std::uint64_t> poolCounter{0};
 
-    Engine engine(EngineConfig{root.string(), ""});
+    CollectionStore coll(root.string());
     CurlImporter curlImp;
     GrpcImporter grpcImp;
 
@@ -184,10 +182,10 @@ int main(int argc, char** argv) {
                     opName = "create";
                     std::string name = "req_" + std::to_string(iter);
                     RequestType t = (rng() % 2) ? RequestType::Grpc : RequestType::Http;
-                    std::string rel = engine.collection().createRequest("", t, name);
+                    std::string rel = coll.createRequest("", t, name);
                     rels.push_back(rel);
-                    RequestModel m = engine.collection().loadRequest(rel);
-                    ids.push_back(m.id);
+                    auto m = coll.loadRequest(rel);
+                    ids.push_back(m.id().get());
                     break;
                 }
                 case 1: {  // rename request
@@ -195,14 +193,14 @@ int main(int argc, char** argv) {
                     if (rels.empty()) break;
                     std::size_t i = rng() % rels.size();
                     std::string nn = "ren_" + std::to_string(iter);
-                    rels[i] = engine.collection().rename(rels[i], nn);
+                    rels[i] = coll.rename(rels[i], nn);
                     break;
                 }
                 case 2: {  // delete request (free it)
                     opName = "delete";
                     if (rels.empty()) break;
                     std::size_t i = rng() % rels.size();
-                    engine.collection().remove(rels[i]);
+                    coll.remove(rels[i]);
                     if (openId == ids[i]) openId.clear();
                     if (cache) cache->remove(ids[i]);
                     rels.erase(rels.begin() + (long)i);
@@ -213,8 +211,8 @@ int main(int argc, char** argv) {
                     opName = "load";
                     if (rels.empty()) break;
                     std::size_t i = rng() % rels.size();
-                    RequestModel m = engine.collection().loadRequest(rels[i]);
-                    openId = m.id;           // old model destroyed on scope exit -> single-active
+                    auto m = coll.loadRequest(rels[i]);
+                    openId = m.id().get();   // old model destroyed on scope exit -> single-active
                     break;
                 }
                 case 4: {  // import cURL / grpcurl (including garbage)

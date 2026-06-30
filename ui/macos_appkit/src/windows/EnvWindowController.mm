@@ -8,9 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "core/engine.hpp"
-#include "core/persistence/stores.hpp"
-#include "core/types.hpp"
+#include "core/app/persistence_repositories.hpp" // IEnvironmentRepository/ISessionRepository + Environment/EnvKey
 
 // No special base env any more: every environment is a normal, equal, deletable column (its name == file).
 static NSString *Key(NSString *env, NSString *alias) {
@@ -18,7 +16,8 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 @implementation EnvWindowController {
-    core::Engine *_engine; // not owned
+    core::app::IEnvironmentRepository *_envRepo;     // not owned (lives in CoreApiClient)
+    core::app::ISessionRepository *_sessionRepo;     // not owned
     OS9EnvGrid *_grid;
 
     NSMutableArray<NSString *> *_envNames;  // index 0 = kBaseEnv
@@ -29,9 +28,11 @@ static NSString *Key(NSString *env, NSString *alias) {
     NSMutableSet<NSString *> *_secretAliases; // aliases marked "secret" (per-alias flag)
 }
 
-- (instancetype)initWithEngine:(core::Engine *)engine {
+- (instancetype)initWithEnvRepo:(core::app::IEnvironmentRepository *)envRepo
+                        session:(core::app::ISessionRepository *)sessionRepo {
     if ((self = [super init])) {
-        _engine = engine;
+        _envRepo = envRepo;
+        _sessionRepo = sessionRepo;
         _envNames = [NSMutableArray array];
         _aliases = [NSMutableArray array];
         _values = [NSMutableDictionary dictionary];
@@ -71,15 +72,15 @@ static NSString *Key(NSString *env, NSString *alias) {
     [_dirtyEnvs removeAllObjects];
     [_removedEnvs removeAllObjects];
     [_secretAliases removeAllObjects];
-    if (!_engine) return;
+    if (!_envRepo) return;
 
-    for (const auto &n : _engine->environments().list())
+    for (const auto &n : _envRepo->list())
         [_envNames addObject:[NSString stringWithUTF8String:n.c_str()]];
 
     NSMutableArray<NSString *> *aliasOrder = [NSMutableArray array];
     for (NSString *env in _envNames) {
         core::Environment e;
-        try { e = _engine->environments().load(env.UTF8String); }
+        try { e = _envRepo->load(env.UTF8String); }
         catch (...) { continue; }
         for (const auto &k : e.keys) {
             NSString *alias = [NSString stringWithUTF8String:k.key.c_str()];
@@ -92,7 +93,7 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)save {
-    if (!_engine) return;
+    if (!_envRepo) return;
     OS9SafeEndEditing(_grid.window, nil);
     [_grid commitEditing];
     for (NSString *env in _dirtyEnvs) {
@@ -107,10 +108,10 @@ static NSString *Key(NSString *env, NSString *alias) {
             k.secret = [_secretAliases containsObject:alias];   // per-alias flag, mirrored into every env
             e.keys.push_back(k);
         }
-        try { _engine->environments().save(e); } catch (...) {}
+        try { _envRepo->save(e); } catch (...) {}
     }
     for (NSString *env in _removedEnvs) {
-        try { _engine->environments().remove(env.UTF8String); } catch (...) {}
+        try { _envRepo->remove(env.UTF8String); } catch (...) {}
     }
     [_dirtyEnvs removeAllObjects];
     [_removedEnvs removeAllObjects];
@@ -183,8 +184,8 @@ static NSString *Key(NSString *env, NSString *alias) {
     [_dirtyEnvs addObject:newEnv];
     [_removedEnvs addObject:oldEnv];   // delete old file on save
     // Update activeEnv if it matches.
-    if (_engine && _engine->session().getActiveEnv() == std::string(oldEnv.UTF8String))
-        _engine->session().setActiveEnv(newEnv.UTF8String);
+    if (_sessionRepo && _sessionRepo->getActiveEnv() == std::string(oldEnv.UTF8String))
+        _sessionRepo->setActiveEnv(newEnv.UTF8String);
     [self pushToGrid];
 }
 
@@ -208,8 +209,8 @@ static NSString *Key(NSString *env, NSString *alias) {
     [_envNames removeObject:env];
     [_dirtyEnvs removeObject:env];
     [_removedEnvs addObject:env];
-    if (_engine && _engine->session().getActiveEnv() == std::string(env.UTF8String))
-        _engine->session().setActiveEnv("");   // deleted the active env -> none selected
+    if (_sessionRepo && _sessionRepo->getActiveEnv() == std::string(env.UTF8String))
+        _sessionRepo->setActiveEnv("");   // deleted the active env -> none selected
     [self pushToGrid];
 }
 

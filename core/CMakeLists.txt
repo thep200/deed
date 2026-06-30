@@ -19,10 +19,20 @@ add_custom_command(
 
 # core — static lib, pure C++ (cross-platform). The UI links against this. README §3.
 add_library(core STATIC
-  src/domain/types.cpp
   src/variables/variable_resolver.cpp
   src/codec/json_codec.cpp
-  src/codec/field_codec.cpp
+  src/infra/serialization/request_json_mapper.cpp
+  src/infra/serialization/field_json.cpp
+  src/app/send_request_saga.cpp
+  src/app/request_orchestrator.cpp
+  src/app/composition_root.cpp
+  src/infra/senders/native_http_sender.cpp
+  src/infra/senders/native_grpc_sender.cpp
+  src/infra/senders/native_graphql_sender.cpp
+  src/infra/senders/ws_sender_adapter.cpp
+  src/infra/persistence/collection_repository.cpp
+  src/infra/variables/domain_variable_resolver.cpp
+  src/infra/import_export/import_service.cpp
   src/infra/fs_util.cpp
   src/infra/mem_probe.cpp
   src/persistence/collection_store.cpp
@@ -30,19 +40,15 @@ add_library(core STATIC
   src/cache/ram_cache_driver.cpp
   src/cache/disk_cache_driver.cpp
   src/cache/response_cache.cpp
+  src/cache/cache_codec.cpp
   src/persistence/session_store.cpp
   src/persistence/environment_store.cpp
   src/persistence/app_config_store.cpp
-  src/sending/http_sender.cpp
-  src/sending/grpc_sender.cpp
   src/sending/grpc_descriptors.cpp
   src/sending/ws_sender.cpp
-  src/sending/graphql_sender.cpp
   src/streaming/sse_parser.cpp
   src/graphql/gql_operation.cpp
   src/graphql/gql_ws_protocol.cpp
-  src/app/engine.cpp
-  src/app/engine_cache.cpp
   src/import_export/shell_tokenize.cpp
   src/import_export/curl_importer.cpp
   src/import_export/curl_export.cpp

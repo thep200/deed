@@ -1,5 +1,9 @@
 #import "windows/MainWindowControllerPrivate.h"
 
+#include <optional>
+#include <type_traits>
+#include <variant>
+
 // Body format registry (defined lower in this file) — forward-declared so the load/populate code can
 // enumerate every known body mode regardless of source order.
 static NSArray<NSDictionary *> *BodyModeTable(void);
@@ -13,8 +17,12 @@ static NSArray<NSString *> *BodyAllModes(void);
 // is dropped because its handle != _currentHandle.
 - (void)cancelInFlightForSwitch {
     if (!_sending) return;
-    if (_engine) _engine->cancel(_currentHandle);
-    _currentHandle = 0;                 // invalidate handle
+    // REFACTOR_SPEC P6: the in-flight send/stream/WS runs through IApiClient -> cancel via the exec handle.
+    if (_apiClient && !_apiExec.empty()) {
+        if ([self requestType] == core::RequestType::WebSocket) _apiClient->closeStream(_apiExec, 1000, "bye");
+        else _apiClient->cancel(_apiExec);
+    }
+    _currentHandle = 0;                 // invalidate handle (a late callback != _currentHandle is dropped)
     [self finishSending];
 }
 
@@ -23,32 +31,32 @@ static NSArray<NSString *> *BodyAllModes(void);
 // editor is cleared mid-flight (safe when arrow-keying through the tree fast). Token _loadReqSeq: only the
 // LATEST result is applied -> older selections are dropped (won't show the model of a request already left).
 - (void)loadRequestAtRel:(NSString *)rel {
-    if (!_engine || rel.length == 0) return;
+    if (!_apiClient || rel.length == 0) return;
     NSString *relCopy = [rel copy];
     uint64_t token = ++_loadReqSeq;
     __weak MainWindowController *ws = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         MainWindowController *s = ws;
-        if (!s || !s->_engine) return;
-        core::RequestModel model;
+        if (!s || !s->_apiClient) return;
+        std::optional<core::domain::RequestModel> model;
         std::string err;
-        try { model = s->_engine->collection().loadRequest(relCopy.UTF8String); }  // I/O OFF main
+        try { model = s->_apiClient->collection().loadRequest(relCopy.UTF8String); }  // I/O OFF main
         catch (const std::exception &e) { err = e.what(); }
-        __block core::RequestModel modelCopy = std::move(model);
+        __block std::optional<core::domain::RequestModel> modelCopy = std::move(model);
         __block std::string errCopy = std::move(err);
         dispatch_async(dispatch_get_main_queue(), ^{
             MainWindowController *s2 = ws;
             if (!s2 || token != s2->_loadReqSeq) return;   // a different request was selected -> drop stale result
-            if (!errCopy.empty()) { [s2 toastWarn:N(errCopy)]; return; }
-            [s2 applyLoadedModel:modelCopy rel:relCopy];
+            if (!modelCopy) { [s2 toastWarn:N(errCopy.empty() ? "load failed" : errCopy)]; return; }
+            [s2 applyLoadedModel:*modelCopy rel:relCopy];
         });
     });
 }
 
 // Apply the loaded model to the UI (runs on MAIN). Tear down the old request HERE (the old editor is
 // still intact at this point) -> autosave reads A's correct contents, not a cleared editor from a fast switch.
-- (void)applyLoadedModel:(const core::RequestModel &)model rel:(NSString *)rel {
-    if (!_engine) return;
+- (void)applyLoadedModel:(const core::domain::RequestModel &)model rel:(NSString *)rel {
+    if (!_apiClient) return;
     BOOL switching = (_hasRequest && S(rel) != _currentRel);
     if (switching) {
         [self autosaveCurrent];         // 1. A dirty -> autosave (editor A still intact)
@@ -63,19 +71,19 @@ static NSArray<NSString *> *BodyAllModes(void);
         [_respText clearContents];
         // §8.5: release A's response — the view does NOT keep a second copy (large body -> RAM back to baseline).
         [_respBuffers removeAllObjects];
-        _lastResp = core::ApiResponse{};
+        _lastResp = core::domain::ApiResponse{};
         _hasResp = NO;
     }
     try {
         _model = model;
         _currentRel = rel.UTF8String;
-        _currentId = _model.id;          // track the open request by stable id
+        _currentId = model.id().get();   // track the open request by stable id
         _hasRequest = YES;
         _hasResp = NO;
-        [self setRequestType:_model.type];
+        [self setRequestType:model.type()];
         [self populateEditorsFromModel];
         [self setHasRequest:YES];
-        _engine->session().saveLastOpened(_currentRel);
+        _apiClient->session().saveLastOpened(_currentRel);
         [self updateTitle];
         [self relayout];
         [self updateStatus:@""];
@@ -90,13 +98,13 @@ static NSArray<NSString *> *BodyAllModes(void);
 // §1.3: getResponse may read disk + parse JSON (large response) -> run in BACKGROUND, render on main.
 // Guard _currentId == reqId at completion so we DON'T show the response of a request already left.
 - (void)showCachedResponseForId:(const std::string &)reqId {
-    if (reqId.empty() || !_engine) return;
+    if (reqId.empty() || !_apiClient) return;
     std::string idCopy = reqId;
     __weak MainWindowController *ws = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         MainWindowController *s = ws;
-        if (!s || !s->_engine) return;
-        auto rec = s->_engine->getResponse(idCopy);    // disk I/O OFF the main thread
+        if (!s || !s->_apiClient) return;
+        auto rec = s->_apiClient->cache().getResponse(idCopy);    // disk I/O OFF the main thread
         if (!rec) return;
         __block core::ResponseRecord recCopy = std::move(*rec);
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -105,10 +113,10 @@ static NSArray<NSString *> *BodyAllModes(void);
             if (recCopy.isError) {
                 [s2 displayErrorKind:recCopy.errorKind message:N(recCopy.errorMessage)];
             } else {
-                s2->_lastResp = recCopy.response;
+                s2->_lastResp = recCopy.response;   // cache speaks domain now (REFACTOR_SPEC D)
                 s2->_hasResp = YES;
                 [s2 rebuildResponseBuffersAsync];   // format off main -> large cached response won't freeze UI (U2)
-                [s2 updateStatusFromResponse:recCopy.response error:NO endMs:recCopy.receivedAt];
+                [s2 updateStatusFromResponse:s2->_lastResp error:NO endMs:recCopy.receivedAt];
             }
         });
     });
@@ -117,57 +125,57 @@ static NSArray<NSString *> *BodyAllModes(void);
 - (void)populateEditorsFromModel {
     [_reqBuffers removeAllObjects];
     _bodyDrafts = [NSMutableDictionary dictionary];   // fresh request -> drop stale per-mode body drafts
-    using namespace core;
-    if (_model.type == RequestType::Http) {
-        HttpRequest &h = _model.http;
-        // Body defaults to JSON: request has no body yet (mode none) -> show as JSON.
-        if (h.body.mode == "none") { h.body = Body{}; h.body.mode = "json"; }
-        _bodyMode = N(h.body.mode);                    // the ENABLED mode for THIS request
-        // Seed a draft for EVERY mode the model actually holds content for (core::Body keeps all sub-fields
-        // at once). Switching Body mode then shows THIS request's own saved content per mode — never the
-        // previous request's, never a stale template for a mode the user already filled. Modes with no
-        // stored content are left unseeded -> fall back to their template on first switch.
-        for (NSString *mode in BodyAllModes()) {
-            NSString *txt = [self bodyBufferForMode:mode fromModel:h.body];
-            if (txt) _bodyDrafts[mode] = txt;
-        }
-        // Body buffer = EXACTLY the content to send (no {"mode","json"} wrapper); mode held by the app.
+    namespace d = core::domain;
+    if (!_model) { _reqText.string = @""; return; }
+    const d::RequestModel &m = *_model;
+    if (m.type() == d::RequestType::Http) {
+        const auto &h = std::get<d::HttpRequest>(m.payload());
+        // Body: the domain Body holds ONE mode; decompose it to (mode, unwrapped content). Other modes have
+        // no stored content (domain is single-mode) -> shown as their template on switch via _bodyDrafts.
+        core::serial::EditorBody eb = core::serial::bodyToEditor(h.body());
+        _bodyMode = N(eb.mode);
+        if (!eb.content.empty()) _bodyDrafts[_bodyMode] = N(eb.content);
         NSString *bodyText = _bodyDrafts[_bodyMode] ?: [self bodyTemplateForMode:_bodyMode];
-        [_reqBuffers addObject:bodyText];              // 0 = Body (leftmost, the enabled mode)
-        [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(h.params))];   // 1
-        [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(h.headers))];  // 2
-        [_reqBuffers addObject:N(fieldcodec::authToJson(h.auth))];          // 3
-        [_methodPopup selectTitle:N(h.method)];
-        _urlField.stringValue = N(h.url); _urlPrevLen = _urlField.stringValue.length;
+        [_reqBuffers addObject:bodyText];                                       // 0 = Body
+        [_reqBuffers addObject:N(core::serial::paramsToJson(h.params()))];      // 1 = Params
+        [_reqBuffers addObject:N(core::serial::headersToJson(h.headers()))];    // 2 = Headers
+        [_reqBuffers addObject:N(core::serial::authToJson(h.auth()))];          // 3 = Auth
+        [_methodPopup selectTitle:N(d::toString(h.method()))];
+        _urlField.stringValue = N(h.url().raw()); _urlPrevLen = _urlField.stringValue.length;
         [self updateBodyButtonLabel];
-    } else if (_model.type == RequestType::WebSocket) {
-        const WsRequest &w = _model.ws;
-        // Message tab = the frame to send (persisted as onOpenSend[0]); Headers tab = handshake headers.
-        [_reqBuffers addObject:N(w.onOpenSend.empty() ? std::string() : w.onOpenSend[0])];  // 0 = Message
-        [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(w.headers))];                   // 1 = Headers
-        [_reqBuffers addObject:N(fieldcodec::authToJson(w.auth))];                           // 2 = Auth
-        _urlField.stringValue = N(w.url); _urlPrevLen = _urlField.stringValue.length;
-    } else if (_model.type == RequestType::GraphQL) {
-        const GraphQlRequest &g = _model.graphql;
-        [_reqBuffers addObject:N(g.query)];                                          // 0 = Query document
-        [_reqBuffers addObject:N(g.variablesJson.empty() ? "{}" : g.variablesJson)]; // 1 = Variables (JSON)
-        [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(g.headers))];           // 2 = Headers
-        [_reqBuffers addObject:N(fieldcodec::authToJson(g.auth))];                   // 3 = Auth
-        _urlField.stringValue = N(g.url); _urlPrevLen = _urlField.stringValue.length;
+    } else if (m.type() == d::RequestType::WebSocket) {
+        const auto &w = std::get<d::WebSocketRequest>(m.payload());
+        std::string frame = w.onOpenSend().empty() ? std::string() : w.onOpenSend()[0].payload;
+        [_reqBuffers addObject:N(frame)];                                       // 0 = Message
+        [_reqBuffers addObject:N(core::serial::headersToJson(w.headers()))];    // 1 = Headers
+        [_reqBuffers addObject:N(core::serial::authToJson(w.auth()))];          // 2 = Auth
+        _urlField.stringValue = N(w.url().raw()); _urlPrevLen = _urlField.stringValue.length;
+    } else if (m.type() == d::RequestType::GraphQl) {
+        const auto &g = std::get<d::GraphQlRequest>(m.payload());
+        std::string vars = g.op().variables.text();
+        [_reqBuffers addObject:N(g.op().query)];                               // 0 = Query document
+        [_reqBuffers addObject:N(vars.empty() ? "{}" : vars)];                 // 1 = Variables (JSON)
+        [_reqBuffers addObject:N(core::serial::headersToJson(g.headers()))];   // 2 = Headers
+        [_reqBuffers addObject:N(core::serial::authToJson(g.auth()))];         // 3 = Auth
+        _urlField.stringValue = N(g.url().raw()); _urlPrevLen = _urlField.stringValue.length;
     } else {
-        const GrpcRequest &g = _model.grpc;
-        [_reqBuffers addObject:N(g.message.empty() ? "{}" : g.message)];
-        [_reqBuffers addObject:N(fieldcodec::keyValuesToJson(g.metadata))];
-        Auth dummy;
-        [_reqBuffers addObject:N(fieldcodec::authToJson(dummy))];
-        _urlField.stringValue = N(g.target); _urlPrevLen = _urlField.stringValue.length;
+        const auto &g = std::get<d::GrpcRequest>(m.payload());
+        std::string msg = g.message().text();
+        [_reqBuffers addObject:N(msg.empty() ? "{}" : msg)];
+        [_reqBuffers addObject:N(core::serial::metadataToJson(g.metadata()))];
+        [_reqBuffers addObject:N(core::serial::authToJson(d::Auth::none()))];   // gRPC has no Auth tab (dummy)
+        _urlField.stringValue = N(g.target()); _urlPrevLen = _urlField.stringValue.length;
         // reflection -> index 0; protoFiles/descriptorSet -> ".proto" (index 1).
-        _protoPopup.selectedIndex = (g.protoSource.mode == "reflection") ? 0 : 1;
+        bool reflection = false;
+        g.protoSource().match([&](auto &&p) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(p)>, d::ProtoReflection>) reflection = true;
+        });
+        _protoPopup.selectedIndex = reflection ? 0 : 1;
         [_protoPopup setNeedsDisplay:YES];
         [self showSavedGrpcMethodLabel];   // show the saved RPC (do NOT fetch; fetch on dropdown click)
     }
     // Config tab (last for every type) = per-request timeout_ms + tls.
-    [_reqBuffers addObject:N(fieldcodec::configToJson(_model.config))];
+    [_reqBuffers addObject:N(core::serial::configToJson(m.config()))];
     // Re-apply the left pane's remembered tab (if the key exists for the current request type); else first tab.
     NSInteger li = [self tabIndexForKey:_leftPaneActiveTabKey inTitles:_reqTabTitles];
     if (li >= (NSInteger)_reqBuffers.count) li = 0;
@@ -194,8 +202,6 @@ static NSArray<NSString *> *BodyAllModes(void);
 // Return NO on bad JSON (toast + select tab). silent=YES -> no tab change/no toast (autosave).
 - (BOOL)syncModelFromEditors:(BOOL)silent {
     [self stashActiveReqBuffer];
-    using namespace core;
-    std::string err;
     NSArray<NSString *> *names = _reqTabTitles;
     auto fail = [&](NSInteger tab, const std::string &e) {
         if (!silent) {
@@ -205,38 +211,75 @@ static NSArray<NSString *> *BodyAllModes(void);
         }
         return NO;
     };
-    if (_model.type == RequestType::Http) {
-        HttpRequest &h = _model.http;
-        h.method = _methodPopup.selectedTitle.UTF8String ?: "GET";
-        h.url = _urlField.stringValue.UTF8String;
-        if (![self syncBodyFromBuffer:_reqBuffers[0] into:h.body err:err]) return fail(0, err);
-        if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[1]), h.params, err)) return fail(1, err);
-        if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[2]), h.headers, err)) return fail(2, err);
-        if (!fieldcodec::jsonToAuth(S(_reqBuffers[3]), h.auth, err)) return fail(3, err);
-    } else if (_model.type == RequestType::WebSocket) {
-        WsRequest &w = _model.ws;
-        w.url = _urlField.stringValue.UTF8String;
+    namespace d = core::domain;
+    if (!_model) return YES;                       // nothing open to sync
+    const d::RequestModel &cur = *_model;
+    std::string url = S(_urlField.stringValue);
+    d::RequestModel::Payload payload = cur.payload();   // rebuilt below from the editor buffers
+
+    if (cur.type() == d::RequestType::Http) {
+        auto mr = d::parseHttpMethod(S(_methodPopup.selectedTitle ?: @"GET"));
+        d::HttpMethod method = mr.isOk() ? mr.take() : d::HttpMethod::Get;
+        d::HttpRequest::Parts p{method, d::Url::create(url).take()};   // Parts holds a Url -> brace-init
+        auto br = core::serial::bodyFromEditor(S(_bodyMode.length ? _bodyMode : @"json"), S(_reqBuffers[0]));
+        if (!br.isOk()) return fail(0, br.error().message);
+        p.body = br.take();
+        auto pr = core::serial::jsonToParams(S(_reqBuffers[1])); if (!pr.isOk()) return fail(1, pr.error().message);
+        p.params = pr.take();
+        auto hr = core::serial::jsonToHeaders(S(_reqBuffers[2])); if (!hr.isOk()) return fail(2, hr.error().message);
+        p.headers = hr.take();
+        auto ar = core::serial::jsonToAuth(S(_reqBuffers[3])); if (!ar.isOk()) return fail(3, ar.error().message);
+        p.auth = ar.take();
+        payload = d::HttpRequest::create(std::move(p)).take();
+    } else if (cur.type() == d::RequestType::WebSocket) {
+        const auto &curW = std::get<d::WebSocketRequest>(cur.payload());
+        d::WebSocketRequest::Parts p{d::Url::create(url).take()};   // Parts holds a Url -> brace-init
+        p.subprotocols = curW.subprotocols();
+        p.defaultSendKind = curW.defaultSendKind();
         std::string frame = S(_reqBuffers[0]);
-        w.onOpenSend.clear();
-        if (!frame.empty()) w.onOpenSend.push_back(frame);   // sent on connect; also the Send-frame source
-        if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[1]), w.headers, err)) return fail(1, err);
-        if (!fieldcodec::jsonToAuth(S(_reqBuffers[2]), w.auth, err)) return fail(2, err);
-    } else if (_model.type == RequestType::GraphQL) {
-        GraphQlRequest &g = _model.graphql;
-        g.url = _urlField.stringValue.UTF8String;
-        g.query = S(_reqBuffers[0]);
-        g.variablesJson = S(_reqBuffers[1]);                 // free-form JSON (validated at send by core)
-        if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[2]), g.headers, err)) return fail(2, err);
-        if (!fieldcodec::jsonToAuth(S(_reqBuffers[3]), g.auth, err)) return fail(3, err);
+        if (!frame.empty()) p.onOpenSend.push_back({d::WsSendKind::Text, frame});
+        auto hr = core::serial::jsonToHeaders(S(_reqBuffers[1])); if (!hr.isOk()) return fail(1, hr.error().message);
+        p.headers = hr.take();
+        auto ar = core::serial::jsonToAuth(S(_reqBuffers[2])); if (!ar.isOk()) return fail(2, ar.error().message);
+        p.auth = ar.take();
+        auto wr = d::WebSocketRequest::create(std::move(p)); if (!wr.isOk()) return fail(0, wr.error().message);
+        payload = wr.take();
+    } else if (cur.type() == d::RequestType::GraphQl) {
+        const auto &curG = std::get<d::GraphQlRequest>(cur.payload());
+        d::GraphQlRequest::Parts p{d::Url::create(url).take()};   // Parts holds a Url -> brace-init
+        p.op = curG.op();                            // preserve operation type / operationName (not edited here)
+        p.op.query = S(_reqBuffers[0]);
+        p.op.variables = d::JsonText::of(S(_reqBuffers[1]));
+        p.subTransport = curG.subTransport();
+        p.wsProtocol = curG.wsProtocol();
+        auto hr = core::serial::jsonToHeaders(S(_reqBuffers[2])); if (!hr.isOk()) return fail(2, hr.error().message);
+        p.headers = hr.take();
+        auto ar = core::serial::jsonToAuth(S(_reqBuffers[3])); if (!ar.isOk()) return fail(3, ar.error().message);
+        p.auth = ar.take();
+        auto gr = d::GraphQlRequest::create(std::move(p)); if (!gr.isOk()) return fail(0, gr.error().message);
+        payload = gr.take();
     } else {
-        GrpcRequest &g = _model.grpc;
-        g.target = _urlField.stringValue.UTF8String;
-        g.message = S(_reqBuffers[0]);
-        if (!fieldcodec::jsonToKeyValues(S(_reqBuffers[1]), g.metadata, err)) return fail(1, err);
+        const auto &curG = std::get<d::GrpcRequest>(cur.payload());
+        d::GrpcRequest::Parts p;
+        p.target = url;
+        p.service = curG.service();                  // service/method/methodType set via the RPC picker
+        p.method = curG.method();
+        p.methodType = curG.methodType();
+        p.message = d::JsonText::of(S(_reqBuffers[0]));
+        auto mr = core::serial::jsonToMetadata(S(_reqBuffers[1])); if (!mr.isOk()) return fail(1, mr.error().message);
+        p.metadata = mr.take();
+        p.protoSource = curG.protoSource();
+        p.tls = curG.tls();
+        auto gr = d::GrpcRequest::create(std::move(p)); if (!gr.isOk()) return fail(0, gr.error().message);
+        payload = gr.take();
     }
     // Config tab (last buffer for every type) -> per-request timeout_ms + tls.
     NSInteger ci = (NSInteger)_reqBuffers.count - 1;
-    if (ci >= 0 && !fieldcodec::jsonToConfig(S(_reqBuffers[ci]), _model.config, err)) return fail(ci, err);
+    auto cfgRes = core::serial::jsonToConfig(ci >= 0 ? S(_reqBuffers[ci]) : std::string("{}"));
+    if (!cfgRes.isOk()) return fail(ci, cfgRes.error().message);
+    auto built = d::RequestModel::create(cur.id(), cur.name(), cur.seq(), cfgRes.take(), std::move(payload));
+    if (!built.isOk()) return fail(0, built.error().message);
+    _model = built.take();
     return YES;
 }
 
@@ -252,11 +295,12 @@ static NSArray<NSString *> *BodyAllModes(void);
 
 // Autosave all changes (no prompt). Bad JSON -> skip + light warning.
 - (void)autosaveCurrent {
-    if (!_hasRequest || !_engine || _currentRel.empty()) return;
+    if (!_hasRequest || !_apiClient || _currentRel.empty()) return;
     if (![self resyncCurrentRelById]) return;     // request deleted/path-changed -> don't write back the old path
     if (![self syncModelFromEditors:YES]) { [self toastWarn:StrToastAutosaveFailed]; return; }
-    try { _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // filename may change (sync §4)
-          _engine->session().saveLastOpened(_currentRel);
+    if (!_model) return;
+    try { _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model);  // filename may change (sync §4)
+          _apiClient->session().saveLastOpened(_currentRel);
           // §T1: autosave touches only 1 request -> update its containing level, do NOT re-scan root + reloadData the whole tree.
           NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];
           [self refreshTreeLevel:parentRel];
@@ -301,81 +345,9 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     ];
     return t;
 }
-// Every known body mode, in dropdown order — used to seed/sync drafts for all modes a request can hold.
-static NSArray<NSString *> *BodyAllModes(void) {
-    static NSArray *m;
-    if (!m) {
-        NSMutableArray *a = [NSMutableArray array];
-        for (NSDictionary *d in BodyModeTable()) [a addObject:d[@"mode"]];
-        m = [a copy];
-    }
-    return m;
-}
 - (NSString *)bodyTemplateForMode:(NSString *)mode {
     for (NSDictionary *d in BodyModeTable()) if ([d[@"mode"] isEqualToString:mode]) return d[@"tpl"];
     return @"{}";                                        // json (default for text/xml/none)
-}
-
-// One mode's stored content -> the text shown in the editor (exactly what's sent, unwrapped).
-// Returns nil when the model holds NO content for that mode -> caller leaves the draft unseeded and
-// shows the template on first switch (so untouched modes never get a template baked into the file).
-- (NSString *)bodyBufferForMode:(NSString *)mode fromModel:(const core::Body &)b {
-    using namespace core;
-    if ([mode isEqualToString:@"form-urlencoded"])
-        return b.formUrlEncoded.empty() ? nil : N(fieldcodec::keyValuesToJson(b.formUrlEncoded));
-    if ([mode isEqualToString:@"binary"])
-        return b.binaryFilePath.empty() ? nil
-             : [NSString stringWithFormat:@"{\n  \"filePath\": \"%@\"\n}", N(b.binaryFilePath)];
-    if ([mode isEqualToString:@"text"]) return b.text.empty() ? nil : N(b.text);
-    if ([mode isEqualToString:@"xml"])  return b.xml.empty()  ? nil : N(b.xml);
-    return b.json.empty() ? nil : N(b.json);             // json (default)
-}
-
-// Editor buffers -> Model.Body. core::Body is a tagged union that keeps EVERY mode's content with `mode`
-// marking the one that is enabled/sent. We write back ALL per-mode drafts (so toggling Form<->JSON<->… or
-// switching requests never drops a mode the user filled), then set `mode` to the active one. Only the
-// ENABLED mode must parse; an unparseable INACTIVE draft keeps its previously-saved value (start from `out`).
-- (BOOL)syncBodyFromBuffer:(NSString *)activeBuf into:(core::Body &)out err:(std::string &)err {
-    NSString *active = _bodyMode.length ? _bodyMode : @"json";
-    _bodyDrafts[active] = activeBuf ?: @"";          // the active tab's live text is the source for its mode
-    core::Body nb = out;                             // preserve fields with no draft / bad inactive draft
-    for (NSString *mode in _bodyDrafts) {
-        std::string e;
-        if (![self applyBodyDraft:_bodyDrafts[mode] mode:mode into:nb err:e] &&
-            [mode isEqualToString:active]) { err = e; return NO; }   // only the enabled mode blocks the save
-    }
-    nb.mode = S(active);
-    out = nb;
-    return YES;
-}
-
-// Parse ONE draft into its matching field of `nb` (leaving the other fields untouched). The mode tag is
-// NOT written here — the caller sets `nb.mode` to the enabled mode after applying every draft.
-- (BOOL)applyBodyDraft:(NSString *)buf mode:(NSString *)mode into:(core::Body &)nb err:(std::string &)err {
-    using namespace core;
-    if ([mode isEqualToString:@"form-urlencoded"]) {
-        std::vector<KeyValue> kv;
-        if (!fieldcodec::jsonToKeyValues(S(buf), kv, err)) return NO;
-        nb.formUrlEncoded = std::move(kv);
-    } else if ([mode isEqualToString:@"binary"]) {
-        // Accept both an object {"filePath": "..."} and a bare path string (backward compat).
-        NSString *t = [buf stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        id obj = t.length ? [NSJSONSerialization JSONObjectWithData:[t dataUsingEncoding:NSUTF8StringEncoding]
-                                                            options:0 error:nil] : nil;
-        if ([obj isKindOfClass:[NSDictionary class]]) {
-            NSString *fp = ((NSDictionary *)obj)[@"filePath"] ?: ((NSDictionary *)obj)[@"path"];
-            nb.binaryFilePath = fp.length ? S(fp) : "";
-        } else {
-            nb.binaryFilePath = S(t);   // treat the whole text as a path
-        }
-    } else if ([mode isEqualToString:@"text"]) {
-        nb.text = S(buf);
-    } else if ([mode isEqualToString:@"xml"]) {
-        nb.xml = S(buf);
-    } else {
-        nb.json = S(buf);   // raw user-entered JSON, NOT encoded into a "json" key
-    }
-    return YES;
 }
 
 - (void)bodyButtonClicked:(OS9BevelButton *)b {
@@ -460,10 +432,9 @@ static NSArray<NSString *> *BodyAllModes(void) {
 
 // Copy the current request as cURL (HTTP) / grpcurl (gRPC) to the clipboard.
 - (void)copyAsCurl:(id)sender {
-    if (!_hasRequest || !_engine) return;
-    if (![self syncModelFromEditors:NO]) return;
-    core::ResolvedRequest rr = _engine->resolveRequest(_model);
-    std::string curl = core::toCurl(rr.model);
+    if (!_hasRequest || !_apiClient) return;
+    if (![self syncModelFromEditors:NO] || !_model) return;
+    std::string curl = _apiClient->exportCurl(*_model);
     NSPasteboard *pb = [NSPasteboard generalPasteboard];
     [pb clearContents];
     [pb setString:N(curl) forType:NSPasteboardTypeString];
@@ -521,11 +492,15 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
     NSUInteger len = text.length;
     NSUInteger prev = _urlPrevLen;
     _urlPrevLen = len;
-    if (!_engine || len < prev + 8) return;            // not a paste -> ignore
+    if (!_apiClient || len < prev + 8) return;         // not a paste (or no collection open) -> ignore
     // GraphQL first (it also recognizes a cURL whose body is a GraphQL document), then cURL, then grpcurl.
-    BOOL isGraphql = _engine->looksLikeGraphql(text.UTF8String);
-    BOOL isCurl = !isGraphql && _engine->looksLikeCurl(text.UTF8String);
-    BOOL isGrpc = !isGraphql && !isCurl && _engine->looksLikeGrpcurl(text.UTF8String);
+    // REFACTOR_SPEC P6: classify via IImportService (CoreApiClient) — the only import path now.
+    BOOL isGraphql = NO, isCurl = NO, isGrpc = NO;
+    if (auto k = _apiClient->detectImport(text.UTF8String)) {
+        isGraphql = (*k == core::domain::ImportKind::GraphQl);
+        isCurl    = (*k == core::domain::ImportKind::Curl);
+        isGrpc    = (*k == core::domain::ImportKind::Grpcurl);
+    }
     if (!isGraphql && !isCurl && !isGrpc) return;
     // cURL + grpcurl: auto-import immediately (toast, NO popup). GraphQL: confirm via popup first.
     // Defer: avoid processing RIGHT inside the text-change callback (the field editor is busy).
@@ -542,10 +517,21 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 }
 
 // Run the importer for `kind` (0=cURL, 1=grpcurl, 2=GraphQL).
-static core::ImportResult GqlRunImport(core::Engine *e, NSInteger kind, const char *t) {
-    if (kind == 1) return e->importFromGrpc(t);
-    if (kind == 2) return e->importFromGraphql(t);
-    return e->importFromCurl(t);
+// REFACTOR_SPEC P6: IImportService (CoreApiClient) is the only import path — it returns a DOMAIN
+// RequestModel inside core::ImportParseResult (no legacy bridge). Pure + thread-safe -> safe to call
+// from the background import queue.
+static core::ImportParseResult GqlRunImport(MainWindowController *self, NSInteger kind, const char *t) {
+    core::ImportParseResult out;
+    if (!self->_apiClient) { out.ok = false; out.error = "import unavailable"; return out; }
+    core::domain::ImportKind dk = kind == 1 ? core::domain::ImportKind::Grpcurl
+                                : kind == 2 ? core::domain::ImportKind::GraphQl
+                                            : core::domain::ImportKind::Curl;
+    auto r = self->_apiClient->importText(t, dk);
+    if (!r.isOk()) { out.ok = false; out.error = r.error().message; return out; }
+    out.ok = true;
+    out.model = r.value().model; // domain RequestModel straight from the import service
+    out.unknown = r.value().unknown;
+    return out;
 }
 static NSString *GqlImportLabel(NSInteger kind) {
     return kind == 1 ? @"grpcurl" : kind == 2 ? @"GraphQL" : @"cURL";
@@ -554,21 +540,21 @@ static NSString *GqlImportLabel(NSInteger kind) {
 // Import + create request immediately, no prompt; report result via toast.
 // §A3: parse (possibly large) in BACKGROUND -> doesn't block main; marshal result to main.
 - (void)importNow:(NSString *)text kind:(NSInteger)kind {
-    if (!_engine) return;
+    if (!_apiClient) return;
     NSString *t = [text copy];
     __weak MainWindowController *ws = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        MainWindowController *s = ws; if (!s || !s->_engine) return;
-        __block core::ImportResult rb = GqlRunImport(s->_engine.get(), kind, t.UTF8String);
+        MainWindowController *s = ws; if (!s || !s->_apiClient) return;
+        __block core::ImportParseResult rb = GqlRunImport(s, kind, t.UTF8String);
         dispatch_async(dispatch_get_main_queue(), ^{
             MainWindowController *s2 = ws; if (!s2) return;
-            if (!rb.ok) {
+            if (!rb.ok || !rb.model) {
                 [s2 toastWarn:[NSString stringWithFormat:StrFmtToastImportFailed,
                                GqlImportLabel(kind), rb.error.c_str()]];
                 [s2 restoreUrlField];
                 return;
             }
-            [s2 applyImport:rb.model];
+            [s2 applyImport:*rb.model];
         });
     });
 }
@@ -576,15 +562,15 @@ static NSString *GqlImportLabel(NSInteger kind) {
 // Show a confirmation preview; if OK -> create a new request in the tree + open the editor.
 // §A3: parse in BACKGROUND; dialog + applyImport on main.
 - (void)offerImport:(NSString *)text kind:(NSInteger)kind {
-    if (!_engine) return;
+    if (!_apiClient) return;
     NSString *t = [text copy];
     __weak MainWindowController *ws = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        MainWindowController *s = ws; if (!s || !s->_engine) return;
-        __block core::ImportResult rb = GqlRunImport(s->_engine.get(), kind, t.UTF8String);
+        MainWindowController *s = ws; if (!s || !s->_apiClient) return;
+        __block core::ImportParseResult rb = GqlRunImport(s, kind, t.UTF8String);
         dispatch_async(dispatch_get_main_queue(), ^{
             MainWindowController *s2 = ws; if (!s2) return;
-            if (!rb.ok) {
+            if (!rb.ok || !rb.model) {
                 [s2 toastWarn:[NSString stringWithFormat:StrFmtToastImportFailed,
                                GqlImportLabel(kind), rb.error.c_str()]];
                 return;
@@ -592,41 +578,39 @@ static NSString *GqlImportLabel(NSInteger kind) {
             NSString *primary = s2->_hasRequest ? StrBtnReplaceCurrent : StrBtnCreateRequest;
             NSString *detected = kind == 1 ? StrGrpcurlDetected : kind == 2 ? StrGraphqlDetected : StrCurlDetected;
             NSString *body = [NSString stringWithFormat:@"%@\n\n%@", detected,
-                              [s2 importSummary:rb.model unknown:rb.unknown kind:kind]];
+                              [s2 importSummary:*rb.model unknown:rb.unknown kind:kind]];
             NSInteger choice = [OS9Dialog confirmWithTitle:StrDlgImportTitle
                                                    message:body
                                                    buttons:@[ StrCancel, primary ]
                                              defaultButton:1 cancelButton:0
                                                       icon:OS9AlertNote
                                                     parent:s2->_window];
-            if (choice == 1) [s2 applyImport:rb.model];
+            if (choice == 1) [s2 applyImport:*rb.model];
             else [s2 restoreUrlField];   // cancel: restore the URL field to the open request's value
         });
     });
 }
 
-- (NSString *)importSummary:(const core::RequestModel &)m unknown:(const std::vector<std::string> &)unknown kind:(NSInteger)kind {
+- (NSString *)importSummary:(const core::domain::RequestModel &)m unknown:(const std::vector<std::string> &)unknown kind:(NSInteger)kind {
+    namespace d = core::domain;
     NSMutableString *s = [NSMutableString string];
     if (kind == 2) {
-        const core::GraphQlRequest &g = m.graphql;
-        if (!g.url.empty()) [s appendFormat:@"endpoint: %s\n", g.url.c_str()];
-        NSString *firstLine = [N(g.query) componentsSeparatedByString:@"\n"].firstObject ?: @"";
+        const auto &g = std::get<d::GraphQlRequest>(m.payload());
+        if (!g.url().raw().empty()) [s appendFormat:@"endpoint: %s\n", g.url().raw().c_str()];
+        NSString *firstLine = [N(g.op().query) componentsSeparatedByString:@"\n"].firstObject ?: @"";
         [s appendFormat:@"%@\n", firstLine];
-        [s appendFormat:@"headers: %lu · auth: %s", (unsigned long)g.headers.size(), g.auth.type.c_str()];
+        [s appendFormat:@"headers: %lu", (unsigned long)g.headers().size()];
     } else if (kind == 1) {
-        const core::GrpcRequest &g = m.grpc;
-        [s appendFormat:@"target: %s\n", g.target.c_str()];
-        [s appendFormat:@"%s / %s\n",
-            g.service.empty() ? "(pick RPC)" : g.service.c_str(),
-            g.method.empty() ? "" : g.method.c_str()];
-        [s appendFormat:@"TLS: %@ · metadata: %lu · proto: %s",
-            m.config.tls ? @"secure" : @"plaintext",
-            (unsigned long)g.metadata.size(), g.protoSource.mode.c_str()];
+        const auto &g = std::get<d::GrpcRequest>(m.payload());
+        [s appendFormat:@"target: %s\n", g.target().c_str()];
+        [s appendFormat:@"%s / %s\n", g.service().empty() ? "(pick RPC)" : g.service().c_str(),
+                        g.method().c_str()];
+        [s appendFormat:@"TLS: %@ · metadata: %lu", m.config().tlsEnabledDefault ? @"secure" : @"plaintext",
+                        (unsigned long)g.metadata().entries().size()];
     } else {
-        const core::HttpRequest &h = m.http;
-        [s appendFormat:@"%s  %s\n", h.method.c_str(), h.url.c_str()];
-        [s appendFormat:@"headers: %lu · body: %s · auth: %s",
-            (unsigned long)h.headers.size(), h.body.mode.c_str(), h.auth.type.c_str()];
+        const auto &h = std::get<d::HttpRequest>(m.payload());
+        [s appendFormat:@"%s  %s\n", d::toString(h.method()).c_str(), h.url().raw().c_str()];
+        [s appendFormat:@"headers: %lu", (unsigned long)h.headers().size()];
     }
     if (!unknown.empty()) {
         [s appendString:@"\nskipped:"];
@@ -636,65 +620,74 @@ static NSString *GqlImportLabel(NSInteger kind) {
 }
 
 // Suggested name: HTTP "METHOD lastPathSegment"; gRPC = method.
-- (NSString *)deriveImportName:(const core::RequestModel &)m {
-    if (m.type == core::RequestType::Grpc)
-        return m.grpc.method.empty() ? StrImportedGrpc : N(m.grpc.method);
-    if (m.type == core::RequestType::GraphQL)
-        return m.graphql.operationName.empty() ? N(m.name) : N(m.graphql.operationName);
-    NSString *url = N(m.http.url);
-    NSString *path = url;
+- (NSString *)deriveImportName:(const core::domain::RequestModel &)m {
+    namespace d = core::domain;
+    if (m.type() == d::RequestType::Grpc) {
+        const auto &g = std::get<d::GrpcRequest>(m.payload());
+        return g.method().empty() ? StrImportedGrpc : N(g.method());
+    }
+    if (m.type() == d::RequestType::GraphQl) {
+        const auto &g = std::get<d::GraphQlRequest>(m.payload());
+        return g.op().operationName.empty() ? N(m.name()) : N(g.op().operationName);
+    }
+    const auto &h = std::get<d::HttpRequest>(m.payload());
+    NSString *path = N(h.url().raw());
     NSRange q = [path rangeOfString:@"?"]; if (q.location != NSNotFound) path = [path substringToIndex:q.location];
     NSString *last = path.lastPathComponent;
     if (!last.length || [last containsString:@":"]) last = StrDefaultImportName; // host only
-    return [NSString stringWithFormat:@"%s %@", m.http.method.c_str(), last];
+    return [NSString stringWithFormat:@"%s %@", d::toString(h.method()).c_str(), last];
 }
 
 // REPLACE the open request with the imported model (keep id/name/file, swap type + payload).
 // No request open -> create new (fallback).
-- (void)applyImport:(const core::RequestModel &)rawModel {
+- (void)applyImport:(const core::domain::RequestModel &)rawModel {
+    namespace d = core::domain;
     // §9.5: proactively rewrite literal values matching the active env back to {{alias}} on import.
-    core::RequestModel m = _engine ? _engine->aliasifyModel(rawModel) : rawModel;
+    d::RequestModel m = _apiClient ? _apiClient->aliasifyModel(rawModel) : rawModel;
     if (!_hasRequest || _currentRel.empty() || ![self resyncCurrentRelById]) {
         NSString *name = [self deriveImportName:m];   // fallback: no request open -> create new
         try {
             std::string folderRel = [self selectedFolderRel];   // §A4: refresh only the target level, don't reload the whole tree
-            std::string rel = _engine->collection().createRequestFromModel(folderRel, m, name.UTF8String);
+            std::string rel = _apiClient->collection().createRequestFromModel(folderRel, m, name.UTF8String);
             [self refreshTreeLevel:N(folderRel)];
             [self loadRequestAtRel:N(rel)];
             [self toastOk:[NSString stringWithFormat:StrFmtToastImportedCreated, name]];
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
         return;
     }
-    // Replace in place: keep the current request's id + name; URL/target show the parsed value.
-    core::RequestModel n = m;
-    n.id = _model.id;
-    n.name = _model.name;
+    if (!_model) return;
+    // Replace in place: keep the current request's id + name + seq; take the imported payload + config.
+    d::RequestModel n =
+        d::RequestModel::create(_model->id(), _model->name(), _model->seq(), m.config(), m.payload()).take();
     _model = n;
     _hasResp = NO;
-    [self setRequestType:_model.type];   // rebuild tabs for the new type (http <-> grpc)
+    [self setRequestType:n.type()];      // rebuild tabs for the new type (http <-> grpc)
     [self populateEditorsFromModel];
     [self setHasRequest:YES];
     _respText.string = @"";              // clear old response
     [self updateTitle];
     [self relayout];
     try {
-        _currentRel = _engine->collection().saveRequest(_currentRel, _model);   // save + sync filename (§4)
-        _engine->session().saveLastOpened(_currentRel);
+        _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model);   // save + sync filename (§4)
+        _apiClient->session().saveLastOpened(_currentRel);
         NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];  // §A4: only the request's containing level
         [self refreshTreeLevel:parentRel];
         [self reselectTreeByRel:N(_currentRel)];
         [self toastOk:[NSString stringWithFormat:StrFmtToastReplaced,
-                       _model.type == core::RequestType::Grpc ? @"gRPC" : @"HTTP"]];
+                       n.type() == d::RequestType::Grpc ? @"gRPC" : @"HTTP"]];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 
 // Restore the URL field to the open request's URL/target (avoid saving the command text by mistake).
 - (void)restoreUrlField {
-    if (!_hasRequest) { _urlField.stringValue = @""; _urlPrevLen = 0; return; }
-    NSString *u = (_model.type == core::RequestType::Grpc)      ? N(_model.grpc.target)
-                  : (_model.type == core::RequestType::WebSocket) ? N(_model.ws.url)
-                  : (_model.type == core::RequestType::GraphQL)   ? N(_model.graphql.url)
-                                                                  : N(_model.http.url);
+    if (!_hasRequest || !_model) { _urlField.stringValue = @""; _urlPrevLen = 0; return; }
+    std::string url;
+    _model->match([&](auto &&p) {
+        using T = std::decay_t<decltype(p)>;
+        if constexpr (std::is_same_v<T, core::domain::GrpcRequest>) url = p.target();
+        else url = p.url().raw(); // Http / WebSocket / GraphQl all expose url()
+    });
+    NSString *u = N(url);
     _urlField.stringValue = u;
     _urlPrevLen = u.length;
 }
@@ -702,7 +695,7 @@ static NSString *GqlImportLabel(NSInteger kind) {
 - (void)methodChanged:(id)sender { }
 - (void)urlCommitted:(id)sender {
     // gRPC: URL field = target -> Enter reloads the RPC list. HTTP: split out the query.
-    if (_model.type == core::RequestType::Grpc) [self reloadGrpcMethods];
+    if ([self requestType] == core::RequestType::Grpc) [self reloadGrpcMethods];
     else [self parseUrlQueryIntoQueryTab];
 }
 
@@ -766,7 +759,7 @@ static NSString *GqlImportLabel(NSInteger kind) {
     if (_configMode) {
         _titleBar.title = (_configKind == 0) ? StrTitleEnvironments : StrTitleSettings;
     } else {
-        _titleBar.title = _hasRequest ? N(_model.name) : @"";
+        _titleBar.title = (_hasRequest && _model) ? N(_model->name()) : @"";
     }
     [_titleBar setNeedsDisplay:YES];
 }
@@ -774,12 +767,12 @@ static NSString *GqlImportLabel(NSInteger kind) {
 #pragma mark Save (manual ⌘S still kept)
 
 - (void)saveRequest:(id)sender {
-    if (!_hasRequest || !_engine) return;
+    if (!_hasRequest || !_apiClient) return;
     if (![self resyncCurrentRelById]) { [self toastWarn:StrToastRequestGone]; return; }
-    if (![self syncModelFromEditors:NO]) return;
+    if (![self syncModelFromEditors:NO] || !_model) return;
     try {
-        _currentRel = _engine->collection().saveRequest(_currentRel, _model);  // filename syncs to method/name (§4)
-        _engine->session().saveLastOpened(_currentRel);
+        _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model);  // filename syncs to method/name (§4)
+        _apiClient->session().saveLastOpened(_currentRel);
         NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];  // §A4: incremental update
         [self refreshTreeLevel:parentRel];
         [self reselectTreeByRel:N(_currentRel)];

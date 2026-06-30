@@ -11,8 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "core/streaming/i_stream_sink.hpp"
-#include "core/types.hpp"
+#include "core/streaming/i_stream_sink.hpp" // Stream{Event,Meta,End} + enums via stream_events.hpp
 
 namespace {
 

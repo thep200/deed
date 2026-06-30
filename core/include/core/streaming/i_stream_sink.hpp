@@ -10,7 +10,7 @@
 //      thread — the consumer marshals to its UI thread itself (§6).
 #pragma once
 
-#include "core/types.hpp"
+#include "core/streaming/stream_events.hpp"
 
 namespace core {
 

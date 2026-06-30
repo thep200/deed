@@ -9,9 +9,21 @@
 #include <optional>
 #include <string>
 
-#include "core/types.hpp"
+#include "core/domain/response/api_error.hpp"    // domain ErrorKind
+#include "core/domain/response/api_response.hpp"  // domain ApiResponse
 
 namespace core {
+
+// Cache ceiling/floor at ENV layer (ops-level). 0 = "unset" -> fall back to getenv/default. The UI loads
+// these from .env (DeedConfig) and passes them in; Core does not read .env itself (stays pure C++).
+// (Lives here, not in the deleted engine.hpp, so detail::buildCacheConfig + CoreApiClient can use it.)
+struct CacheLimits {
+    int ramMaxMb = 0;
+    int ramMinMb = 0;
+    int diskMaxMb = 0;
+    int diskMinMb = 0;
+    int thresholdKb = 0;
+};
 
 // EFFECTIVE config (already clamped env/user) exposed to cache. Cache code does NOT read env/AppConfig.
 struct CacheConfig {
@@ -22,15 +34,15 @@ struct CacheConfig {
     bool persist = true;   // off -> RAM only (no L2 disk attached)
 };
 
-// Latest response record for one request.
+// Latest response record for one request. (Domain DTOs — REFACTOR_SPEC D: cache speaks domain.)
 struct ResponseRecord {
-    bool isError = false;                      // true -> store error (network/timeout/cancel) to replay
-    ErrorKind errorKind = ErrorKind::Unknown;  // valid when isError
+    bool isError = false;                       // true -> store error (network/timeout/cancel) to replay
+    domain::ErrorKind errorKind = domain::ErrorKind::Internal; // valid when isError
     std::string errorMessage;
-    ApiResponse response;                      // valid when !isError
-    std::int64_t receivedAt = 0;               // epoch ms (disk LRU)
-    std::string requestRevision;               // request fingerprint at send time (changed -> "stale response" badge)
-    std::uint64_t bytes = 0;                   // estimated size for cap accounting (computed if = 0)
+    domain::ApiResponse response;               // valid when !isError
+    std::int64_t receivedAt = 0;                // epoch ms (disk LRU)
+    std::string requestRevision;                // request fingerprint at send time (changed -> "stale response" badge)
+    std::uint64_t bytes = 0;                    // estimated size for cap accounting (computed if = 0)
 };
 
 // Estimate total bytes of one record (body + headers + meta) for cap accounting.

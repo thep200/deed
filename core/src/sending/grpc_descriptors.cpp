@@ -19,6 +19,11 @@ namespace core::grpcdesc {
 namespace {
 
 namespace refl = grpc::reflection::v1alpha;
+namespace d = core::domain;
+
+// Overload set for ProtoSource::match (visits the variant alternatives).
+template <class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template <class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 // Lazy DescriptorDatabase that fetches FileDescriptorProto via gRPC ServerReflection.
 // Keeps one bidi-stream alive, caches received files so DescriptorPool can resolve transitive imports.
@@ -133,16 +138,16 @@ void collectServices(const gp::FileDescriptor* file, std::vector<std::string>& o
         out.push_back(std::string(file->service(i)->full_name()));
 }
 
-bool buildFromProtoFiles(const GrpcRequest& g, DescriptorContext& ctx) {
+bool buildFromProtoFiles(const d::ProtoFiles& ps, DescriptorContext& ctx) {
     ctx.sourceTree = std::make_unique<gp::compiler::DiskSourceTree>();
-    if (g.protoSource.importPaths.empty()) {
+    if (ps.importPaths.empty()) {
         ctx.sourceTree->MapPath("", "."); // default to cwd
     }
-    for (const auto& ip : g.protoSource.importPaths) ctx.sourceTree->MapPath("", ip);
+    for (const auto& ip : ps.importPaths) ctx.sourceTree->MapPath("", ip);
     ctx.errCollector = std::make_unique<ProtoErrorCollector>();
     ctx.importer = std::make_unique<gp::compiler::Importer>(ctx.sourceTree.get(),
                                                             ctx.errCollector.get());
-    for (const auto& f : g.protoSource.files) {
+    for (const auto& f : ps.protoFiles) {
         const gp::FileDescriptor* fd = ctx.importer->Import(f);
         if (fd == nullptr) {
             ctx.error = "failed to load .proto: " + ctx.errCollector->errors;
@@ -154,10 +159,10 @@ bool buildFromProtoFiles(const GrpcRequest& g, DescriptorContext& ctx) {
     return true;
 }
 
-bool buildFromDescriptorSet(const GrpcRequest& g, DescriptorContext& ctx) {
+bool buildFromDescriptorSet(const d::ProtoDescriptorSet& ps, DescriptorContext& ctx) {
     std::string raw;
-    if (!fsutil::readFile(g.protoSource.descriptorSetPath, raw)) {
-        ctx.error = "cannot read descriptorSet: " + g.protoSource.descriptorSetPath;
+    if (!fsutil::readFile(ps.descriptorSetPath, raw)) {
+        ctx.error = "cannot read descriptorSet: " + ps.descriptorSetPath;
         return false;
     }
     gp::FileDescriptorSet fds;
@@ -178,12 +183,12 @@ bool buildFromDescriptorSet(const GrpcRequest& g, DescriptorContext& ctx) {
     return true;
 }
 
-bool buildFromReflection(const GrpcRequest& g, DescriptorContext& ctx) {
-    if (g.target.empty()) {
+bool buildFromReflection(const std::string& target, const d::TlsConfig& tls, DescriptorContext& ctx) {
+    if (target.empty()) {
         ctx.error = "reflection: target (host:port) is empty";
         return false;
     }
-    ctx.channel = grpc::CreateChannel(g.target, makeCreds(g.tls));
+    ctx.channel = grpc::CreateChannel(target, makeCreds(tls));
     auto db = std::make_unique<ReflectionDescriptorDatabase>(ctx.channel);
     if (!db->getServices(&ctx.serviceNames)) {
         ctx.error = db->lastError().empty() ? "reflection: ListServices failed" : db->lastError();
@@ -203,22 +208,22 @@ void ProtoErrorCollector::RecordError(absl::string_view filename, int line, int 
               std::to_string(column) + ": " + std::string(message) + "\n";
 }
 
-std::shared_ptr<grpc::ChannelCredentials> makeCreds(const GrpcTls& tls) {
-    if (!tls.enabled) return grpc::InsecureChannelCredentials();
+std::shared_ptr<grpc::ChannelCredentials> makeCreds(const d::TlsConfig& tls) {
+    if (!tls.enabled()) return grpc::InsecureChannelCredentials();
     grpc::SslCredentialsOptions opts;
     std::string buf;
-    if (!tls.caCertPath.empty() && fsutil::readFile(tls.caCertPath, buf)) opts.pem_root_certs = buf;
-    if (!tls.clientKeyPath.empty() && fsutil::readFile(tls.clientKeyPath, buf)) opts.pem_private_key = buf;
-    if (!tls.clientCertPath.empty() && fsutil::readFile(tls.clientCertPath, buf)) opts.pem_cert_chain = buf;
+    if (!tls.caCertPath().empty() && fsutil::readFile(tls.caCertPath(), buf)) opts.pem_root_certs = buf;
+    if (!tls.clientKeyPath().empty() && fsutil::readFile(tls.clientKeyPath(), buf)) opts.pem_private_key = buf;
+    if (!tls.clientCertPath().empty() && fsutil::readFile(tls.clientCertPath(), buf)) opts.pem_cert_chain = buf;
     return grpc::SslCredentials(opts);
 }
 
-bool buildDescriptors(const GrpcRequest& g, DescriptorContext& ctx) {
-    if (g.protoSource.mode == "protoFiles") return buildFromProtoFiles(g, ctx);
-    if (g.protoSource.mode == "descriptorSet") return buildFromDescriptorSet(g, ctx);
-    if (g.protoSource.mode == "reflection") return buildFromReflection(g, ctx);
-    ctx.error = "unknown protoSource mode: " + g.protoSource.mode;
-    return false;
+bool buildDescriptors(const d::GrpcRequest& g, DescriptorContext& ctx) {
+    return g.protoSource().match(overloaded{
+        [&](const d::ProtoReflection&) { return buildFromReflection(g.target(), g.tls(), ctx); },
+        [&](const d::ProtoFiles& ps) { return buildFromProtoFiles(ps, ctx); },
+        [&](const d::ProtoDescriptorSet& ps) { return buildFromDescriptorSet(ps, ctx); },
+    });
 }
 
 std::string methodTypeOf(const gp::MethodDescriptor* m) {
@@ -229,8 +234,18 @@ std::string methodTypeOf(const gp::MethodDescriptor* m) {
     return "unary";
 }
 
-std::vector<GrpcMethodInfo> listMethods(const DescriptorContext& ctx) {
-    std::vector<GrpcMethodInfo> out;
+namespace {
+d::GrpcMethodType methodTypeEnumOf(const gp::MethodDescriptor* m) {
+    bool c = m->client_streaming(), s = m->server_streaming();
+    if (c && s) return d::GrpcMethodType::BidiStreaming;
+    if (c) return d::GrpcMethodType::ClientStreaming;
+    if (s) return d::GrpcMethodType::ServerStreaming;
+    return d::GrpcMethodType::Unary;
+}
+} // namespace
+
+std::vector<d::GrpcMethodDescriptor> listMethods(const DescriptorContext& ctx) {
+    std::vector<d::GrpcMethodDescriptor> out;
     if (!ctx.activePool) return out;
     for (const auto& sname : ctx.serviceNames) {
         // Hide the server's own reflection service (any version: v1, v1alpha, ...).
@@ -239,8 +254,8 @@ std::vector<GrpcMethodInfo> listMethods(const DescriptorContext& ctx) {
         if (!svc) continue;
         for (int i = 0; i < svc->method_count(); ++i) {
             const gp::MethodDescriptor* m = svc->method(i);
-            out.push_back(GrpcMethodInfo{std::string(svc->full_name()),
-                                         std::string(m->name()), methodTypeOf(m)});
+            out.push_back(d::GrpcMethodDescriptor{std::string(svc->full_name()),
+                                                  std::string(m->name()), methodTypeEnumOf(m)});
         }
     }
     return out;

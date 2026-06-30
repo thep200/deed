@@ -34,19 +34,22 @@ bool GraphQlImporter::canHandle(const std::string& input) const {
     return startsWithGqlKeyword(trim(input));   // raw GraphQL document only
 }
 
-ImportResult GraphQlImporter::parse(const std::string& input) const {
-    ImportResult res;
+ImportParseResult GraphQlImporter::parse(const std::string& input) const {
+    namespace d = core::domain;
     std::string t = trim(input);
-    if (!startsWithGqlKeyword(t)) { res.error = "not a GraphQL document"; return res; }
+    if (!startsWithGqlKeyword(t)) return {false, std::nullopt, {}, "not a GraphQL document"};
 
-    RequestModel m;
-    m.type = RequestType::GraphQL;
-    m.name = "Imported GraphQL";
-    m.graphql.query = t;          // the user fills the endpoint URL after import
-    m.graphql.variablesJson = "{}";
-    res.ok = true;
-    res.model = std::move(m);
-    return res;
+    // The user fills the endpoint URL after import; operation Auto + Http transport keeps create() valid.
+    d::GraphQlOperation op;
+    op.query = t;
+    d::GraphQlRequest::Parts gp{d::Url::create("").take(), op, d::HeaderList{}, d::Auth::none(),
+                                d::GqlSubTransport::Http, ""};
+    auto gql = d::GraphQlRequest::create(std::move(gp));
+    if (!gql) return {false, std::nullopt, {}, gql.error().message};
+    auto model = d::RequestModel::create(d::RequestId(""), "Imported GraphQL", 0,
+                                         d::RequestConfig{d::Timeout::fromMillis(1800000).take(), true},
+                                         gql.take());
+    return {true, model.take(), {}, ""};
 }
 
 } // namespace core

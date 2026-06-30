@@ -6,16 +6,102 @@
 #include <random>
 #include <stdexcept>
 
-#include "codec/json_codec.hpp"
+#include <variant>
+
+#include "codec/json_codec.hpp"                       // parseGuarded (depth guard) for lightweight metadata reads
 #include "core/persistence/request_naming.hpp"
 #include "core/persistence/stores.hpp"
 #include "infra/fs_util.hpp"
+#include "infra/serialization/request_json_mapper.hpp" // NATIVE JSON <-> domain RequestModel (REFACTOR_SPEC D)
 
 namespace fs = std::filesystem;
 
 namespace core {
 
 namespace {
+
+// Request (de)serialization is NATIVE domain: on-disk JSON <-> domain RequestModel via request_json_mapper.
+// (json_codec is kept only for parseGuarded — the lightweight metadata reads in scanLevel/requestIdFromFile.)
+core::domain::RequestModel requestFromText(const std::string &txt) {
+  static const core::infra::RequestJsonMapper mapper;
+  auto m = mapper.fromJson(txt);
+  if (!m) throw std::runtime_error("parse request: " + m.error().message);
+  return m.take();
+}
+std::string requestToText(const core::domain::RequestModel &m) {
+  static const core::infra::RequestJsonMapper mapper;
+  return mapper.toJson(m);
+}
+
+// --- domain helpers for the filename-encoding + immutable-update the store needs ---
+// The survivor view enum used by request-filename encoding.
+RequestType toViewType(core::domain::RequestType t) {
+  switch (t) {
+  case core::domain::RequestType::Grpc: return RequestType::Grpc;
+  case core::domain::RequestType::WebSocket: return RequestType::WebSocket;
+  case core::domain::RequestType::GraphQl: return RequestType::GraphQL;
+  default: return RequestType::Http;
+  }
+}
+core::domain::RequestType toDomainType(RequestType t) {
+  switch (t) {
+  case RequestType::Grpc: return core::domain::RequestType::Grpc;
+  case RequestType::WebSocket: return core::domain::RequestType::WebSocket;
+  case RequestType::GraphQL: return core::domain::RequestType::GraphQl;
+  default: return core::domain::RequestType::Http;
+  }
+}
+// HTTP method string for the filename (empty for non-HTTP — gRPC/WS/GraphQL have no method in the name).
+std::string httpMethodOf(const core::domain::RequestModel &m) {
+  if (m.type() != core::domain::RequestType::Http) return {};
+  return core::domain::toString(std::get<core::domain::HttpRequest>(m.payload()).method());
+}
+// Immutable update: same payload/seq/config, new id + name (domain RequestModel has no setters).
+core::domain::RequestModel withIdName(const core::domain::RequestModel &m, std::string id, std::string name) {
+  return core::domain::RequestModel::create(core::domain::RequestId(std::move(id)), std::move(name), m.seq(),
+                                            m.config(), m.payload())
+      .take();
+}
+// Default payload for a freshly created request of `type` (mirrors the legacy createRequest defaults).
+// NB: fully-qualified core::domain:: — a `using namespace core::domain` would clash with the legacy core::
+// types (Auth/WsSendKind/GrpcRequest/...) still reachable here via stores.hpp -> types.hpp.
+core::domain::RequestModel::Payload defaultPayloadForCreate(core::domain::RequestType type) {
+  namespace cd = core::domain;
+  switch (type) {
+  case cd::RequestType::WebSocket:
+    return cd::WebSocketRequest::create(
+               {cd::Url::create("").take(), {}, {}, cd::Auth::none(), {}, cd::WsSendKind::Text})
+        .take();
+  case cd::RequestType::GraphQl: {
+    cd::GraphQlOperation op;
+    op.query = "query {\n  \n}"; // starter document
+    return cd::GraphQlRequest::create(
+               {cd::Url::create("").take(), op, {}, cd::Auth::none(), cd::GqlSubTransport::Http, ""})
+        .take();
+  }
+  case cd::RequestType::Grpc: {
+    cd::GrpcRequest::Parts gp; // reflection + unary + empty target are the Parts defaults
+    gp.message = cd::JsonText::of("{}");
+    return cd::GrpcRequest::create(std::move(gp)).take();
+  }
+  default: {
+    // HTTP: GET + the common default headers as OFF-by-default hints (User-Agent on), no body.
+    std::vector<cd::Header> hdrs;
+    hdrs.push_back(cd::Header::create("Content-Type", "application/json", false).take());
+    hdrs.push_back(cd::Header::create("Accept", "*/*", false).take());
+    hdrs.push_back(cd::Header::create("User-Agent", "deed", true).take());
+    hdrs.push_back(cd::Header::create("Accept-Encoding", "gzip, deflate, br", false).take());
+    hdrs.push_back(cd::Header::create("Connection", "keep-alive", false).take());
+    return cd::HttpRequest::create({cd::HttpMethod::Get, cd::Url::create("").take(), {}, {},
+                                    cd::HeaderList(std::move(hdrs)), cd::Body::none(), cd::Auth::none()})
+        .take();
+  }
+  }
+}
+// Default per-request config for a new request (30-min timeout, TLS verify on) — matches the legacy default.
+core::domain::RequestConfig defaultConfig() {
+  return {core::domain::Timeout::fromMillis(1800000).take(), true};
+}
 
 // Special dirs that are NOT shown in the request tree.
 bool isReservedDir(const std::string &name) {
@@ -258,22 +344,19 @@ TreeNode CollectionStore::scanTree() const {
   return walk("");
 }
 
-RequestModel CollectionStore::loadRequest(const std::string &relPath) const {
+core::domain::RequestModel CollectionStore::loadRequest(const std::string &relPath) const {
   std::string txt;
   if (!fsutil::readFile(fsutil::join(root_, relPath), txt))
     throw std::runtime_error("cannot read request: " + relPath);
-  RequestModel m = codec::requestFromJson(codec::parseGuarded(txt));
-  // id must be valid to embed in the FILENAME ([a-z0-9], no '_'). Empty/legacy
-  // "req_..." content
-  // -> do NOT write to disk here (loadRequest is a pure READ — avoid
-  // write-storm on open/browse). Prefer the id FROM THE FILENAME (stable after
-  // migrateAddIdToFilenames); only generate a temp one if the filename also
-  // lacks an id. Content rewrites are owned by
-  // saveRequest/migrateAddIdToFilenames.
-  if (!isValidFileId(m.id)) {
-    ParsedRequestName p =
-        parseRequestFilename(fs::path(relPath).filename().string());
-    m.id = (p.ok && isValidFileId(p.id)) ? p.id : genId();
+  core::domain::RequestModel m = requestFromText(txt);
+  // id must be valid to embed in the FILENAME ([a-z0-9], no '_'). Empty/legacy "req_..." content
+  // -> do NOT write to disk here (loadRequest is a pure READ — avoid write-storm on open/browse). Prefer the
+  // id FROM THE FILENAME (stable after migrateAddIdToFilenames); only generate a temp one if the filename
+  // also lacks an id. Content rewrites are owned by saveRequest/migrateAddIdToFilenames.
+  if (!isValidFileId(m.id().get())) {
+    ParsedRequestName p = parseRequestFilename(fs::path(relPath).filename().string());
+    std::string id = (p.ok && isValidFileId(p.id)) ? p.id : genId();
+    m = withIdName(m, std::move(id), m.name());
   }
   return m;
 }
@@ -320,13 +403,12 @@ std::string CollectionStore::findRelPathById(const std::string &id) const {
 // true if a rename happened.
 bool CollectionStore::migrateOneFile(const std::string &childRel) const {
   try {
-    RequestModel m =
+    core::domain::RequestModel m =
         loadRequest(childRel); // ensure a clean id (generate if legacy/empty)
-    std::string method =
-        (m.type == RequestType::Http) ? m.http.method : std::string();
+    std::string method = httpMethodOf(m);
     fs::path src = fs::path(fsutil::join(root_, childRel));
     std::string newName =
-        uniqueEncodedName(src.parent_path(), m.id, m.type, method, m.name);
+        uniqueEncodedName(src.parent_path(), m.id().get(), toViewType(m.type()), method, m.name());
     if (newName == src.filename().string())
       return false;
     std::error_code ec;
@@ -358,20 +440,19 @@ int CollectionStore::migrateAddIdToFilenames() const {
 }
 
 std::string CollectionStore::saveRequest(const std::string &relPath,
-                                         const RequestModel &m) const {
+                                         const core::domain::RequestModel &m) const {
   invalidateIdIndex(); // may rename file (relPath changes) -> idIndex_ must be
                        // rebuilt
   fs::path cur = fs::path(fsutil::join(root_, relPath));
   fs::path dir = cur.parent_path();
-  std::string method =
-      (m.type == RequestType::Http) ? m.http.method : std::string();
+  std::string method = httpMethodOf(m);
   // Write content first (source of truth), then sync the filename = derived
   // cache (§4).
-  fsutil::writeFileAtomic(cur.string(), codec::dumpRequest(m));
-  std::string desired = encodeRequestFilename(m.id, m.type, method, m.name);
+  fsutil::writeFileAtomic(cur.string(), requestToText(m));
+  std::string desired = encodeRequestFilename(m.id().get(), toViewType(m.type()), method, m.name());
   if (cur.filename().string() == desired)
     return relPath; // name already matches -> done
-  std::string newName = uniqueEncodedName(dir, m.id, m.type, method, m.name);
+  std::string newName = uniqueEncodedName(dir, m.id().get(), toViewType(m.type()), method, m.name());
   fs::path dst = dir / newName;
   std::error_code ec;
   fs::rename(cur, dst, ec); // git detects rename via unchanged content
@@ -386,55 +467,31 @@ std::string CollectionStore::createRequest(const std::string &folderRel,
   invalidateIdIndex();
   fs::path dir = fs::path(fsutil::join(root_, folderRel));
   fs::create_directories(dir);
-  RequestModel m;
-  m.id = genId();
-  m.name = name;
-  m.type = type;
-  if (type == RequestType::Http) {
-    m.http.method = "GET";
-    // Common default headers offered as hints, OFF BY DEFAULT (enabled=false);
-    // the user enables each as needed (like how Postman ships headers
-    // disabled). EXCEPTION: User-Agent="deed" is enabled so every NEW request
-    // identifies itself. This applies to freshly created requests only —
-    // existing requests (loaded via load/save) and imports are never
-    // auto-modified.
-    m.http.headers.push_back({"Content-Type", "application/json", false});
-    m.http.headers.push_back({"Accept", "*/*", false});
-    m.http.headers.push_back({"User-Agent", "deed", true});
-    m.http.headers.push_back({"Accept-Encoding", "gzip, deflate, br", false});
-    m.http.headers.push_back({"Connection", "keep-alive", false});
-    m.http.body.mode = "none";
-  } else if (type == RequestType::WebSocket) {
-    m.ws.defaultSendKind =
-        WsSendKind::Text; // url filled in by the user (ws:// or wss://)
-  } else if (type == RequestType::GraphQL) {
-    m.graphql.query = "query {\n  \n}"; // starter document
-    m.graphql.variablesJson = "{}";
-  } else {
-    m.grpc.methodType = "unary";
-    m.grpc.protoSource.mode = "reflection";
-    m.grpc.message = "{}";
-  }
-  std::string method =
-      (type == RequestType::Http) ? m.http.method : std::string();
-  fs::path full = dir / uniqueEncodedName(dir, m.id, type, method, name);
-  fsutil::writeFileAtomic(full.string(), codec::dumpRequest(m));
+  // Build a fresh domain request of `type` with the store's default payload (HTTP ships the common headers
+  // OFF-by-default except User-Agent=deed; gRPC reflection/unary; GraphQL starter doc). NEW requests only —
+  // existing requests (load/save) and imports are never auto-modified.
+  std::string id = genId();
+  core::domain::RequestModel m = core::domain::RequestModel::create(
+      core::domain::RequestId(id), name, 0, defaultConfig(), defaultPayloadForCreate(toDomainType(type)))
+      .take();
+  std::string method = httpMethodOf(m);
+  fs::path full = dir / uniqueEncodedName(dir, id, type, method, name);
+  fsutil::writeFileAtomic(full.string(), requestToText(m));
   return fs::relative(full, fs::path(root_)).generic_string();
 }
 
 std::string
 CollectionStore::createRequestFromModel(const std::string &folderRel,
-                                        RequestModel m,
+                                        core::domain::RequestModel m,
                                         const std::string &name) const {
   invalidateIdIndex();
   fs::path dir = fs::path(fsutil::join(root_, folderRel));
   fs::create_directories(dir);
-  m.id = genId(); // new id, independent of the import source
-  m.name = name;
-  std::string method =
-      (m.type == RequestType::Http) ? m.http.method : std::string();
-  fs::path full = dir / uniqueEncodedName(dir, m.id, m.type, method, name);
-  fsutil::writeFileAtomic(full.string(), codec::dumpRequest(m));
+  std::string id = genId(); // new id, independent of the import source
+  m = withIdName(m, id, name);
+  std::string method = httpMethodOf(m);
+  fs::path full = dir / uniqueEncodedName(dir, id, toViewType(m.type()), method, name);
+  fsutil::writeFileAtomic(full.string(), requestToText(m));
   return fs::relative(full, fs::path(root_)).generic_string();
 }
 
@@ -460,14 +517,13 @@ std::string CollectionStore::rename(const std::string &relPath,
   }
   // request: update the name field + rename the file (KEEP old id, change only
   // the slug). §2A.
-  RequestModel m = loadRequest(relPath);
-  m.name = newName;
-  std::string method =
-      (m.type == RequestType::Http) ? m.http.method : std::string();
+  core::domain::RequestModel m = loadRequest(relPath);
+  m = withIdName(m, m.id().get(), newName); // keep id, change name (immutable update)
+  std::string method = httpMethodOf(m);
   fs::path newFull =
       src.parent_path() /
-      uniqueEncodedName(src.parent_path(), m.id, m.type, method, newName);
-  fsutil::writeFileAtomic(newFull.string(), codec::dumpRequest(m));
+      uniqueEncodedName(src.parent_path(), m.id().get(), toViewType(m.type()), method, newName);
+  fsutil::writeFileAtomic(newFull.string(), requestToText(m));
   fs::remove(src);
   return fs::relative(newFull, fs::path(root_)).generic_string();
 }
@@ -485,15 +541,13 @@ std::string CollectionStore::duplicate(const std::string &relPath) const {
       throw std::runtime_error("duplicate folder error: " + ec.message());
     return fs::relative(dst, fs::path(root_)).generic_string();
   }
-  RequestModel m = loadRequest(relPath);
-  m.id = genId(); // new id to avoid collisions
-  m.name = m.name + " copy";
-  std::string method =
-      (m.type == RequestType::Http) ? m.http.method : std::string();
+  core::domain::RequestModel m = loadRequest(relPath);
+  m = withIdName(m, genId(), m.name() + " copy"); // new id to avoid collisions
+  std::string method = httpMethodOf(m);
   fs::path newFull =
       src.parent_path() /
-      uniqueEncodedName(src.parent_path(), m.id, m.type, method, m.name);
-  fsutil::writeFileAtomic(newFull.string(), codec::dumpRequest(m));
+      uniqueEncodedName(src.parent_path(), m.id().get(), toViewType(m.type()), method, m.name());
+  fsutil::writeFileAtomic(newFull.string(), requestToText(m));
   return fs::relative(newFull, fs::path(root_)).generic_string();
 }
 

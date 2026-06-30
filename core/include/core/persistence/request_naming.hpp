@@ -9,7 +9,7 @@
 
 #include <string>
 
-#include "core/types.hpp"
+#include "core/request_type.hpp" // RequestType (survives types.hpp removal)
 
 namespace core {
 

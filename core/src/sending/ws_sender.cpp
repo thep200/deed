@@ -8,6 +8,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <curl/curl.h>
@@ -20,6 +21,7 @@
 #endif
 
 namespace core {
+namespace d = core::domain;
 
 namespace {
 
@@ -382,25 +384,45 @@ private:
     WsResult result_;
 };
 
+// Apply a domain Auth to the handshake header list (bearer/basic/apikey-in-header; apikey-in-query is the
+// URL layer's job — the handshake ignores it, matching the legacy applyAuthHeaders behavior).
+void applyWsAuth(const d::Auth& auth, std::vector<std::pair<std::string, std::string>>& hdrs) {
+    auth.match([&](auto&& a) {
+        using T = std::decay_t<decltype(a)>;
+        if constexpr (std::is_same_v<T, d::AuthBearer>) {
+            hdrs.push_back({"Authorization", "Bearer " + a.token});
+        } else if constexpr (std::is_same_v<T, d::AuthBasic>) {
+            std::string creds = a.username + ":" + a.password;
+            hdrs.push_back({"Authorization",
+                            "Basic " + base64(reinterpret_cast<const std::uint8_t*>(creds.data()),
+                                              creds.size())});
+        } else if constexpr (std::is_same_v<T, d::AuthApiKey>) {
+            if (a.in == d::ApiKeyIn::Header) hdrs.push_back({a.key, a.value});
+        }
+    });
+}
+
 // Build the handshake header list (auth + custom headers + Sec-WebSocket-Protocol). Caller owns the list.
-struct curl_slist* buildWsHandshakeHeaders(const WsRequest& w) {
+struct curl_slist* buildWsHandshakeHeaders(const d::WebSocketRequest& w) {
     struct curl_slist* hdrs = nullptr;
-    std::vector<KeyValue> headers = w.headers;
-    applyAuthHeaders(w.auth, headers);   // bearer/basic/apikey -> handshake header (no per-message headers)
+    std::vector<std::pair<std::string, std::string>> headers;
+    for (const auto& h : w.headers().items())
+        if (h.enabled() && !h.name().empty()) headers.push_back({h.name(), h.value()});
+    applyWsAuth(w.auth(), headers);   // bearer/basic/apikey -> handshake header (no per-message headers)
     for (const auto& kv : headers)
-        if (kv.enabled && !kv.key.empty())
-            hdrs = curl_slist_append(hdrs, (kv.key + ": " + kv.value).c_str());
-    if (!w.subprotocols.empty()) {
+        hdrs = curl_slist_append(hdrs, (kv.first + ": " + kv.second).c_str());
+    const auto& subs = w.subprotocols();
+    if (!subs.empty()) {
         std::string sp = "Sec-WebSocket-Protocol: ";
-        for (std::size_t i = 0; i < w.subprotocols.size(); ++i) sp += (i ? ", " : "") + w.subprotocols[i];
+        for (std::size_t i = 0; i < subs.size(); ++i) sp += (i ? ", " : "") + subs[i];
         hdrs = curl_slist_append(hdrs, sp.c_str());
     }
     return hdrs;
 }
 
 // Apply the WebSocket handshake options to the easy handle (CONNECT_ONLY=2 -> handshake then hand back).
-void configureWsHandshake(CURL* curl, const WsRequest& w, const WsConfig& cfg, struct curl_slist* hdrs) {
-    curl_easy_setopt(curl, CURLOPT_URL, w.url.c_str());
+void configureWsHandshake(CURL* curl, const d::WebSocketRequest& w, const WsConfig& cfg, struct curl_slist* hdrs) {
+    curl_easy_setopt(curl, CURLOPT_URL, w.url().raw().c_str());
     curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
     if (hdrs) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)cfg.connectTimeoutMs);
@@ -426,9 +448,8 @@ void wsEmitClose(IStreamSink& sink, const std::shared_ptr<WsSession>& session, c
 
 } // namespace
 
-void wsRun(const ResolvedRequest& req, IStreamSink& sink,
+void wsRun(const d::WebSocketRequest& w, IStreamSink& sink,
            const std::shared_ptr<WsSession>& session, const std::string& sessionId) {
-    const WsRequest& w = req.model.ws;
     const WsConfig& cfg = session->cfg;
     const long long t0 = nowMs();
     auto offsetMs = [&] { return nowMs() - t0; };
@@ -478,8 +499,11 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
     session->open.store(true);
 
     // onOpenSend: queue subscribe-style messages to fire right after open (§1/§5).
-    for (const auto& m : w.onOpenSend)
-        enqueue(session, OutFrame{std::vector<std::uint8_t>(m.begin(), m.end()), CURLWS_TEXT, 0});
+    for (const auto& m : w.onOpenSend())
+        enqueue(session, OutFrame{std::vector<std::uint8_t>(m.payload.begin(), m.payload.end()),
+                                  static_cast<unsigned>((m.kind == d::WsSendKind::Binary) ? CURLWS_BINARY
+                                                                                          : CURLWS_TEXT),
+                                  0});
 
     curl_socket_t sock = CURL_SOCKET_BAD;
     curl_easy_getinfo(curl, CURLINFO_ACTIVESOCKET, &sock);
@@ -490,11 +514,10 @@ void wsRun(const ResolvedRequest& req, IStreamSink& sink,
     wsEmitClose(sink, session, res, offsetMs());   // curl + hdrs freed by their RAII guards on return (L13)
 }
 
-void wsRunProtocol(const ResolvedRequest& req, const WsFrameHooks& hooks,
+void wsRunProtocol(const d::WebSocketRequest& w, const WsFrameHooks& hooks,
                    const std::shared_ptr<WsSession>& session, const std::string& sessionId,
                    const std::shared_ptr<CancelToken>& cancel) {
     (void)sessionId;
-    const WsRequest& w = req.model.ws;
     const WsConfig& cfg = session->cfg;
     const long long t0 = nowMs();
     // On any terminal outcome, the protocol owns the §3 open/close contract via hooks.onClose.

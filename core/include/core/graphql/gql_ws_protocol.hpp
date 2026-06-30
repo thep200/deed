@@ -8,18 +8,19 @@
 //                   subprotocol `graphql-ws`           <-> library subscriptions-transport-ws (legacy).
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <string>
 
+#include "core/domain/graphql/graphql_request.hpp"
 #include "core/streaming/i_stream_sink.hpp"
-#include "core/types.hpp"
 
 namespace core {
 
 class GraphQlWsProtocol {
 public:
     // uiSink receives the cleaned StreamEvents/open/close; sendRaw sends a raw WS text frame to the server.
-    GraphQlWsProtocol(std::string streamId, GraphQlRequest req, IStreamSink* uiSink,
+    GraphQlWsProtocol(std::string streamId, core::domain::GraphQlRequest req, IStreamSink* uiSink,
                       std::function<void(const std::string&)> sendRaw);
 
     void onOpen();                          // transport connected -> send connection_init (+ onStreamOpen)
@@ -40,7 +41,7 @@ private:
     const char* tComplete() const;  // complete | stop
 
     std::string streamId_;
-    GraphQlRequest req_;
+    core::domain::GraphQlRequest req_;
     IStreamSink* sink_;
     std::function<void(const std::string&)> sendRaw_;
     std::string id_ = "1";          // subscription id (single subscription per session in v1)

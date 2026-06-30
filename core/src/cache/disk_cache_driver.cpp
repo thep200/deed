@@ -6,7 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "codec/json_codec.hpp"
+#include "cache/cache_codec.hpp"
 #include "infra/fs_util.hpp"
 
 namespace fs = std::filesystem;
@@ -113,7 +113,7 @@ std::optional<ResponseRecord> DiskCacheDriver::get(const std::string& id) {
         return std::nullopt;
     }
     try {
-        ResponseRecord rec = codec::responseRecordFromJson(nlohmann::json::parse(txt));
+        ResponseRecord rec = cachecodec::fromJson(txt);
         it->second.atime = ++tick_;                   // last-access -> LRU (RAM only)
         touch(it->second, id);
         dirty_ = true;                                // §1.1: do NOT write index on every read; flush later
@@ -134,7 +134,7 @@ bool DiskCacheDriver::put(const std::string& id, const ResponseRecord& r, std::u
         }
         return false;
     }
-    try { fsutil::writeFileAtomic(fileFor(id), codec::toJson(r).dump()); }
+    try { fsutil::writeFileAtomic(fileFor(id), cachecodec::toJson(r)); }
     catch (...) { return false; }
     auto it = index_.find(id);
     if (it != index_.end()) {                         // overwrite: subtract old size + drop old LRU node

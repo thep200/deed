@@ -10,9 +10,24 @@
 
 #include "core/graphql/gql_ws_protocol.hpp"
 #include "core/streaming/i_stream_sink.hpp"
-#include "core/types.hpp"
 
 namespace {
+
+namespace d = core::domain;
+
+// Build a domain GraphQlRequest subscription for the protocol driver (url/headers irrelevant to the protocol
+// layer — it only reads query/operationName/variables/wsProtocol). `wsProtocol`: "graphql-transport-ws"
+// (modern) | "graphql-ws" (legacy subscriptions-transport-ws).
+d::GraphQlRequest mkGql(const std::string& query, const std::string& wsProtocol = "graphql-transport-ws") {
+    d::GraphQlRequest::Parts p{
+        d::Url::create("wss://example/graphql").take(),
+        d::GraphQlOperation{query, "", d::JsonText::emptyObject(), d::GqlOperationType::Subscription},
+        d::HeaderList{},
+        d::Auth::none(),
+        d::GqlSubTransport::Ws,
+        wsProtocol};
+    return d::GraphQlRequest::create(std::move(p)).take();
+}
 
 int g_pass = 0;
 int g_fail = 0;
@@ -42,16 +57,13 @@ void test_modern_happy_path() {
     std::printf("[gql_ws: modern happy path]\n");
     RecSink sink;
     std::vector<std::string> sent;
-    core::GraphQlRequest req;
-    req.query = "subscription { countdown(from: 3) }";
-    req.connectionInitPayloadJson = R"({"authToken":"abc"})";
-    core::GraphQlWsProtocol proto("s1", req, &sink, [&](const std::string& s) { sent.push_back(s); });
+    core::GraphQlWsProtocol proto("s1", mkGql("subscription { countdown(from: 3) }"), &sink,
+                                  [&](const std::string& s) { sent.push_back(s); });
 
     proto.onOpen();
     GCHECK(sink.opens == 1, "onStreamOpen fired once");
     GCHECK(!sent.empty() && typeOf(sent.back()) == "connection_init", "sent connection_init");
-    // auth payload carried
-    GCHECK(sent.back().find("authToken") != std::string::npos, "connection_init carries auth payload");
+    // (The domain GraphQlRequest carries no connection_init payload — not modeled — so none is asserted.)
 
     proto.onFrame(R"({"type":"connection_ack"})");
     GCHECK(typeOf(sent.back()) == "subscribe", "ack -> sent subscribe");
@@ -84,9 +96,8 @@ void test_subscribe_error() {
     std::printf("[gql_ws: error]\n");
     RecSink sink;
     std::vector<std::string> sent;
-    core::GraphQlRequest req;
-    req.query = "subscription { bad }";
-    core::GraphQlWsProtocol proto("s2", req, &sink, [&](const std::string& s) { sent.push_back(s); });
+    core::GraphQlWsProtocol proto("s2", mkGql("subscription { bad }"), &sink,
+                                  [&](const std::string& s) { sent.push_back(s); });
     proto.onOpen();
     proto.onFrame(R"({"type":"connection_ack"})");
     proto.onFrame(R"({"type":"error","id":"1","payload":[{"message":"boom"}]})");
@@ -98,9 +109,8 @@ void test_stop_sends_complete() {
     std::printf("[gql_ws: stop]\n");
     RecSink sink;
     std::vector<std::string> sent;
-    core::GraphQlRequest req;
-    req.query = "subscription { t }";
-    core::GraphQlWsProtocol proto("s3", req, &sink, [&](const std::string& s) { sent.push_back(s); });
+    core::GraphQlWsProtocol proto("s3", mkGql("subscription { t }"), &sink,
+                                  [&](const std::string& s) { sent.push_back(s); });
     proto.onOpen();
     proto.onFrame(R"({"type":"connection_ack"})");
     proto.requestStop();
@@ -113,10 +123,8 @@ void test_legacy_names() {
     std::printf("[gql_ws: legacy subscriptions-transport-ws]\n");
     RecSink sink;
     std::vector<std::string> sent;
-    core::GraphQlRequest req;
-    req.query = "subscription { t }";
-    req.wsProtocol = core::GqlWsProtocol::SubscriptionsTransportWs;
-    core::GraphQlWsProtocol proto("s4", req, &sink, [&](const std::string& s) { sent.push_back(s); });
+    core::GraphQlWsProtocol proto("s4", mkGql("subscription { t }", "graphql-ws"), &sink,
+                                  [&](const std::string& s) { sent.push_back(s); });
     proto.onOpen();
     proto.onFrame(R"({"type":"connection_ack"})");
     GCHECK(typeOf(sent.back()) == "start", "legacy: ack -> 'start' (not subscribe)");

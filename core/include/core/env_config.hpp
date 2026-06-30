@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "core/request_model.hpp" // TreeNode carries a RequestType
+#include "core/request_type.hpp" // TreeNode carries a RequestType (relocated; survives types.hpp removal)
 
 namespace core {
 

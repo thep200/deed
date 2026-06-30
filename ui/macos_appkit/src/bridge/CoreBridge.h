@@ -1,28 +1,19 @@
-// CoreBridge — connects Core (C++) to AppKit, honoring the threading contract (UI spec §3).
-// IUiDelegate callbacks run on a BACKGROUND THREAD -> marshal back to the main queue via GCD; the UI
-// checks the handle is still valid (generation) before touching views; unknown-handle callbacks -> drop silently.
-//
-// Streaming (SPEC_grpc_streaming §6/§8): onStreamEvent can fire VERY fast (e.g. Fibonacci). Appending one
-// Scintilla mutation per event would jam the main queue, so the bridge COALESCES: events accumulate into
-// a locked buffer on the background thread, and a single flush is scheduled on main every ~50ms. The
-// consumer (controller) only ever sees neutral DTO-derived data — never a transport type (INV-1).
+// CoreBridge — the response-sink protocol the controller implements (REFACTOR_SPEC P6 UI flip).
+// The new send path is IApiClient + UiObserver (domain IRequestObserver); UiObserver marshals domain
+// ResponseEvents to the main queue and calls these methods. The old delegate bridge + coalescer are gone —
+// UiObserver owns the marshaling/coalescing now.
 #import <Cocoa/Cocoa.h>
 
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <memory>
-#include <mutex>
-#include <string>
 
-#include "core/engine.hpp"
-#include "core/types.hpp"
+#include "core/domain/response/api_error.hpp"
+#include "core/domain/response/api_response.hpp"
+#include "core/streaming/stream_events.hpp" // StreamStatus (streaming-close enum; survives types.hpp removal)
 
 // Protocol implemented by MainWindowController (already on the main thread when called).
 @protocol CoreResponseSink <NSObject>
-- (void)onCoreResponse:(uint64_t)handle response:(const core::ApiResponse &)resp;
-- (void)onCoreError:(uint64_t)handle error:(const core::ApiError &)err;
+- (void)onCoreResponse:(uint64_t)handle response:(const core::domain::ApiResponse &)resp;
+- (void)onCoreError:(uint64_t)handle error:(const core::domain::ApiError &)err;
 // --- streaming (all delivered on the main thread) ---
 // `token` identifies which stream the callback belongs to (C2): the controller stamps each stream via
 // setStreamToken and drops callbacks whose token != the active one (late callbacks from a cancelled stream).
@@ -36,159 +27,3 @@
             truncated:(BOOL)truncated
                 token:(uint64_t)token;
 @end
-
-// Bridge lives alongside the controller; holds a weak back-pointer to avoid a retain cycle.
-class UiDelegateBridge : public core::IUiDelegate {
-public:
-    // coalesceMs: UI flush cadence (STREAM_COALESCE_MS, §9). <=0 -> 50ms default.
-    // maxBufferKB: high-water mark for the coalescing buffer (perf spec §2.2/§10). When the UI can't keep
-    // up and the buffer exceeds this, the producer (background sender) blocks -> the gRPC Read loop pauses
-    // -> HTTP/2 window fills -> server is throttled. 0 disables backpressure (unbounded — not recommended).
-    explicit UiDelegateBridge(id<CoreResponseSink> sink, int coalesceMs = 50, int maxBufferKB = 8192)
-        : sink_(sink), coalesceMs_(coalesceMs > 0 ? coalesceMs : 50),
-          maxBufferBytes_(maxBufferKB > 0 ? static_cast<size_t>(maxBufferKB) * 1024 : 0),
-          coal_(std::make_shared<Coalescer>()) {}
-
-    // C2: the controller stamps the next stream's token here (main thread) before calling openStream/
-    // openSession. onStreamOpen latches it into the coalescer so every callback for THIS stream carries it.
-    void setStreamToken(uint64_t t) { token_.store(t, std::memory_order_relaxed); }
-
-    void onResponse(core::RequestHandle h, const core::ApiResponse &r) override {
-        core::ApiResponse copy = r;            // copy the neutral POD off the background thread
-        __weak id<CoreResponseSink> weakSink = sink_;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            id<CoreResponseSink> s = weakSink;
-            if (s) [s onCoreResponse:h response:copy];
-        });
-    }
-    void onError(core::RequestHandle h, const core::ApiError &e) override {
-        core::ApiError copy = e;
-        __weak id<CoreResponseSink> weakSink = sink_;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            id<CoreResponseSink> s = weakSink;
-            if (s) [s onCoreError:h error:copy];
-        });
-    }
-
-    // --- IStreamSink (SPEC_grpc_streaming §3) ---
-    void onStreamOpen(const core::StreamMeta &meta) override {
-        uint64_t token = token_.load(std::memory_order_relaxed);
-        {
-            std::lock_guard<std::mutex> lk(coal_->mu);
-            coal_->buf.clear();
-            coal_->firstEvent = true;
-            coal_->events = 0;
-            coal_->flushScheduled = false;
-            coal_->closed = false;
-            coal_->token = token;   // latch this stream's identity (C2)
-        }
-        int transport = static_cast<int>(meta.transport);
-        __weak id<CoreResponseSink> weakSink = sink_;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            id<CoreResponseSink> s = weakSink;
-            if (s) [s onStreamOpenTransport:transport token:token];
-        });
-    }
-
-    void onStreamEvent(const core::StreamEvent &ev) override {
-        bool schedule = false;
-        {
-            std::lock_guard<std::mutex> lk(coal_->mu);
-            coal_->buf += (coal_->firstEvent ? "\n  " : ",\n  ");  // array comma rule (Appendix A)
-            coal_->buf += ev.payload;
-            coal_->firstEvent = false;
-            coal_->events += 1;
-            if (!coal_->flushScheduled) { coal_->flushScheduled = true; schedule = true; }
-        }
-        if (schedule) scheduleFlush();
-
-        // Backpressure (perf spec §2.2/§10): if the UI hasn't drained and the buffer is over the
-        // high-water mark, block this background sender thread until a flush drains it. That stalls the
-        // gRPC Read loop -> the HTTP/2 window fills -> the server stops sending -> RAM stays bounded.
-        // Bounded wait so a wedged/torn-down UI can't hang the stream forever (per-call deadline is the
-        // final backstop); on timeout we proceed and the sender's own STREAM_MAX_BYTES cap still applies.
-        if (maxBufferBytes_) {
-            std::unique_lock<std::mutex> lk(coal_->mu);
-            coal_->cv.wait_for(lk, std::chrono::milliseconds(coalesceMs_ * 4 + 100), [this] {
-                return coal_->closed || coal_->buf.size() <= maxBufferBytes_;
-            });
-        }
-    }
-
-    void onStreamClose(const core::StreamEnd &end) override {
-        auto coal = coal_;
-        __weak id<CoreResponseSink> weakSink = sink_;
-        core::StreamStatus status = end.status;
-        int code = end.statusCode;
-        std::string msg = end.statusMessage;
-        uint64_t events = end.totalEvents;
-        long long elapsed = end.elapsedMs;
-        BOOL truncated = end.truncated ? YES : NO;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            id<CoreResponseSink> s = weakSink;
-            if (!s) return;
-            std::string chunk;
-            uint64_t cnt = 0;
-            uint64_t token = 0;
-            {
-                std::lock_guard<std::mutex> lk(coal->mu);
-                chunk.swap(coal->buf);     // drain whatever is still pending
-                cnt = coal->events;
-                token = coal->token;
-                coal->flushScheduled = false;
-                coal->closed = true;       // release any backpressured producer (defensive)
-            }
-            coal->cv.notify_all();
-            if (!chunk.empty())
-                [s onStreamChunk:[NSString stringWithUTF8String:chunk.c_str()] events:cnt token:token];
-            [s onStreamClose:status
-                        code:code
-                     message:[NSString stringWithUTF8String:msg.c_str()]
-                      events:events
-                   elapsedMs:elapsed
-                   truncated:truncated
-                       token:token];
-        });
-    }
-
-private:
-    // Coalescing state shared between the background producer and the main-queue flush block.
-    struct Coalescer {
-        std::mutex mu;
-        std::condition_variable cv;   // producer waits here when over the high-water mark; flush notifies
-        std::string buf;
-        bool firstEvent = true;
-        bool flushScheduled = false;
-        bool closed = false;          // stream ended -> never block the producer again
-        uint64_t events = 0;
-        uint64_t token = 0;           // identity of the stream that owns this coalescer state (C2)
-    };
-
-    void scheduleFlush() {
-        auto coal = coal_;
-        __weak id<CoreResponseSink> weakSink = sink_;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(coalesceMs_ * NSEC_PER_MSEC)),
-                       dispatch_get_main_queue(), ^{
-            std::string chunk;
-            uint64_t cnt = 0;
-            uint64_t token = 0;
-            {
-                std::lock_guard<std::mutex> lk(coal->mu);
-                chunk.swap(coal->buf);
-                cnt = coal->events;
-                token = coal->token;
-                coal->flushScheduled = false;
-            }
-            coal->cv.notify_all();   // buffer drained -> wake any backpressured producer (§2.2)
-            id<CoreResponseSink> s = weakSink;
-            if (s && !chunk.empty())
-                [s onStreamChunk:[NSString stringWithUTF8String:chunk.c_str()] events:cnt token:token];
-        });
-    }
-
-    __weak id<CoreResponseSink> sink_;
-    int coalesceMs_;
-    size_t maxBufferBytes_;
-    std::atomic<uint64_t> token_{0};   // next stream's identity (set by controller before openStream) (C2)
-    std::shared_ptr<Coalescer> coal_;
-};

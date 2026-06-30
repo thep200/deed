@@ -15,7 +15,9 @@
 
 #include <grpcpp/grpcpp.h>
 
-#include "core/types.hpp"
+#include "core/domain/grpc/grpc_method.hpp"  // domain GrpcMethodDescriptor / GrpcMethodType
+#include "core/domain/grpc/grpc_request.hpp" // domain GrpcRequest payload
+#include "core/domain/values/tls_config.hpp" // domain TlsConfig
 
 namespace core::grpcdesc {
 
@@ -49,13 +51,13 @@ struct DescriptorContext {
 };
 
 // Create channel credentials (insecure / TLS).
-std::shared_ptr<grpc::ChannelCredentials> makeCreds(const GrpcTls& tls);
+std::shared_ptr<grpc::ChannelCredentials> makeCreds(const core::domain::TlsConfig& tls);
 
-// Build descriptors per g.protoSource.mode. Returns false + ctx.error on failure.
-bool buildDescriptors(const GrpcRequest& g, DescriptorContext& ctx);
+// Build descriptors per g.protoSource(). Returns false + ctx.error on failure.
+bool buildDescriptors(const core::domain::GrpcRequest& g, DescriptorContext& ctx);
 
 // List services/methods from a built context (used for the RPC-selection dropdown).
-std::vector<GrpcMethodInfo> listMethods(const DescriptorContext& ctx);
+std::vector<core::domain::GrpcMethodDescriptor> listMethods(const DescriptorContext& ctx);
 
 // unary | server_streaming | client_streaming | bidi_streaming.
 std::string methodTypeOf(const gp::MethodDescriptor* m);

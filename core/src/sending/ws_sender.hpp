@@ -9,10 +9,10 @@
 #include <memory>
 #include <string>
 
+#include "core/domain/ws/websocket_request.hpp"
 #include "core/sending/cancel_token.hpp"
 #include "core/streaming/i_stream_channel.hpp"
-#include "core/streaming/i_stream_sink.hpp"
-#include "core/types.hpp"
+#include "core/streaming/i_stream_sink.hpp" // StreamStatus / StreamEvent / IStreamSink (infra-internal)
 
 namespace core {
 
@@ -37,7 +37,8 @@ std::shared_ptr<IStreamChannel> wsMakeChannel(const std::shared_ptr<WsSession>& 
 
 // Run one session on the calling (I/O) thread: handshake -> recv/send pump -> close. Emits
 // onStreamOpen/Event/Close on `sink` (background thread; the sink marshals to its UI thread).
-void wsRun(const ResolvedRequest& req, IStreamSink& sink,
+// Takes the resolved domain WebSocketRequest directly (no legacy struct); auth is applied on the handshake.
+void wsRun(const core::domain::WebSocketRequest& req, IStreamSink& sink,
            const std::shared_ptr<WsSession>& session, const std::string& sessionId);
 
 // Request a graceful close from another thread (UI/Engine). Idempotent; wakes the I/O thread.
@@ -55,7 +56,7 @@ struct WsFrameHooks {
 
 // Like wsRun, but drives `hooks` instead of emitting a frame-log stream. Honors `cancel` (graceful close).
 // Used by the GraphQL-over-WebSocket sender.
-void wsRunProtocol(const ResolvedRequest& req, const WsFrameHooks& hooks,
+void wsRunProtocol(const core::domain::WebSocketRequest& req, const WsFrameHooks& hooks,
                    const std::shared_ptr<WsSession>& session, const std::string& sessionId,
                    const std::shared_ptr<CancelToken>& cancel);
 

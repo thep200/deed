@@ -7,17 +7,18 @@
 - (void)sendRequest:(id)sender {
     // Hot path: do ONLY what's needed to send (no env reads / aliasify / persistence here —
     // alias substitution is an import-time concern, §9.5). Keep this lean for performance.
-    if (!_hasRequest || !_engine) return;
+    if (!_hasRequest || !_apiClient) return;
     // WebSocket is a session, not a one-shot send: the action toggles Connect / Send-frame (SPEC_websocket §6).
-    if (_model.type == core::RequestType::WebSocket) { [self wsSendOrConnect]; return; }
+    if ([self requestType] == core::RequestType::WebSocket) { [self wsSendOrConnect]; return; }
     if (_sending) return;
     // Only HTTP has a URL query string to split; GraphQL's "Query" tab is the document, not params.
-    if (_model.type == core::RequestType::Http) [self parseUrlQueryIntoQueryTab];
+    if ([self requestType] == core::RequestType::Http) [self parseUrlQueryIntoQueryTab];
     if (![self syncModelFromEditors:NO]) return;
 
     // Route by interaction kind (SPEC_grpc_streaming §4). Methods that STREAM responses (server-streaming
     // + bidi) -> openStream(); unary and client-streaming (one response) -> send().
-    core::InteractionKind kind = _engine->interactionOf(_model);
+    core::InteractionKind kind =
+        _model ? _apiClient->interactionOf(*_model) : core::InteractionKind::Unary;
     BOOL streamsResponses = (kind == core::InteractionKind::ServerStream ||
                              kind == core::InteractionKind::BiDi);
 
@@ -27,32 +28,91 @@
     [self relayout];
     [self updateStatus:@""];
 
+    // REFACTOR_SPEC P6: ALL sends go through the IApiClient stack (orchestrator/saga/domain senders).
+    // Server-stream (gRPC server-streaming / HTTP SSE) -> streamViaApiClient; unary HTTP/gRPC/GraphQL ->
+    // sendViaApiClient. WebSocket is handled above (wsSendOrConnect). No legacy Engine send path remains.
     if (streamsResponses) {
         _streaming = YES;
-        _bridge->setStreamToken(++_streamToken);   // C2: stamp this stream so late callbacks from a prior one drop
-        _streamHandle = _engine->openStream(_model, _bridge);
+        [self streamViaApiClient];
     } else {
         _streaming = NO;
-        _currentHandle = _engine->send(_model, _bridge);
+        [self sendViaApiClient];
     }
     [self beginRequestTiming];   // live elapsed (+ size while streaming) on the status line
 }
 
-- (void)cancelClicked:(id)sender {
-    if (!_sending || !_engine) return;
-    if (_model.type == core::RequestType::WebSocket) { _engine->closeSession(_wsSession, 1000, "bye"); return; }
-    if (_streaming) _engine->cancelStream(_streamHandle);   // Stop -> ctx.TryCancel via CancelToken (§6)
-    else _engine->cancel(_currentHandle);
+// New send path (REFACTOR_SPEC P6): convert the legacy model to domain, feed the active env vars, and send
+// through IApiClient. A UiObserver translates the domain ResponseEvents back into the existing
+// onCoreResponse/onCoreError handlers (keyed by a synthesized handle so the stale-callback guard still works).
+- (void)sendViaApiClient {
+    _apiClient->refreshVariableScope();   // {{vars}} resolve against the current active environment
+
+    uint64_t h = ++_apiHandleCounter;
+    _currentHandle = h;                          // CoreResponseSink guards on this handle
+    if (!_model) {
+        [self onCoreError:h error:core::domain::ApiError{core::domain::ErrorKind::Internal,
+                                                         "no open request", std::nullopt}];
+        return;
+    }
+    _apiObserver = std::make_shared<UiObserver>(self, h);
+    auto r = _apiClient->send(*_model, _apiObserver);
+    if (r.isOk()) {
+        _apiExec = r.value();
+    } else {
+        [self onCoreError:h error:core::domain::ApiError{core::domain::ErrorKind::Internal,
+                                                         r.error().message, std::nullopt}];
+    }
 }
 
-// WebSocket action button: connect if idle; otherwise send the current Message editor as a frame (§6).
+// Server-stream (gRPC server-streaming / HTTP SSE) via IApiClient. A streaming UiObserver maps the domain
+// ResponseEvents onto the existing onStreamOpenTransport/onStreamChunk/onStreamClose handlers.
+- (void)streamViaApiClient {
+    _apiClient->refreshVariableScope();   // {{vars}} resolve against the current active environment
+
+    uint64_t token = ++_streamToken;
+    int transport = ([self requestType] == core::RequestType::Http) ? 1 /*sse*/ : 0 /*grpc*/;
+    if (!_model) {
+        [self onStreamOpenTransport:transport token:token];
+        [self onStreamClose:core::StreamStatus::Error code:0 message:@"no open request"
+                     events:0 elapsedMs:0 truncated:NO token:token];
+        return;
+    }
+    _apiObserver = std::make_shared<UiObserver>(self, token, transport);
+    auto r = _apiClient->send(*_model, _apiObserver);
+    if (r.isOk()) {
+        _apiExec = r.value();
+    } else {
+        [self onStreamOpenTransport:transport token:token];
+        [self onStreamClose:core::StreamStatus::Error code:0 message:N(r.error().message)
+                     events:0 elapsedMs:0 truncated:NO token:token];
+    }
+}
+
+- (void)cancelClicked:(id)sender {
+    if (!_sending || !_apiClient || _apiExec.empty()) return;
+    if ([self requestType] == core::RequestType::WebSocket) {
+        _apiClient->closeStream(_apiExec, 1000, "bye");        // WS disconnect
+        return;
+    }
+    _apiClient->cancel(_apiExec);                              // unary OR server-stream via IApiClient
+}
+
+// WebSocket action button (§6): connect if idle, else send the Message editor as a frame.
+// REFACTOR_SPEC P6: WebSocket runs entirely through IApiClient (connect/send-frame/disconnect).
 - (void)wsSendOrConnect {
-    if (_sending && _wsSession.channel) {
-        // Connected -> send the current Message tab content as a frame.
+    [self wsViaApiClient];
+}
+
+// WebSocket via IApiClient (§6): connect if idle, else push the Message editor as a frame through the
+// open session. Inbound frames + close arrive via the streaming UiObserver -> onStream* handlers.
+- (void)wsViaApiClient {
+    if (_apiWsActive && !_apiExec.empty()) {
         [self stashActiveReqBuffer];
         std::string frame = _reqBuffers.count ? S(_reqBuffers[0]) : std::string();
         if (frame.empty()) { [self toastWarn:StrToastWsEmptyFrame]; return; }
-        if (!_wsSession.channel->sendText(frame)) [self toastWarn:StrToastWsQueueFull];
+        auto st = _apiClient->sendStreamMessage(
+            _apiExec, core::domain::WsMessage{core::domain::WsSendKind::Text, frame});
+        if (!st.isOk()) [self toastWarn:StrToastWsQueueFull];
         return;
     }
     if (_sending) return;   // connecting in progress
@@ -63,14 +123,20 @@
     _cancelButton.enabledState = YES;
     [self relayout];
     [self updateStatus:@""];
-    _bridge->setStreamToken(++_streamToken);   // C2: stamp this session
-    _wsSession = _engine->openSession(_model, _bridge);
-    [self beginRequestTiming];   // live elapsed + size on the status line
+
+    _apiClient->refreshVariableScope();   // {{vars}} resolve against the current active environment
+    if (!_model) { _sending = NO; [self toastWarn:@"no open request"]; [self relayout]; return; }
+    uint64_t token = ++_streamToken;
+    _apiObserver = std::make_shared<UiObserver>(self, token, 2 /*ws*/);
+    auto r = _apiClient->send(*_model, _apiObserver);
+    if (r.isOk()) { _apiExec = r.value(); _apiWsActive = YES; }
+    else { _sending = NO; [self toastWarn:N(r.error().message)]; [self relayout]; return; }
+    [self beginRequestTiming];
 }
 
-- (void)onCoreResponse:(uint64_t)handle response:(const core::ApiResponse &)resp {
+- (void)onCoreResponse:(uint64_t)handle response:(const core::domain::ApiResponse &)resp {
     if (handle != _currentHandle) return;
-    NSLog(@"[smoke] onCoreResponse status=%d bytes=%lld", resp.statusCode, (long long)resp.sizeBytes);
+    NSLog(@"[smoke] onCoreResponse status=%d bytes=%lld", resp.statusCode, (long long)resp.body.size());
     [self finishSending];
     _lastResp = resp; _hasResp = YES;
     [self rebuildResponseBuffersAsync];   // format off the main thread -> large response won't freeze UI (U2)
@@ -79,15 +145,15 @@
     [self cacheResponseAsync:resp forId:_currentId];   // store cache (background) — keyed by id
 }
 
-- (void)onCoreError:(uint64_t)handle error:(const core::ApiError &)err {
+- (void)onCoreError:(uint64_t)handle error:(const core::domain::ApiError &)err {
     if (handle != _currentHandle) return;
-    NSLog(@"[smoke] onCoreError kind=%s msg=%s", core::toString(err.kind).c_str(), err.message.c_str());
+    NSLog(@"[smoke] onCoreError kind=%s msg=%s", core::domain::toString(err.kind).c_str(), err.message.c_str());
     // gRPC send failed -> the RPC list may be stale (server down/changed). Invalidate so the next
     // dropdown open re-fetches it (requirement: re-fetch starting from the failed send).
-    if (_model.type == core::RequestType::Grpc) _grpcMethodsFetched = NO;
+    if ([self requestType] == core::RequestType::Grpc) _grpcMethodsFetched = NO;
     [self finishSending];
     [self displayErrorKind:err.kind message:N(err.message)];
-    [self toastWarn:[NSString stringWithFormat:@"%@: %@", N(core::toString(err.kind)), N(err.message)]];
+    [self toastWarn:[NSString stringWithFormat:@"%@: %@", N(core::domain::toString(err.kind)), N(err.message)]];
     [self cacheErrorAsync:err forId:_currentId];       // cache errors too, to restore the exact state (§7)
 }
 
@@ -127,26 +193,20 @@
     [_respText endStreamingValid:YES];
 
     _streaming = NO;
-    _wsSession = core::SessionHandle{};   // release the WS channel/session (no-op for gRPC streams)
     [self finishSending];
 
     // SSE (an HTTP stream) is open-ended: pressing Cancel/Stop is the NORMAL way to end it, not a failure.
     // Report it as Ok so the live status matches the cached restore (which reopens as Ok) — the status no
     // longer flips Cancelled->OK on re-view. gRPC/WebSocket cancel still reports Cancelled.
-    core::StreamStatus effStatus = (_model.type == core::RequestType::Http &&
+    core::StreamStatus effStatus = ([self requestType] == core::RequestType::Http &&
                                     status == core::StreamStatus::Cancelled)
                                        ? core::StreamStatus::Ok : status;
 
-    // Build a neutral ApiResponse from the assembled array so the normal tab/cache pipeline takes over.
-    core::ApiResponse resp;
+    // Build a neutral domain ApiResponse from the assembled array so the normal tab/cache pipeline takes over.
+    core::domain::ApiResponse resp;
     resp.statusCode = 0;
-    resp.statusText = "OK";
     resp.body = S(_respText.string);   // the live doc already holds the valid [ … ] array (H3)
-    resp.elapsedMs = (long)elapsedMs;
-    resp.sizeBytes = (std::int64_t)resp.body.size();
-    resp.wasStreamed = true;
-    resp.eventCount = events;
-    resp.partial = (effStatus != core::StreamStatus::Ok);
+    resp.elapsed = std::chrono::milliseconds(elapsedMs);
 
     _lastResp = resp;
     _hasResp = YES;
@@ -170,7 +230,7 @@
         NSString *kind = (effStatus == core::StreamStatus::Timeout) ? StrStreamKindTimeout : StrStreamKindError;
         line = [NSString stringWithFormat:StrFmtStreamError, kind, code, message ?: @""];
         color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
-        if (_model.type == core::RequestType::Grpc) _grpcMethodsFetched = NO;   // re-fetch RPCs next open
+        if ([self requestType] == core::RequestType::Grpc) _grpcMethodsFetched = NO;   // re-fetch RPCs next open
     }
     _statusLabel.stringValue = line;
     _statusLabel.textColor = color;
@@ -181,11 +241,11 @@
 }
 
 // Display the error state in the response pane (shared by new errors and cached errors).
-- (void)displayErrorKind:(core::ErrorKind)kind message:(NSString *)msg {
-    NSString *k = N(core::toString(kind));
+- (void)displayErrorKind:(core::domain::ErrorKind)kind message:(NSString *)msg {
+    NSString *k = N(core::domain::toString(kind));
     NSString *statusText = k;                                       // drop the ✕ before the error name
-    if (kind == core::ErrorKind::Cancelled) statusText = StrStatusCancelled;
-    else if (kind == core::ErrorKind::Network) statusText = StrStatusNetworkError;   // network error -> report clearly
+    if (kind == core::domain::ErrorKind::Cancelled) statusText = StrStatusCancelled;
+    else if (kind == core::domain::ErrorKind::Network) statusText = StrStatusNetworkError;   // network error -> report clearly
     _statusLabel.stringValue = statusText;
     _statusLabel.textColor = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
     _hasResp = NO;
@@ -198,29 +258,31 @@
 }
 
 // Write cache on a BACKGROUND thread (§6: put async, don't block UI). Engine is thread-safe.
-- (void)cacheResponseAsync:(const core::ApiResponse &)resp forId:(const std::string &)reqId {
+- (void)cacheResponseAsync:(const core::domain::ApiResponse &)resp forId:(const std::string &)reqId {
     if (reqId.empty()) return;
-    __block core::ApiResponse copy = resp;   // one copy to own it across the async hop; moved into cache below (M3)
+    __block core::domain::ApiResponse copy = resp;   // cache speaks domain now (REFACTOR_SPEC D)
     std::string id = reqId;
     __weak MainWindowController *ws = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         MainWindowController *s = ws;
-        if (s && s->_engine) s->_engine->putResponse(id, std::move(copy));   // move overload, no second copy
+        if (s && s->_apiClient) s->_apiClient->cache().putResponse(id, std::move(copy)); // move, no 2nd copy
     });
 }
-- (void)cacheErrorAsync:(const core::ApiError &)err forId:(const std::string &)reqId {
+- (void)cacheErrorAsync:(const core::domain::ApiError &)err forId:(const std::string &)reqId {
     if (reqId.empty()) return;
-    core::ApiError copy = err;
+    core::domain::ApiError copy = err;
     std::string id = reqId;
     __weak MainWindowController *ws = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         MainWindowController *s = ws;
-        if (s && s->_engine) s->_engine->putError(id, copy);
+        if (s && s->_apiClient) s->_apiClient->cache().putError(id, copy);
     });
 }
 
 - (void)finishSending {
     _sending = NO;
+    _apiExec = core::domain::RequestExecutionId("");   // new-path send settled -> no stale cancel/push target
+    _apiWsActive = NO;
     [self stopLiveTimer];   // freeze the live ticker; the final status line is set by the caller next
     [self stopSendSpinner];
     _sendButton.enabledState = _hasRequest;
@@ -284,22 +346,24 @@
 
 // Compute the display buffers (format JSON body/headers/cookie) — the HEAVY part, does NOT touch UI ->
 // callable from a background thread. Depends only on params (r/type/prettyMode), reads no ivars.
-- (NSArray<NSString *> *)computeResponseBuffersFor:(const core::ApiResponse &)r
+- (NSArray<NSString *> *)computeResponseBuffersFor:(const core::domain::ApiResponse &)r
                                               type:(core::RequestType)type
                                         prettyMode:(int)prettyMode {
     using namespace core;
     NSMutableArray<NSString *> *bufs = [NSMutableArray array];
     [bufs addObject:[self applyView:r.body mode:prettyMode]];   // body per Pretty/Raw/Encode/Decode
+    // The "Request" tab once showed the response's resolvedRequestDump; the domain ApiResponse doesn't
+    // carry it (the resolved request is derivable from the model). Empty until that's wired UI-side.
     if (type == RequestType::Http) {
-        [bufs addObject:N(fieldcodec::formatJson(fieldcodec::keyValuesToJson(r.headers), true))];
-        [bufs addObject:N(fieldcodec::formatJson(r.resolvedRequestDump, true))];
+        [bufs addObject:N(core::serial::responseHeadersToJson(r.headers))];
+        [bufs addObject:@""];   // Request tab (resolved request) — see note above
         NSMutableString *ck = [NSMutableString string];
         for (const auto &c : r.cookies)
             [ck appendFormat:@"%s=%s  (domain=%s path=%s expires=%s)\n", c.name.c_str(), c.value.c_str(),
                              c.domain.c_str(), c.path.c_str(), c.expires.c_str()];
         [bufs addObject:(ck.length ? ck : StrNoSetCookie)];
     } else {
-        [bufs addObject:N(fieldcodec::formatJson(r.resolvedRequestDump, true))];
+        [bufs addObject:@""];   // Request tab (resolved request) — see note above
     }
     return bufs;
 }
@@ -318,14 +382,14 @@
 
 // Synchronous: used for cheap re-renders (change view mode, change tab, stress).
 - (void)rebuildResponseBuffers {
-    [self applyResponseBuffers:[self computeResponseBuffersFor:_lastResp type:_model.type prettyMode:_prettyMode]];
+    [self applyResponseBuffers:[self computeResponseBuffersFor:_lastResp type:[self requestType] prettyMode:_prettyMode]];
 }
 
 // Asynchronous: format the response OFF the main thread then apply on main (U2 — large response won't freeze UI).
 // Drop the result if a new request arrived (compare _currentHandle) -> avoid showing stale buffers.
 - (void)rebuildResponseBuffersAsync {
-    core::ApiResponse r = _lastResp;            // copy for safe background use (main won't mutate concurrently)
-    core::RequestType type = _model.type;
+    core::domain::ApiResponse r = _lastResp;    // copy for safe background use (main won't mutate concurrently)
+    core::RequestType type = [self requestType];
     int pm = _prettyMode;
     uint64_t handle = _currentHandle;
     __weak MainWindowController *ws = self;
@@ -360,13 +424,14 @@
 }
 
 // status | size | time | start - end. endMs = time response received; start = end - elapsed.
-- (void)updateStatusFromResponse:(const core::ApiResponse &)r error:(BOOL)isErr endMs:(int64_t)endMs {
+- (void)updateStatusFromResponse:(const core::domain::ApiResponse &)r error:(BOOL)isErr endMs:(int64_t)endMs {
+    long elapsedMs = (long)r.elapsed.count();
     NSString *code = r.statusCode ? [NSString stringWithFormat:@"%d", r.statusCode] : StrOK;
-    NSString *size = [self humanSize:(int64_t)r.sizeBytes];
-    int64_t startMs = (endMs > 0) ? endMs - (int64_t)r.elapsedMs : 0;   // derive the start mark
+    NSString *size = [self humanSize:(int64_t)r.body.size()];
+    int64_t startMs = (endMs > 0) ? endMs - (int64_t)elapsedMs : 0;   // derive the start mark
     NSString *range = [NSString stringWithFormat:@"%@ - %@",
                        [self clockFromEpochMs:startMs], [self clockFromEpochMs:endMs]];
-    _statusLabel.stringValue = [NSString stringWithFormat:@"%@ | %@ | %ldms | %@", code, size, r.elapsedMs, range];
+    _statusLabel.stringValue = [NSString stringWithFormat:@"%@ | %@ | %ldms | %@", code, size, elapsedMs, range];
     _statusLabel.textColor = (r.statusCode >= 400) ? [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0]
                                                    : [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1.0];
 }

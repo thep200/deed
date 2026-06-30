@@ -12,9 +12,7 @@ std::uint64_t estimateBytes(const ResponseRecord& r) {
     if (r.bytes) return r.bytes;
     std::uint64_t b = r.errorMessage.size() + r.requestRevision.size() + 64; // meta
     b += r.response.body.size();
-    b += r.response.statusText.size();
-    b += r.response.resolvedRequestDump.size();
-    for (const auto& h : r.response.headers) b += h.key.size() + h.value.size() + 8;
+    for (const auto& h : r.response.headers) b += h.name.size() + h.value.size() + 8;
     for (const auto& c : r.response.cookies)
         b += c.name.size() + c.value.size() + c.domain.size() + c.path.size() + c.expires.size() + 8;
     return b;

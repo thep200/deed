@@ -1,10 +1,15 @@
 #include <algorithm>
 #include <cctype>
+#include <string>
+#include <vector>
 
+#include "core/dto_common.hpp" // surviving KeyValue DTO (parse scratch only)
 #include "core/import_export/importer.hpp"
 #include "import_export/shell_tokenize.hpp"
 
 namespace core {
+
+namespace d = core::domain;
 
 namespace {
 
@@ -18,6 +23,29 @@ std::string lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
     return s;
 }
+
+// ---- mutable parse scratch (decoupled from any persisted type) ------------------------------------------
+struct SProtoSource {
+    std::string mode = "reflection"; // reflection|protoFiles|descriptorSet
+    std::vector<std::string> importPaths, files;
+    std::string descriptorSetPath;
+};
+struct STls {
+    bool enabled = true;
+    bool insecureSkipVerify = false;
+    std::string caCertPath, clientCertPath, clientKeyPath;
+};
+struct SGrpc {
+    std::string target, service, method;
+    std::string message;
+    std::vector<KeyValue> metadata;
+    SProtoSource protoSource;
+    STls tls;
+};
+struct Acc {
+    std::vector<std::string> unknown;
+    std::string error;
+};
 
 } // namespace
 
@@ -50,7 +78,7 @@ bool GrpcImporter::canHandle(const std::string& input) const {
 namespace {
 
 // Push a "key: value" header token onto g.metadata (value may be empty / colon-less).
-void addGrpcMetadata(GrpcRequest& g, const std::string& hv) {
+void addGrpcMetadata(SGrpc& g, const std::string& hv) {
     size_t colon = hv.find(':');
     KeyValue kv;
     kv.key = trim(colon == std::string::npos ? hv : hv.substr(0, colon));
@@ -62,7 +90,7 @@ void addGrpcMetadata(GrpcRequest& g, const std::string& hv) {
 bool grpcurlFlagTakesValue(const std::string& tk) {
     return tk == "-d" || tk == "-H" || tk == "-rpc-header" || tk == "-import-path" || tk == "-proto";
 }
-void applyGrpcurlValueFlag(const std::string& flag, const std::string& v, GrpcRequest& g) {
+void applyGrpcurlValueFlag(const std::string& flag, const std::string& v, SGrpc& g) {
     if (flag == "-d") g.message = v;
     else if (flag == "-H" || flag == "-rpc-header") addGrpcMetadata(g, v);
     else if (flag == "-import-path") { g.protoSource.importPaths.push_back(v); g.protoSource.mode = "protoFiles"; }
@@ -70,9 +98,9 @@ void applyGrpcurlValueFlag(const std::string& flag, const std::string& v, GrpcRe
 }
 
 // (a) grpcurl [-plaintext] -d '{...}' -H 'k: v' host:port pkg.Service/Method
-// Parses flags into g; unknown flags go to res.unknown. The RPC (Service/Method) is INTENTIONALLY
+// Parses flags into g; unknown flags go to acc.unknown. The RPC (Service/Method) is INTENTIONALLY
 // skipped on import — we only take target/message/metadata/tls; the user picks the RPC from the dropdown.
-void parseGrpcurl(const std::vector<std::string>& tokens, GrpcRequest& g, ImportResult& res) {
+void parseGrpcurl(const std::vector<std::string>& tokens, SGrpc& g, Acc& acc) {
     bool plaintext = false;
     bool tlsSeen = false;
     std::vector<std::string> positionals;
@@ -81,7 +109,7 @@ void parseGrpcurl(const std::vector<std::string>& tokens, GrpcRequest& g, Import
         if (tk == "-plaintext") { plaintext = true; tlsSeen = true; }
         else if (tk == "-insecure") { g.tls.insecureSkipVerify = true; tlsSeen = true; }
         else if (grpcurlFlagTakesValue(tk)) { if (i + 1 < tokens.size()) applyGrpcurlValueFlag(tk, tokens[++i], g); }
-        else if (!tk.empty() && tk[0] == '-') res.unknown.push_back(tk);
+        else if (!tk.empty() && tk[0] == '-') acc.unknown.push_back(tk);
         else positionals.push_back(tk);
     }
     if (!positionals.empty()) g.target = positionals[0]; // positionals: host:port [pkg.Service/Method]
@@ -89,8 +117,8 @@ void parseGrpcurl(const std::vector<std::string>& tokens, GrpcRequest& g, Import
     if (g.message.empty()) g.message = "{}";
 }
 
-// (b) [grpc://|grpcs://]host:port/pkg.Service/Method. Sets g.target/tls, or res.error on a bad format.
-void parseGrpcShorthand(const std::string& trimmed, GrpcRequest& g, ImportResult& res) {
+// (b) [grpc://|grpcs://]host:port/pkg.Service/Method. Sets g.target/tls, or acc.error on a bad format.
+void parseGrpcShorthand(const std::string& trimmed, SGrpc& g, Acc& acc) {
     std::string s = trimmed;
     bool secure = true;
     if (lower(s).rfind("grpcs://", 0) == 0) { secure = true; s = s.substr(8); }
@@ -99,37 +127,56 @@ void parseGrpcShorthand(const std::string& trimmed, GrpcRequest& g, ImportResult
 
     size_t slash = s.find('/'); // host:port is the part before the first '/'
     if (slash == std::string::npos) {
-        res.error = "missing Service/Method (format host:port/pkg.Service/Method)";
+        acc.error = "missing Service/Method (format host:port/pkg.Service/Method)";
         return;
     }
     g.target = s.substr(0, slash);   // host:port only; Service/Method skipped (picked after import)
     g.message = "{}";
 }
 
+// scratch -> immutable domain RequestModel (no legacy RequestModel, no request_bridge).
+d::RequestModel buildGrpcDomain(const SGrpc& g) {
+    std::vector<d::MetadataEntry> md;
+    for (const auto& kv : g.metadata) md.push_back({kv.key, kv.value, kv.enabled});
+    auto mdR = d::GrpcMetadata::create(std::move(md));
+
+    d::ProtoSource ps = d::ProtoSource::reflection();
+    if (g.protoSource.mode == "protoFiles") {
+        auto r = d::ProtoSource::files(g.protoSource.importPaths, g.protoSource.files);
+        if (r) ps = r.take();
+    } else if (g.protoSource.mode == "descriptorSet") {
+        auto r = d::ProtoSource::descriptorSet(g.protoSource.descriptorSetPath);
+        if (r) ps = r.take();
+    }
+
+    d::GrpcRequest::Parts gp; // no Url member -> default-constructible
+    gp.target = g.target;
+    gp.service = g.service;
+    gp.method = g.method;
+    gp.message = d::JsonText::of(g.message);
+    gp.metadata = mdR ? mdR.take() : d::GrpcMetadata::empty();
+    gp.protoSource = ps;
+    gp.tls = d::TlsConfig::create(g.tls.enabled, g.tls.insecureSkipVerify, g.tls.caCertPath,
+                                  g.tls.clientCertPath, g.tls.clientKeyPath);
+    auto grpc = d::GrpcRequest::create(std::move(gp)).take();
+    d::RequestConfig cfg{d::Timeout::fromMillis(1800000).take(), g.tls.enabled}; // TLS -> per-request Config
+    return d::RequestModel::create(d::RequestId(""), "Imported gRPC", 0, cfg, grpc).take();
+}
+
 } // namespace
 
-ImportResult GrpcImporter::parse(const std::string& input) const {
-    ImportResult res;
-    RequestModel m;
-    m.type = RequestType::Grpc;
-    m.name = "Imported gRPC";
-    GrpcRequest& g = m.grpc;
-    g.methodType = "unary";
-    g.protoSource.mode = "reflection";
+ImportParseResult GrpcImporter::parse(const std::string& input) const {
+    Acc acc; // local accumulator for unknown/error
+    SGrpc g;
 
     std::string trimmed = trim(input);
-    if (lower(trimmed).rfind("grpcurl", 0) == 0) parseGrpcurl(shellTokenize(trimmed), g, res);
-    else parseGrpcShorthand(trimmed, g, res);
-    if (!res.error.empty()) return res;
+    if (lower(trimmed).rfind("grpcurl", 0) == 0) parseGrpcurl(shellTokenize(trimmed), g, acc);
+    else parseGrpcShorthand(trimmed, g, acc);
+    if (!acc.error.empty()) return {false, std::nullopt, {}, acc.error};
 
-    if (g.target.empty()) {   // only the target is required; Service/Method are picked after import
-        res.error = "missing target (host:port)";
-        return res;
-    }
-    m.config.tls = g.tls.enabled;   // TLS now lives in the per-request Config (RequestConfig)
-    res.ok = true;
-    res.model = std::move(m);
-    return res;
+    if (g.target.empty())   // only the target is required; Service/Method are picked after import
+        return {false, std::nullopt, {}, "missing target (host:port)"};
+    return {true, buildGrpcDomain(g), acc.unknown, ""};
 }
 
 } // namespace core

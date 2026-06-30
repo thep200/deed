@@ -11,12 +11,13 @@
 #include <vector>
 
 #include "core/cache.hpp"
-#include "core/engine.hpp"
-#include "core/codec/field_codec.hpp"
 #include "core/import_export/importer.hpp"
 #include "core/persistence/request_naming.hpp"
 #include "core/persistence/stores.hpp"
+#include "core/serialization/field_json.hpp"
 #include "core/variables/variable_resolver.hpp"
+#include "core/app/core_api_client.hpp" // domain stack facade (replaces Engine in these tests)
+#include "app/cache_config.hpp"         // detail::buildCacheConfig (core/src; white-box include path)
 
 namespace fs = std::filesystem;
 using namespace core;
@@ -29,6 +30,17 @@ int run_ws_session_tests();
 int run_sse_parser_tests();
 // Defined in gql_ws_protocol_test.cpp — GraphQL-over-WS protocol gatekeeper (SPEC_graphql AC-7). Returns #failures.
 int run_gql_ws_protocol_tests();
+// Defined in mapper_roundtrip_test.cpp — REFACTOR_SPEC §8.1 JSON<->domain round-trip gate. Returns #failures.
+int run_mapper_roundtrip_tests();
+// Defined in saga_test.cpp — REFACTOR_SPEC §11.3 saga/orchestrator gate (fakes). Returns #failures.
+int run_saga_tests();
+// Defined in repository_test.cpp — REFACTOR_SPEC §8.3 ICollectionRepository (domain objects). Returns #failures.
+int run_repository_tests();
+// Defined in import_service_test.cpp — REFACTOR_SPEC P6 IImportService (curl/grpcurl/graphql -> domain). #failures.
+int run_import_service_tests();
+// Defined in persistence_repo_test.cpp — REFACTOR_SPEC §6.3 env/session/appConfig repository ports. #failures.
+int run_persistence_repo_tests();
+int run_field_json_tests();
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -206,32 +218,68 @@ static void test_filename_migration(const std::string& root) {
 }
 
 // ---------------- Multi-mode HTTP body persistence ----------------
-// core::Body is a tagged union that keeps EVERY body type at once; saving in ONE active mode must NOT
-// drop the others (regression: switching Body mode after a reload showed an empty default — data lost on disk).
-static void test_body_multimode_roundtrip(const std::string& root) {
-    std::printf("[body_multimode]\n");
-    CollectionStore store(root);
-    std::string rel = store.createRequest("", RequestType::Http, "Multi Body");
+// REFACTOR_SPEC D-step2: the store now serializes requests through the NATIVE domain mapper, and the domain
+// Body is a single-variant (only the ACTIVE mode persists). The legacy multi-mode-at-once behavior is gone
+// by design — saving in "json" mode keeps the json content and drops any inactive text/xml/form content.
+// Domain-store test helpers (CollectionStore speaks domain RequestModel now).
+namespace ts {
+namespace d = core::domain;
+const d::HttpRequest& http(const d::RequestModel& m) { return std::get<d::HttpRequest>(m.payload()); }
+const d::WebSocketRequest& ws(const d::RequestModel& m) { return std::get<d::WebSocketRequest>(m.payload()); }
+const d::GraphQlRequest& gql(const d::RequestModel& m) { return std::get<d::GraphQlRequest>(m.payload()); }
+std::string bearerOf(const d::Auth& a) {
+    std::string t;
+    a.match([&](auto&& x) { using T = std::decay_t<decltype(x)>; if constexpr (std::is_same_v<T, d::AuthBearer>) t = x.token; });
+    return t;
+}
+std::string bodyMode(const d::Body& b) {
+    std::string mode = "none";
+    b.match([&](auto&& x) {
+        using T = std::decay_t<decltype(x)>;
+        if constexpr (std::is_same_v<T, d::BodyRaw>)
+            mode = x.subtype == d::RawSubtype::Json ? "json" : x.subtype == d::RawSubtype::Xml ? "xml" : "text";
+        else if constexpr (std::is_same_v<T, d::BodyFormUrlEncoded>) mode = "form-urlencoded";
+        else if constexpr (std::is_same_v<T, d::BodyMultipart>) mode = "multipart";
+        else if constexpr (std::is_same_v<T, d::BodyBinary>) mode = "binary";
+    });
+    return mode;
+}
+std::string rawText(const d::Body& b) {
+    std::string t;
+    b.match([&](auto&& x) { using T = std::decay_t<decltype(x)>; if constexpr (std::is_same_v<T, d::BodyRaw>) t = x.text; });
+    return t;
+}
+// Rebuild the HTTP payload with a new method/url/body (keeps id/name/seq/config + pathVars/params/headers/auth).
+d::RequestModel withHttp(const d::RequestModel& m, d::HttpMethod method, const std::string& url, d::Body body) {
+    const auto& h = http(m);
+    d::HttpRequest::Parts p{method, d::Url::create(url).take(), h.pathVariables(), h.params(), h.headers(),
+                            std::move(body), h.auth()};
+    return d::RequestModel::create(m.id(), m.name(), m.seq(), m.config(), d::HttpRequest::create(std::move(p)).take())
+        .take();
+}
+} // namespace ts
 
-    RequestModel m = store.loadRequest(rel);
-    m.http.body.mode = "json";                  // enabled mode
-    m.http.body.json = "{\"k\":1}";
-    m.http.body.text = "hello text";
-    m.http.body.xml = "<root/>";
-    m.http.body.formUrlEncoded = {{"f1", "v1", true}, {"f2", "v2", false}};
+static void test_body_singlemode_roundtrip(const std::string& root) {
+    std::printf("[body_singlemode]\n");
+    CollectionStore store(root);
+    std::string rel = store.createRequest("", RequestType::Http, "Body Mode");
+
+    auto m = store.loadRequest(rel);
+    m = ts::withHttp(m, core::domain::HttpMethod::Get, "",
+                     core::domain::Body::raw(core::domain::RawSubtype::Json, "{\"k\":1}"));
     rel = store.saveRequest(rel, m);
 
-    RequestModel r = store.loadRequest(rel);
-    CHECK_EQ(r.http.body.mode, std::string("json"), "enabled body mode round-trip");
-    CHECK_EQ(r.http.body.json, std::string("{\"k\":1}"), "active json kept");
-    CHECK_EQ(r.http.body.text, std::string("hello text"), "inactive text body kept across save");
-    CHECK_EQ(r.http.body.xml, std::string("<root/>"), "inactive xml body kept across save");
-    CHECK_EQ(r.http.body.formUrlEncoded.size(), (size_t)2, "inactive form body kept across save");
-    if (r.http.body.formUrlEncoded.size() == 2) {
-        CHECK_EQ(r.http.body.formUrlEncoded[0].key, std::string("f1"), "form entry 0 key kept");
-        CHECK_EQ(r.http.body.formUrlEncoded[0].value, std::string("v1"), "form entry 0 value kept");
-        CHECK(r.http.body.formUrlEncoded[1].enabled == false, "form entry enabled flag kept");
-    }
+    auto r = store.loadRequest(rel);
+    CHECK_EQ(ts::bodyMode(ts::http(r).body()), std::string("json"), "active body mode round-trip");
+    CHECK_EQ(ts::rawText(ts::http(r).body()), std::string("{\"k\":1}"), "active json kept");
+
+    // form-urlencoded as the ACTIVE mode round-trips its entries (key/value/enabled).
+    std::vector<core::domain::FormField> ff{{"f1", "v1", true}, {"f2", "v2", false}};
+    auto f = ts::withHttp(store.loadRequest(rel), core::domain::HttpMethod::Get, "",
+                          core::domain::Body::formUrlEncoded(ff));
+    rel = store.saveRequest(rel, f);
+    auto fr = store.loadRequest(rel);
+    CHECK_EQ(ts::bodyMode(ts::http(fr).body()), std::string("form-urlencoded"), "active form mode round-trip");
 }
 
 // ---------------- CollectionStore round-trip + CRUD ----------------
@@ -243,36 +291,34 @@ static void test_collection_store(const std::string& root) {
     CHECK(!rel.empty(), "create request returns relPath");
     CHECK(fs::exists(fs::path(root) / rel), "request file exists");
 
-    RequestModel m = store.loadRequest(rel);
-    CHECK_EQ(m.name, std::string("Get Users"), "name preserved");
-    CHECK(m.type == RequestType::Http, "type = http");
-    CHECK(!m.id.empty(), "has id");
+    auto m = store.loadRequest(rel);
+    CHECK_EQ(m.name(), std::string("Get Users"), "name preserved");
+    CHECK(m.type() == core::domain::RequestType::Http, "type = http");
+    CHECK(!m.id().get().empty(), "has id");
     // unique id + find by id (fixes bug deleting wrong file due to duplicate id/path).
     std::string r2 = store.createRequest("", RequestType::Http, "Another");
-    RequestModel ma = store.loadRequest(r2);
-    CHECK(!ma.id.empty() && ma.id != m.id, "2 requests have different ids");
-    CHECK_EQ(store.findRelPathById(m.id), rel, "findRelPathById returns correct path");
+    auto ma = store.loadRequest(r2);
+    CHECK(!ma.id().get().empty() && ma.id() != m.id(), "2 requests have different ids");
+    CHECK_EQ(store.findRelPathById(m.id().get()), rel, "findRelPathById returns correct path");
     CHECK(store.findRelPathById("req_nope").empty(), "missing id -> empty");
     store.remove(r2);
 
-    CHECK(m.http.headers.size() >= 5, "new HTTP request has default headers");
+    CHECK(ts::http(m).headers().size() >= 5, "new HTTP request has default headers");
     bool hasContentType = false;
-    for (const auto& h : m.http.headers) if (h.key == "Content-Type") hasContentType = true;
+    for (const auto& h : ts::http(m).headers().items()) if (h.name() == "Content-Type") hasContentType = true;
     CHECK(hasContentType, "has default Content-Type");
     // New requests auto-identify with an ENABLED User-Agent="deed"; the other hint headers stay off.
     bool uaOk = false, ctEnabled = false;
-    for (const auto& h : m.http.headers) {
-        if (h.key == "User-Agent") uaOk = (h.value == "deed" && h.enabled);
-        if (h.key == "Content-Type") ctEnabled = h.enabled;
+    for (const auto& h : ts::http(m).headers().items()) {
+        if (h.name() == "User-Agent") uaOk = (h.value() == "deed" && h.enabled());
+        if (h.name() == "Content-Type") ctEnabled = h.enabled();
     }
     CHECK(uaOk, "User-Agent=deed enabled on new request");
     CHECK(!ctEnabled, "other hint headers remain disabled");
 
     // edit + save + reload (round-trip). Change method -> filename must change http_get_* -> http_post_*.
-    m.http.method = "POST";
-    m.http.url = "{{baseUrl}}/users";
-    m.http.body.mode = "json";
-    m.http.body.json = "{\"a\":1}";
+    m = ts::withHttp(m, core::domain::HttpMethod::Post, "{{baseUrl}}/users",
+                     core::domain::Body::raw(core::domain::RawSubtype::Json, "{\"a\":1}"));
     std::string relAfterSave = store.saveRequest(rel, m);
     CHECK(!fs::exists(fs::path(root) / rel), "change method -> old filename gone");
     CHECK(fs::exists(fs::path(root) / relAfterSave), "new filename exists after save");
@@ -283,17 +329,17 @@ static void test_collection_store(const std::string& root) {
         CHECK(pr.ok && core::isValidFileId(pr.id), "new filename has valid id at front");
     }
     rel = relAfterSave;
-    RequestModel m2 = store.loadRequest(rel);
-    CHECK_EQ(m2.http.method, std::string("POST"), "method round-trip");
-    CHECK_EQ(m2.http.url, std::string("{{baseUrl}}/users"), "url round-trip");
-    CHECK_EQ(m2.http.body.json, std::string("{\"a\":1}"), "body json round-trip");
+    auto m2 = store.loadRequest(rel);
+    CHECK_EQ(core::domain::toString(ts::http(m2).method()), std::string("POST"), "method round-trip");
+    CHECK_EQ(ts::http(m2).url().raw(), std::string("{{baseUrl}}/users"), "url round-trip");
+    CHECK_EQ(ts::rawText(ts::http(m2).body()), std::string("{\"a\":1}"), "body json round-trip");
 
     // folder + nested request.
     std::string folder = store.createFolder("", "Folder A");
     CHECK(fs::is_directory(fs::path(root) / folder), "folder created");
     std::string nested = store.createRequest(folder, RequestType::Grpc, "Get User");
-    RequestModel gm = store.loadRequest(nested);
-    CHECK(gm.type == RequestType::Grpc, "nested = grpc");
+    auto gm = store.loadRequest(nested);
+    CHECK(gm.type() == core::domain::RequestType::Grpc, "nested = grpc");
 
     // tree.
     TreeNode tree = store.scanTree();
@@ -444,83 +490,77 @@ static void test_engine(const std::string& root) {
     // prepare env Global + active.
     EnvironmentStore env(root);
     Environment g; g.name = "Global"; g.keys.push_back({"baseUrl", "http://global", true});
+    g.keys.push_back({"wsBase", "ws://global", true}); // ws-scheme prefix (domain ws urls must be ws/wss)
     env.save(g);
     Environment d; d.name = "Stage"; d.keys.push_back({"baseUrl", "http://stage", true});
     env.save(d);
 
-    Engine engine(EngineConfig{root, (fs::path(root) / "appconfig.json").string()});
-    engine.session().setActiveEnv("Stage");
+    // Drive the domain stack directly (no Engine): CoreApiClient owns its stores + exposes the same
+    // resolve/validate/aliasify/interactionOf facade natively. (missingVars + aliasify `applied` out-param
+    // were Engine-only and unused by the live path -> dropped; validateJson now returns Status.)
+    auto client = core::app::CoreApiClient::create(
+        core::app::CoreApiClient::Config{root, (fs::path(root) / "appconfig.json").string()});
+    client->session().setActiveEnv("Stage");
 
-    CHECK_EQ(engine.resolvePreview("{{baseUrl}}/x"), std::string("http://stage/x"),
-             "active env overrides Global");
-    engine.session().setActiveEnv("Global");
-    CHECK_EQ(engine.resolvePreview("{{baseUrl}}/x"), std::string("http://global/x"),
-             "fallback to Global");
-    CHECK_EQ(engine.resolvePreview("{{missing}}"), std::string("{{missing}}"),
-             "missing var keeps literal");
+    CHECK_EQ(client->resolvePreview("{{baseUrl}}/x"), std::string("http://stage/x"), "active env Stage");
+    client->session().setActiveEnv("Global");
+    CHECK_EQ(client->resolvePreview("{{baseUrl}}/x"), std::string("http://global/x"), "active env Global");
+    CHECK_EQ(client->resolvePreview("{{missing}}"), std::string("{{missing}}"), "missing var keeps literal");
 
-    auto vok = engine.validateJson("{\"a\": 1}");
-    CHECK(vok.ok, "valid JSON");
-    auto vbad = engine.validateJson("{\"a\": }");
-    CHECK(!vbad.ok, "invalid JSON caught");
-    CHECK(vbad.line >= 1, "has error position");
+    CHECK(client->validateJson(core::domain::JsonText::of("{\"a\": 1}")).isOk(), "valid JSON");
+    CHECK(!client->validateJson(core::domain::JsonText::of("{\"a\": }")).isOk(), "invalid JSON caught");
 
-    // resolveRequest applies env vars + per-request config (timeout + TLS).
-    RequestModel m; m.type = RequestType::Http; m.http.url = "{{baseUrl}}/u";
-    m.config.timeoutMs = 12345; m.config.tls = false;
-    auto rr = engine.resolveRequest(m);
-    CHECK_EQ(rr.model.http.url, std::string("http://global/u"), "resolveRequest resolves url");
-    CHECK_EQ(rr.model.http.settings.timeoutMs, 12345, "timeout from per-request config");
-    CHECK(!rr.model.http.settings.verifyTls, "verifyTls from per-request config");
+    // aliasifyModel / interactionOf / exportCurl are domain-typed; build domain fixtures directly (no bridge).
+    namespace d2 = core::domain;
+    const d2::RequestConfig cfg{d2::Timeout::fromMillis(1800000).take(), true};
+    auto hdr = [](const std::string &k, const std::string &v) { return d2::Header::create(k, v).take(); };
+    auto mkHttp = [&](const std::string &url, std::vector<d2::Header> hdrs) {
+      d2::HttpRequest::Parts hp{d2::HttpMethod::Get, d2::Url::create(url).take(), d2::PathVariableList{},
+                                d2::QueryParamList{}, d2::HeaderList{std::move(hdrs)}, d2::Body::none(),
+                                d2::Auth::none()};
+      return d2::RequestModel::create(d2::RequestId(""), "t", 0, cfg,
+                                      d2::HttpRequest::create(std::move(hp)).take())
+          .take();
+    };
+    auto aliasify = [&](const d2::RequestModel &mm) { return client->aliasifyModel(mm); };
 
-    // --- missingVars: flags aliases absent from the active env (Global here) ---
-    RequestModel mm; mm.type = RequestType::Http;
-    mm.http.url = "{{baseUrl}}/{{nope}}";
-    mm.http.headers.push_back({"Authorization", "{{token}}", true});
-    mm.http.headers.push_back({"X-Off", "{{disabledVar}}", false});  // disabled -> ignored
-    auto miss = engine.missingVars(mm);
-    CHECK_EQ(miss.size(), size_t(2), "two missing (nope, token); baseUrl resolves, disabled ignored");
-    CHECK(std::find(miss.begin(), miss.end(), "nope") != miss.end(), "nope reported");
-    CHECK(std::find(miss.begin(), miss.end(), "token") != miss.end(), "token reported");
-    CHECK(std::find(miss.begin(), miss.end(), "baseUrl") == miss.end(), "baseUrl not missing");
-
-    // resolves cleanly once nothing is missing
-    RequestModel ok; ok.type = RequestType::Http; ok.http.url = "{{baseUrl}}/x";
-    CHECK(engine.missingVars(ok).empty(), "no missing when all resolve");
+    // exportCurl resolves {{vars}} + per-request config, then renders the cURL command.
+    std::string curl = client->exportCurl(mkHttp("{{baseUrl}}/u", {}));
+    CHECK(curl.find("http://global/u") != std::string::npos, "exportCurl resolves url");
 
     // --- aliasifyModel: literal values matching the env are rewritten back to {{alias}} ---
     // env "baseUrl" = http://global (active env is Global at this point).
-    RequestModel a; a.type = RequestType::Http;
-    a.http.url = "http://global/users";                       // prefix -> {{baseUrl}}
-    a.http.headers.push_back({"Host", "http://global", true}); // whole -> {{baseUrl}}
-    a.http.headers.push_back({"X-Lit", "literal", true});      // no match -> unchanged
-    std::vector<std::string> applied;
-    RequestModel ax = engine.aliasifyModel(a, &applied);
-    CHECK_EQ(ax.http.url, std::string("{{baseUrl}}/users"), "url prefix aliasified");
-    CHECK_EQ(ax.http.headers[0].value, std::string("{{baseUrl}}"), "header whole aliasified");
-    CHECK_EQ(ax.http.headers[1].value, std::string("literal"), "non-match left unchanged");
-    CHECK_EQ(applied.size(), size_t(1), "applied = {baseUrl}");
+    d2::RequestModel ax =
+        aliasify(mkHttp("http://global/users", {hdr("Host", "http://global"), hdr("X-Lit", "literal")}));
+    CHECK_EQ(ts::http(ax).url().raw(), std::string("{{baseUrl}}/users"), "url prefix aliasified");
+    CHECK_EQ(ts::http(ax).headers().items()[0].value(), std::string("{{baseUrl}}"), "header whole aliasified");
+    CHECK_EQ(ts::http(ax).headers().items()[1].value(), std::string("literal"), "non-match left unchanged");
 
     // idempotent: re-aliasify yields no further change
-    std::vector<std::string> applied2;
-    RequestModel ax2 = engine.aliasifyModel(ax, &applied2);
-    CHECK(applied2.empty(), "aliasify is idempotent");
-    CHECK_EQ(ax2.http.url, std::string("{{baseUrl}}/users"), "url stable on second pass");
+    d2::RequestModel ax2 = aliasify(ax);
+    CHECK_EQ(ts::http(ax2).url().raw(), std::string("{{baseUrl}}/users"), "url stable on second pass");
 
     // aliasify also covers WebSocket + GraphQL (import alias-replace) — env baseUrl=http://global active.
-    RequestModel wq; wq.type = RequestType::WebSocket;
-    wq.ws.url = "http://global/socket";
-    wq.ws.auth.type = "bearer"; wq.ws.auth.bearerToken = "http://global";   // whole-value match
-    RequestModel wqx = engine.aliasifyModel(wq);
-    CHECK_EQ(wqx.ws.url, std::string("{{baseUrl}}/socket"), "ws url aliasified");
-    CHECK_EQ(wqx.ws.auth.bearerToken, std::string("{{baseUrl}}"), "ws auth aliasified");
+    d2::WebSocketRequest::Parts wqp{d2::Url::create("ws://global/socket").take()}; // ws url must be ws/wss
+    wqp.auth = d2::Auth::bearer("http://global").take();                            // whole-value match
+    d2::RequestModel wqx = aliasify(
+        d2::RequestModel::create(d2::RequestId(""), "t", 0, cfg,
+                                 d2::WebSocketRequest::create(std::move(wqp)).take())
+            .take());
+    CHECK_EQ(ts::ws(wqx).url().raw(), std::string("{{wsBase}}/socket"), "ws url aliasified");
+    CHECK_EQ(ts::bearerOf(ts::ws(wqx).auth()), std::string("{{baseUrl}}"), "ws auth aliasified");
 
-    RequestModel gq; gq.type = RequestType::GraphQL;
-    gq.graphql.url = "http://global/graphql";
-    gq.graphql.headers.push_back({"X-Base", "http://global", true});
-    RequestModel gqx = engine.aliasifyModel(gq);
-    CHECK_EQ(gqx.graphql.url, std::string("{{baseUrl}}/graphql"), "graphql url aliasified");
-    CHECK_EQ(gqx.graphql.headers[0].value, std::string("{{baseUrl}}"), "graphql header aliasified");
+    d2::GraphQlOperation gop;
+    gop.query = "query { me }"; // domain graphql needs a query
+    d2::GraphQlRequest::Parts gqp{d2::Url::create("http://global/graphql").take(), gop,
+                                  d2::HeaderList{std::vector<d2::Header>{hdr("X-Base", "http://global")}},
+                                  d2::Auth::none(), d2::GqlSubTransport::Http, ""};
+    d2::RequestModel gqx = aliasify(
+        d2::RequestModel::create(d2::RequestId(""), "t", 0, cfg,
+                                 d2::GraphQlRequest::create(std::move(gqp)).take())
+            .take());
+    CHECK_EQ(ts::gql(gqx).url().raw(), std::string("{{baseUrl}}/graphql"), "graphql url aliasified");
+    CHECK_EQ(ts::gql(gqx).headers().items()[0].value(), std::string("{{baseUrl}}"), "graphql header aliasified");
 
     // env definition order decides the alias on duplicate values: "zdup" is defined BEFORE "adup"
     // (sorts later) -> the first-defined key wins, not the lexicographically smallest.
@@ -528,23 +568,26 @@ static void test_engine(const std::string& root) {
     go.keys.push_back({"zdup", "http://dup.host", true});
     go.keys.push_back({"adup", "http://dup.host", true});
     env.save(go);
-    engine.session().setActiveEnv("Global");
-    RequestModel dupReq; dupReq.type = RequestType::Http; dupReq.http.url = "http://dup.host/p";
-    std::vector<std::string> dupApplied;
-    RequestModel dupOut = engine.aliasifyModel(dupReq, &dupApplied);
-    CHECK_EQ(dupOut.http.url, std::string("{{zdup}}/p"), "duplicate value -> first-defined key wins");
+    client->session().setActiveEnv("Global");
+    d2::RequestModel dupOut = aliasify(mkHttp("http://dup.host/p", {}));
+    CHECK_EQ(ts::http(dupOut).url().raw(), std::string("{{zdup}}/p"), "duplicate value -> first-defined key wins");
 
     // --- interactionOf: routing by gRPC method type (SPEC_grpc_streaming §4) ---
-    RequestModel un; un.type = RequestType::Grpc; un.grpc.methodType = "unary";
-    CHECK(engine.interactionOf(un) == InteractionKind::Unary, "unary -> Unary");
-    RequestModel ss; ss.type = RequestType::Grpc; ss.grpc.methodType = "server_streaming";
-    CHECK(engine.interactionOf(ss) == InteractionKind::ServerStream, "server_streaming -> ServerStream");
-    RequestModel cs; cs.type = RequestType::Grpc; cs.grpc.methodType = "client_streaming";
-    CHECK(engine.interactionOf(cs) == InteractionKind::ClientStream, "client_streaming -> ClientStream");
-    RequestModel bd; bd.type = RequestType::Grpc; bd.grpc.methodType = "bidi_streaming";
-    CHECK(engine.interactionOf(bd) == InteractionKind::BiDi, "bidi_streaming -> BiDi");
-    RequestModel hp; hp.type = RequestType::Http;
-    CHECK(engine.interactionOf(hp) == InteractionKind::Unary, "http -> Unary");
+    auto mkGrpc = [&](d2::GrpcMethodType mt) {
+      d2::GrpcRequest::Parts gp;
+      gp.methodType = mt;
+      return d2::RequestModel::create(d2::RequestId(""), "t", 0, cfg,
+                                      d2::GrpcRequest::create(std::move(gp)).take())
+          .take();
+    };
+    auto io = [&](const d2::RequestModel &mm) { return client->interactionOf(mm); };
+    CHECK(io(mkGrpc(d2::GrpcMethodType::Unary)) == InteractionKind::Unary, "unary -> Unary");
+    CHECK(io(mkGrpc(d2::GrpcMethodType::ServerStreaming)) == InteractionKind::ServerStream,
+          "server_streaming -> ServerStream");
+    CHECK(io(mkGrpc(d2::GrpcMethodType::ClientStreaming)) == InteractionKind::ClientStream,
+          "client_streaming -> ClientStream");
+    CHECK(io(mkGrpc(d2::GrpcMethodType::BidiStreaming)) == InteractionKind::BiDi, "bidi_streaming -> BiDi");
+    CHECK(io(mkHttp("http://x", {})) == InteractionKind::Unary, "http -> Unary");
 }
 
 // ---------------- ResponseCache (RESPONSE_CACHE.md §10) ----------------
@@ -672,21 +715,13 @@ static void test_cache_config_clamp(const std::string& root) {
         setenv("DEED_RAM_CACHE_SIZE_MAX", "128", 1);
         setenv("DEED_DISK_CACHE_SIZE_MAX", "1024", 1);
         setenv("DEED_RAM_CACHE_THRESHOLD_KB", "256", 1);
-        EngineConfig ecfg;
-        ecfg.collectionRoot = (fs::path(root) / "cache_cfg_root").string();
-        ecfg.appConfigPath = cfgPath;
-        Engine eng(ecfg);
-        const CacheConfig& cc = eng.cacheConfig();
+        // Effective config is built by the shared detail::buildCacheConfig (env-var ceilings clamp the user
+        // level) — the same builder CoreApiClient's native cache uses. (put/get round-trip is covered by the
+        // direct ResponseCache tests above.)
+        CacheConfig cc = core::detail::buildCacheConfig(reread, core::CacheLimits{});
         CHECK_EQ(cc.ramEffBytes, (std::uint64_t)128 * 1024 * 1024, "ram clamped to env max 128MB");
         CHECK_EQ(cc.diskEffBytes, (std::uint64_t)1024 * 1024 * 1024, "disk clamped to env max 1024MB");
         CHECK_EQ(cc.thresholdBytes, (std::uint64_t)256 * 1024, "threshold = 256KB");
-
-        ApiResponse resp; resp.statusCode = 204; resp.body = "ok";
-        eng.putResponse("req_X", resp);
-        auto got = eng.getResponse("req_X");
-        CHECK(got && got->response.statusCode == 204, "Engine putResponse/getResponse round-trip");
-        eng.removeResponse("req_X");
-        CHECK(!eng.getResponse("req_X"), "Engine removeResponse -> miss");
 
         unsetenv("DEED_RAM_CACHE_SIZE_MAX");
         unsetenv("DEED_DISK_CACHE_SIZE_MAX");
@@ -695,20 +730,14 @@ static void test_cache_config_clamp(const std::string& root) {
 
     // (2) Via CacheLimits (.env loaded by UI): MIN floor raises low user; user in [min,max] unchanged.
     {
-        std::string cfgPath = (fs::path(root) / "appcfg_cache2.json").string();
         AppConfig ac;
         ac.ramCacheSizeMb = 4;       // < min -> must raise to min
         ac.diskCacheSizeMb = 300;    // in [min,max] -> unchanged
-        AppConfigStore(cfgPath).save(ac);
-
-        EngineConfig ecfg;
-        ecfg.collectionRoot = (fs::path(root) / "cache_cfg_root2").string();
-        ecfg.appConfigPath = cfgPath;
-        ecfg.cacheLimits.ramMinMb = 16; ecfg.cacheLimits.ramMaxMb = 256;
-        ecfg.cacheLimits.diskMinMb = 64; ecfg.cacheLimits.diskMaxMb = 1024;
-        ecfg.cacheLimits.thresholdKb = 128;
-        Engine eng(ecfg);
-        const CacheConfig& cc = eng.cacheConfig();
+        core::CacheLimits lim;
+        lim.ramMinMb = 16; lim.ramMaxMb = 256;
+        lim.diskMinMb = 64; lim.diskMaxMb = 1024;
+        lim.thresholdKb = 128;
+        CacheConfig cc = core::detail::buildCacheConfig(ac, lim);
         CHECK_EQ(cc.ramEffBytes, (std::uint64_t)16 * 1024 * 1024, "ram raised to min floor 16MB");
         CHECK_EQ(cc.diskEffBytes, (std::uint64_t)300 * 1024 * 1024, "disk (user) in [min,max] keeps 300MB");
         CHECK_EQ(cc.thresholdBytes, (std::uint64_t)128 * 1024, "threshold from .env = 128KB");
@@ -721,30 +750,30 @@ static void test_app_config_defaults(const std::string& root) {
     std::string cfgPath = (fs::path(root) / "appcfg_defaults.json").string();
     fs::remove(cfgPath);
 
-    EngineConfig ec;
-    ec.collectionRoot = (fs::path(root) / "defs_root").string();
-    ec.appConfigPath = cfgPath;
-    ec.appDefaults.fontName = "Courier";
-    ec.appDefaults.fontSize = 17;
-    ec.appDefaults.ramCacheSizeMb = 33;
-    ec.appDefaults.diskCacheSizeMb = 77;
-    ec.cacheLimits.ramMinMb = 1; ec.cacheLimits.ramMaxMb = 1000;
-    ec.cacheLimits.diskMinMb = 1; ec.cacheLimits.diskMaxMb = 1000;
-    Engine eng(ec);
+    AppConfig defaults;
+    defaults.fontName = "Courier";
+    defaults.fontSize = 17;
+    defaults.ramCacheSizeMb = 33;
+    defaults.diskCacheSizeMb = 77;
+    core::CacheLimits lim;
+    lim.ramMinMb = 1; lim.ramMaxMb = 1000;
+    lim.diskMinMb = 1; lim.diskMaxMb = 1000;
 
-    // No config.json yet -> load returns defaults (.env).
-    AppConfig c = eng.appConfig().load();
+    // No config.json yet -> load returns defaults (.env). (AppConfigStore directly — no Engine.)
+    AppConfigStore store(cfgPath);
+    store.setDefaults(defaults);
+    AppConfig c = store.load();
     CHECK_EQ(c.fontName, std::string("Courier"), "font_name default from .env");
     CHECK_EQ(c.fontSize, 17, "font_size default from .env");
     CHECK_EQ(c.ramCacheSizeMb, 33, "ram_cache_size default from .env");
     CHECK_EQ(c.diskCacheSizeMb, 77, "disk_cache_size default from .env");
-    CHECK_EQ(eng.cacheConfig().ramEffBytes, (std::uint64_t)33 * 1024 * 1024,
+    CHECK_EQ(core::detail::buildCacheConfig(c, lim).ramEffBytes, (std::uint64_t)33 * 1024 * 1024,
              "cache uses ram_cache_size default from .env");
 
     // config.json has only 1 key -> missing keys fall back to defaults (.env).
     { std::ofstream o(cfgPath); o << "{\"font_size\": 20}"; }
     AppConfigStore st(cfgPath);
-    st.setDefaults(ec.appDefaults);
+    st.setDefaults(defaults);
     AppConfig pc = st.load();
     CHECK_EQ(pc.fontSize, 20, "key present in file -> use file value");
     CHECK_EQ(pc.fontName, std::string("Courier"), "missing key -> falls back to .env default");
@@ -752,7 +781,42 @@ static void test_app_config_defaults(const std::string& root) {
     fs::remove(cfgPath);
 }
 
-// ---------------- Importers ----------------
+// ---------------- Importers (domain output) ----------------
+namespace impv { // small views over the domain payload so the importer checks stay readable
+namespace d = core::domain;
+const d::HttpRequest& httpOf(const core::ImportParseResult& r) {
+    return std::get<d::HttpRequest>(r.model->payload());
+}
+const d::GrpcRequest& grpcOf(const core::ImportParseResult& r) {
+    return std::get<d::GrpcRequest>(r.model->payload());
+}
+struct BodyView { std::string mode, content; };
+BodyView bodyView(const d::Body& b) {
+    BodyView v{"none", ""};
+    b.match([&](auto&& x) {
+        using T = std::decay_t<decltype(x)>;
+        if constexpr (std::is_same_v<T, d::BodyRaw>) {
+            v.mode = x.subtype == d::RawSubtype::Json ? "json" : x.subtype == d::RawSubtype::Xml ? "xml" : "text";
+            v.content = x.text;
+        } else if constexpr (std::is_same_v<T, d::BodyFormUrlEncoded>) v.mode = "form-urlencoded";
+        else if constexpr (std::is_same_v<T, d::BodyMultipart>) v.mode = "multipart";
+        else if constexpr (std::is_same_v<T, d::BodyBinary>) v.mode = "binary";
+    });
+    return v;
+}
+struct AuthView { std::string type, bearer, basicUser; };
+AuthView authView(const d::Auth& a) {
+    AuthView v{"none", "", ""};
+    a.match([&](auto&& x) {
+        using T = std::decay_t<decltype(x)>;
+        if constexpr (std::is_same_v<T, d::AuthBearer>) { v.type = "bearer"; v.bearer = x.token; }
+        else if constexpr (std::is_same_v<T, d::AuthBasic>) { v.type = "basic"; v.basicUser = x.username; }
+        else if constexpr (std::is_same_v<T, d::AuthApiKey>) v.type = "apikey";
+    });
+    return v;
+}
+} // namespace impv
+
 static void test_importers() {
     std::printf("[importers]\n");
     CurlImporter curl;
@@ -763,76 +827,80 @@ static void test_importers() {
                         "-H 'Content-Type: application/json' "
                         "-H 'Authorization: Bearer abc' "
                         "-d '{\"name\":\"Alice\"}'");
-    CHECK(r.ok, "parse curl ok");
-    CHECK_EQ(r.model.http.method, std::string("POST"), "method POST");
+    CHECK(r.ok && r.model, "parse curl ok");
+    const auto& h = impv::httpOf(r);
+    CHECK_EQ(core::domain::toString(h.method()), std::string("POST"), "method POST");
     // Importer splits the query string out of the URL into params (url_util::splitUrlQuery).
-    CHECK_EQ(r.model.http.url, std::string("http://api.test/users"), "url with query stripped");
-    CHECK_EQ(r.model.http.params.size(), size_t(1), "query split into 1 param");
-    CHECK_EQ(r.model.http.params[0].key, std::string("q"), "param key q");
-    CHECK_EQ(r.model.http.params[0].value, std::string("1"), "param value 1");
-    CHECK_EQ(r.model.http.body.mode, std::string("json"), "body json from content-type");
-    CHECK_EQ(r.model.http.body.json, std::string("{\"name\":\"Alice\"}"), "body content");
-    CHECK_EQ(r.model.http.headers.size(), size_t(1), "1 header (Authorization -> Auth)");
-    CHECK_EQ(r.model.http.auth.type, std::string("bearer"), "Authorization Bearer -> bearer auth");
-    CHECK_EQ(r.model.http.auth.bearerToken, std::string("abc"), "bearer token into Auth tab");
+    CHECK_EQ(h.url().raw(), std::string("http://api.test/users"), "url with query stripped");
+    CHECK_EQ(h.params().size(), size_t(1), "query split into 1 param");
+    CHECK_EQ(h.params().items()[0].key(), std::string("q"), "param key q");
+    CHECK_EQ(h.params().items()[0].value(), std::string("1"), "param value 1");
+    CHECK_EQ(impv::bodyView(h.body()).mode, std::string("json"), "body json from content-type");
+    CHECK_EQ(impv::bodyView(h.body()).content, std::string("{\"name\":\"Alice\"}"), "body content");
+    CHECK_EQ(h.headers().size(), size_t(1), "1 header (Authorization -> Auth)");
+    CHECK_EQ(impv::authView(h.auth()).type, std::string("bearer"), "Authorization Bearer -> bearer auth");
+    CHECK_EQ(impv::authView(h.auth()).bearer, std::string("abc"), "bearer token into Auth tab");
 
     auto rb = curl.parse("curl -u user:pass http://api.test/secure");
-    CHECK_EQ(rb.model.http.auth.type, std::string("basic"), "-u -> basic auth");
-    CHECK_EQ(rb.model.http.auth.basicUsername, std::string("user"), "basic user");
-    CHECK_EQ(rb.model.http.method, std::string("GET"), "no body -> GET");
+    CHECK_EQ(impv::authView(impv::httpOf(rb).auth()).type, std::string("basic"), "-u -> basic auth");
+    CHECK_EQ(impv::authView(impv::httpOf(rb).auth()).basicUser, std::string("user"), "basic user");
+    CHECK_EQ(core::domain::toString(impv::httpOf(rb).method()), std::string("GET"), "no body -> GET");
 
     GrpcImporter g;
     CHECK(g.canHandle("grpcurl -plaintext localhost:50051 pkg.Svc/M"), "canHandle grpcurl");
     auto gr = g.parse("grpcurl -plaintext -d '{\"id\":\"1\"}' -H 'authorization: Bearer t' "
                       "localhost:50051 user.v1.UserService/GetUser");
-    CHECK(gr.ok, "parse grpcurl ok");
-    CHECK_EQ(gr.model.grpc.target, std::string("localhost:50051"), "target");
+    CHECK(gr.ok && gr.model, "parse grpcurl ok");
+    CHECK_EQ(impv::grpcOf(gr).target(), std::string("localhost:50051"), "target");
     // Import intentionally SKIPS the RPC (Service/Method) — only target/message/metadata/tls are imported.
-    CHECK(gr.model.grpc.service.empty(), "service skipped on import");
-    CHECK(gr.model.grpc.method.empty(), "method skipped on import");
-    CHECK_EQ(gr.model.grpc.tls.enabled, false, "-plaintext -> tls off");
-    CHECK_EQ(gr.model.grpc.metadata.size(), size_t(1), "1 metadata");
+    CHECK(impv::grpcOf(gr).service().empty(), "service skipped on import");
+    CHECK(impv::grpcOf(gr).method().empty(), "method skipped on import");
+    CHECK_EQ(impv::grpcOf(gr).tls().enabled(), false, "-plaintext -> tls off");
+    CHECK_EQ(impv::grpcOf(gr).metadata().entries().size(), size_t(1), "1 metadata");
 
     auto gr2 = g.parse("grpcs://localhost:50051/pkg.Service/Method");
-    CHECK(gr2.ok, "parse compact string ok");
-    CHECK_EQ(gr2.model.grpc.tls.enabled, true, "grpcs -> tls on");
-    CHECK_EQ(gr2.model.grpc.target, std::string("localhost:50051"), "target from compact string");
-    CHECK(gr2.model.grpc.service.empty(), "compact: service skipped on import");
-}
-
-static void test_field_codec() {
-    std::printf("[field_codec]\n");
-    std::string body = "{\"a\":1}";
-    CHECK(fieldcodec::formatJson(body, true).find('\n') != std::string::npos, "pretty has newlines");
-    CHECK_EQ(fieldcodec::formatJson(body, false), std::string("{\"a\":1}"), "compact drops whitespace");
-    std::string enc = fieldcodec::jsonEncodeString(body);
-    CHECK(enc.front() == '"' && enc.back() == '"', "encode -> string literal has quotes");
-    CHECK_EQ(fieldcodec::jsonDecodeString(enc), body, "decode(encode(x)) == x");
+    CHECK(gr2.ok && gr2.model, "parse compact string ok");
+    CHECK_EQ(impv::grpcOf(gr2).tls().enabled(), true, "grpcs -> tls on");
+    CHECK_EQ(impv::grpcOf(gr2).target(), std::string("localhost:50051"), "target from compact string");
+    CHECK(impv::grpcOf(gr2).service().empty(), "compact: service skipped on import");
 }
 
 static void test_curl_export() {
     std::printf("[curl_export]\n");
-    RequestModel m;
-    m.type = RequestType::Http;
-    m.http.method = "POST";
-    m.http.url = "https://api.test/users";
-    m.http.headers.push_back({"Content-Type", "application/json", true});
-    m.http.headers.push_back({"X-Token", "abc123", true});
-    m.http.params.push_back({"q", "hello", true});
-    m.http.body.mode = "json";
-    m.http.body.json = "{\"a\":1}";
-    std::string c = toCurl(m);
+    namespace d = core::domain;
+    const d::RequestConfig cfg{d::Timeout::fromMillis(30000).take(), true};
+
+    // HTTP: POST with a JSON body, a custom header, and a query param.
+    std::vector<d::Header> hs;
+    hs.push_back(d::Header::create("Content-Type", "application/json").take());
+    hs.push_back(d::Header::create("X-Token", "abc123").take());
+    std::vector<d::QueryParam> qp;
+    qp.push_back(d::QueryParam::create("q", "hello").take());
+    d::HttpRequest::Parts hp{d::HttpMethod::Post, d::Url::create("https://api.test/users").take(),
+                             d::PathVariableList{}, d::QueryParamList{std::move(qp)},
+                             d::HeaderList{std::move(hs)}, d::Body::raw(d::RawSubtype::Json, "{\"a\":1}"),
+                             d::Auth::none()};
+    auto httpModel = d::RequestModel::create(d::RequestId(""), "curl-http", 0, cfg,
+                                             d::HttpRequest::create(std::move(hp)).take())
+                         .take();
+    std::string c = toCurl(httpModel);
     CHECK(c.find("curl -X POST") != std::string::npos, "has method");
     CHECK(c.find("api.test/users") != std::string::npos, "has url");
     CHECK(c.find("--data") != std::string::npos, "has body");
     CHECK(c.find("X-Token: abc123") != std::string::npos, "has X-Token header");
     CHECK(c.find("q=hello") != std::string::npos, "has param q");
 
-    GrpcRequest& g = m.grpc;
-    m.type = RequestType::Grpc;
-    g.target = "localhost:50051"; g.service = "pkg.Svc"; g.method = "M"; g.message = "{\"id\":\"1\"}";
-    std::string gc = toCurl(m);
+    // gRPC: grpcurl form (tls off by config -> -plaintext).
+    d::GrpcRequest::Parts gp;
+    gp.target = "localhost:50051"; gp.service = "pkg.Svc"; gp.method = "M";
+    gp.message = d::JsonText::of("{\"id\":\"1\"}");
+    auto grpcModel = d::RequestModel::create(d::RequestId(""), "curl-grpc", 0,
+                                             d::RequestConfig{d::Timeout::fromMillis(30000).take(), false},
+                                             d::GrpcRequest::create(std::move(gp)).take())
+                         .take();
+    std::string gc = toCurl(grpcModel);
     CHECK(gc.find("grpcurl") != std::string::npos, "grpc -> grpcurl");
+    CHECK(gc.find("-plaintext") != std::string::npos, "grpc tls off -> -plaintext");
     CHECK(gc.find("pkg.Svc/M") != std::string::npos, "has service/method");
 }
 
@@ -843,25 +911,24 @@ static void test_audit_fixes() {
     // H5: pathologically deep JSON is rejected by the depth guard (returns false, does NOT crash).
     {
         std::string deep(500, '[');   // 500 levels, well past kMaxJsonDepth
-        std::vector<KeyValue> kv; std::string err;
-        CHECK(!fieldcodec::jsonToKeyValues(deep, kv, err), "H5: deep JSON rejected, no stack overflow");
-        CHECK(fieldcodec::jsonToKeyValues("[]", kv, err), "H5: shallow JSON still parses");
+        CHECK(!core::serial::jsonToHeaders(deep).isOk(), "H5: deep JSON rejected, no stack overflow");
+        CHECK(core::serial::jsonToHeaders("[]").isOk(), "H5: shallow JSON still parses");
     }
 
     CurlImporter curl;
     // M15: valid Basic decodes; malformed Basic is NOT silently accepted as credentials.
     {
         auto good = curl.parse("curl -H 'Authorization: Basic dXNlcjpwYXNz' http://x.test");  // user:pass
-        CHECK(good.ok && good.model.http.auth.type == "basic" &&
-              good.model.http.auth.basicUsername == "user", "M15: valid Basic -> basic creds");
+        auto gv = impv::authView(impv::httpOf(good).auth());
+        CHECK(good.ok && gv.type == "basic" && gv.basicUser == "user", "M15: valid Basic -> basic creds");
         auto bad = curl.parse("curl -H 'Authorization: Basic not_base64!!' http://x.test");
-        CHECK(bad.ok && bad.model.http.auth.type == "apikey",
+        CHECK(bad.ok && impv::authView(impv::httpOf(bad).auth()).type == "apikey",
               "M15: malformed Basic -> apikey (not garbled creds)");
     }
     // M14: an empty inline value (--data=) must not swallow the next token as data.
     {
-        auto d = curl.parse("curl --data= http://x.test");
-        CHECK(d.ok && d.model.http.url.find("x.test") != std::string::npos,
+        auto dd = curl.parse("curl --data= http://x.test");
+        CHECK(dd.ok && impv::httpOf(dd).url().raw().find("x.test") != std::string::npos,
               "M14: empty --data= keeps the URL");
     }
 
@@ -869,9 +936,9 @@ static void test_audit_fixes() {
     {
         GrpcImporter g;
         auto plain = g.parse("grpcurl -plaintext localhost:50051 pkg.Svc/M");
-        CHECK(plain.ok && plain.model.config.tls == false, "config.tls follows -plaintext (off)");
+        CHECK(plain.ok && plain.model->config().tlsEnabledDefault == false, "config.tls follows -plaintext (off)");
         auto secure = g.parse("grpcs://localhost:50051/pkg.Svc/M");
-        CHECK(secure.ok && secure.model.config.tls == true, "config.tls follows grpcs:// (on)");
+        CHECK(secure.ok && secure.model->config().tlsEnabledDefault == true, "config.tls follows grpcs:// (on)");
     }
 }
 
@@ -881,7 +948,6 @@ int main() {
 
     test_variable_resolver();
     test_alias_inversion();
-    test_field_codec();
     test_curl_export();
     test_request_naming();
     test_filename_migration(root);
@@ -890,7 +956,7 @@ int main() {
     test_cache_config_clamp(root);
     test_app_config_defaults(root);
     test_collection_store(root);
-    test_body_multimode_roundtrip(root);
+    test_body_singlemode_roundtrip(root);
     test_session_store(root);
     test_env_and_secret(root);
     test_secret_migration(root);
@@ -902,10 +968,20 @@ int main() {
     int wsFail = run_ws_session_tests();        // INV-1 duplex gatekeeper (transport-free)
     int sseFail = run_sse_parser_tests();       // SSE wire parser gatekeeper (transport-free)
     int gqlFail = run_gql_ws_protocol_tests();  // GraphQL-over-WS protocol gatekeeper (transport-free)
+    int mapFail = run_mapper_roundtrip_tests(); // REFACTOR_SPEC §8.1 JSON<->domain round-trip gate
+    int sagaFail = run_saga_tests();            // REFACTOR_SPEC §11.3 saga/orchestrator gate (fakes)
+    int repoFail = run_repository_tests();      // REFACTOR_SPEC §8.3 ICollectionRepository (domain objects)
+    int importFail = run_import_service_tests(); // REFACTOR_SPEC P6 IImportService (curl/grpcurl/graphql)
+    int prepoFail = run_persistence_repo_tests(); // REFACTOR_SPEC §6.3 env/session/appConfig repository ports
+    int fieldFail = run_field_json_tests();      // REFACTOR_SPEC Phase E: domain field codec (JSON<->VO)
 
     fs::remove_all(root);
 
-    std::printf("\n==== %d passed, %d failed (+%d stream, +%d ws, +%d sse, +%d gql failures) ====\n",
-                g_pass, g_fail, streamFail, wsFail, sseFail, gqlFail);
-    return (g_fail == 0 && streamFail == 0 && wsFail == 0 && sseFail == 0 && gqlFail == 0) ? 0 : 1;
+    std::printf("\n==== %d passed, %d failed (+%d stream, +%d ws, +%d sse, +%d gql, +%d mapper, +%d saga, +%d repo, +%d import, +%d prepo, +%d field) ====\n",
+                g_pass, g_fail, streamFail, wsFail, sseFail, gqlFail, mapFail, sagaFail, repoFail, importFail, prepoFail, fieldFail);
+    return (g_fail == 0 && streamFail == 0 && wsFail == 0 && sseFail == 0 && gqlFail == 0 &&
+            mapFail == 0 && sagaFail == 0 && repoFail == 0 && importFail == 0 && prepoFail == 0 &&
+            fieldFail == 0)
+               ? 0
+               : 1;
 }

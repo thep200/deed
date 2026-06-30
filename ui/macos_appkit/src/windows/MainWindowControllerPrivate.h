@@ -38,15 +38,18 @@
 #import "editor/SciTextView.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "core/engine.hpp"
-#include "core/codec/field_codec.hpp"
+#include "core/serialization/field_json.hpp"   // core::serial — domain JSON field codec (replaces fieldcodec)
 #include "core/import_export/importer.hpp"
 #include "core/persistence/stores.hpp"
 #include "core/persistence/request_naming.hpp"
-#include "core/types.hpp"
+#include "core/env_config.hpp"           // TreeNode/AppConfig/Environment/Session + RequestType (survive)
+#include "core/streaming/stream_events.hpp" // StreamStatus / InteractionKind (survive types.hpp removal)
+#include "core/app/core_api_client.hpp"   // REFACTOR_SPEC P6: new send path (IApiClient)
+#include "bridge/UiObserver.h"            // domain ResponseEvent -> CoreResponseSink
 
 // std::string <-> NSString bridge used everywhere.
 static inline NSString *N(const std::string &s) { return [NSString stringWithUTF8String:s.c_str()]; }
@@ -54,7 +57,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 
 // Conformance protocols attached to the category that implements them -> no
 // -Wprotocol / -Wobjc-protocol-method-implementation warnings, while every call site that
-// #imports this header sees self conform (e.g. building UiDelegateBridge needs <CoreResponseSink>).
+// #imports this header sees self conform (e.g. constructing a UiObserver needs <CoreResponseSink>).
 @interface MainWindowController (Tree) <NSOutlineViewDataSource, NSOutlineViewDelegate>
 @end
 @interface MainWindowController (Editor) <NSTextFieldDelegate, NSTextViewDelegate>
@@ -64,24 +67,30 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 
 @interface MainWindowController () {
 @protected
-    // Core
-    std::unique_ptr<core::Engine> _engine;
-    std::shared_ptr<UiDelegateBridge> _bridge;   // shared so the Engine worker keeps it alive across a call (C1)
-    core::RequestModel _model;
+    // Core — the UI talks ONLY to CoreApiClient (no Engine). It owns its own stores/cache/senders.
+    // REFACTOR_SPEC P6: the send stack. ALL sends (unary HTTP/gRPC/GraphQL + server-stream + WebSocket)
+    // route through IApiClient (orchestrator/saga/domain senders). The legacy Engine send path is gone.
+    std::unique_ptr<core::app::CoreApiClient> _apiClient;
+    std::shared_ptr<UiObserver> _apiObserver;     // kept alive for the in-flight send
+    core::domain::RequestExecutionId _apiExec;    // handle to cancel / push the in-flight send
+    uint64_t _apiHandleCounter;                   // synthesizes a RequestHandle for CoreResponseSink reuse
+    BOOL _apiWsActive;                            // a WebSocket session is open (send frames via it)
+    // The editor's working request is the DOMAIN aggregate (REFACTOR_SPEC P6, Phase E-req). It's optional
+    // because core::domain::RequestModel has no default ctor (identity/payload are required); _hasRequest
+    // gates real use. The editor reads/writes it natively — no legacy bridge.
+    std::optional<core::domain::RequestModel> _model;
     std::string _root;
     std::string _currentRel;
     std::string _currentId;   // id of open request (stable identifier)
     uint64_t _currentHandle;
     BOOL _hasRequest;
 
-    // streaming (SPEC_grpc_streaming §7/§10)
+    // streaming (SPEC_grpc_streaming §7/§10) — stream/WS now run through IApiClient (_apiExec); no legacy handles
     BOOL _streaming;                       // a server-stream is in flight (Stop replaces Send)
-    core::StreamHandle _streamHandle;      // handle to cancel the active stream
-    core::SessionHandle _wsSession;        // active WebSocket session (SPEC_websocket §4); channel = send side
     uint64_t _streamEvents;                // events received so far (status line)
     int64_t  _streamBytes;                 // running response size (bytes) received so far — live size counter
     uint64_t _streamToken;                 // C2: identity of the current stream; bumped on each open, stale callbacks drop
-    std::vector<core::GrpcMethodInfo> _grpcMethods; // parallel to _servicePopup items (ONLY the current request's)
+    std::vector<core::domain::GrpcMethodDescriptor> _grpcMethods; // parallel to _servicePopup items (current request's)
     uint64_t _grpcMethodsReqSeq;  // race guard: apply only the latest listGrpcMethods result
     BOOL _grpcMethodsFetched;     // true once fetched for THIS request -> reuse, don't re-fetch (until invalidated)
     uint64_t _loadReqSeq;         // token: apply only the LATEST loadRequestAtRel model (async load)
@@ -125,7 +134,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     NSString *_rightPaneActiveTabKey;   // active tab key for right pane (remembered separately)
     OS9BevelButton *_prettyButton;
     NSInteger _prettyMode; // 0=Pretty 1=Raw 2=Encode 3=Decode
-    core::ApiResponse _lastResp;
+    core::domain::ApiResponse _lastResp;
     BOOL _hasResp;
 
     // status line (above panes, below tab buttons)
@@ -198,7 +207,10 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)relayout;
 - (void)layoutTabButtons:(NSArray<OS9BevelButton *> *)buttons atX:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)h extra:(CGFloat)extra;
 - (void)layoutConfig;
-- (void)setRequestType:(core::RequestType)t;
+- (core::RequestType)requestType; // current request's protocol view-enum (reads domain _model; no bridge)
+// Rebuild the current gRPC payload's immutable VO via Parts + write back to _model (no-op unless gRPC).
+- (void)mutateGrpc:(void (^)(core::domain::GrpcRequest::Parts &))fn;
+- (void)setRequestType:(core::domain::RequestType)t;
 - (void)rebuildTabButtons;
 - (void)setHasRequest:(BOOL)has;
 - (void)openFolder:(id)sender;
@@ -233,7 +245,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (BOOL)outlineView:(NSOutlineView *)ov acceptDrop:(id<NSDraggingInfo>)info item:(id)item childIndex:(NSInteger)idx;
 - (void)cancelInFlightForSwitch;
 - (void)loadRequestAtRel:(NSString *)rel;
-- (void)applyLoadedModel:(const core::RequestModel &)model rel:(NSString *)rel;  // apply loaded model (on main)
+- (void)applyLoadedModel:(const core::domain::RequestModel &)model rel:(NSString *)rel;  // apply loaded model (on main)
 - (void)showCachedResponseForId:(const std::string &)reqId;
 - (void)populateEditorsFromModel;
 - (NSInteger)tabIndexForKey:(NSString *)key inTitles:(NSArray<NSString *> *)titles;
@@ -245,9 +257,6 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (NSInteger)bodyTabIndex;
 - (void)updateBodyButtonLabel;
 - (NSString *)bodyTemplateForMode:(NSString *)mode;
-- (NSString *)bodyBufferForMode:(NSString *)mode fromModel:(const core::Body &)b;
-- (BOOL)syncBodyFromBuffer:(NSString *)buf into:(core::Body &)out err:(std::string &)err;
-- (BOOL)applyBodyDraft:(NSString *)buf mode:(NSString *)mode into:(core::Body &)nb err:(std::string &)err;
 - (void)bodyButtonClicked:(OS9BevelButton *)b;
 - (void)pickBodyMode:(NSString *)mode;
 - (void)reqTabClicked:(OS9BevelButton *)b;
@@ -265,9 +274,9 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 // import kind: 0 = cURL, 1 = grpcurl, 2 = GraphQL.
 - (void)importNow:(NSString *)text kind:(NSInteger)kind;
 - (void)offerImport:(NSString *)text kind:(NSInteger)kind;
-- (NSString *)importSummary:(const core::RequestModel &)m unknown:(const std::vector<std::string> &)unknown kind:(NSInteger)kind;
-- (NSString *)deriveImportName:(const core::RequestModel &)m;
-- (void)applyImport:(const core::RequestModel &)m;
+- (NSString *)importSummary:(const core::domain::RequestModel &)m unknown:(const std::vector<std::string> &)unknown kind:(NSInteger)kind;
+- (NSString *)deriveImportName:(const core::domain::RequestModel &)m;
+- (void)applyImport:(const core::domain::RequestModel &)m;
 - (void)restoreUrlField;
 - (void)methodChanged:(id)sender;
 - (void)urlCommitted:(id)sender;
@@ -276,16 +285,19 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)updateTitle;
 - (void)saveRequest:(id)sender;
 - (void)sendRequest:(id)sender;
+- (void)sendViaApiClient;     // REFACTOR_SPEC P6: route unary send through IApiClient
+- (void)streamViaApiClient;   // route server-stream (gRPC/SSE) through IApiClient
+- (void)wsViaApiClient;       // route WebSocket connect/send-frame through IApiClient
 - (void)cancelClicked:(id)sender;
-- (void)onCoreResponse:(uint64_t)handle response:(const core::ApiResponse &)resp;
-- (void)onCoreError:(uint64_t)handle error:(const core::ApiError &)err;
+- (void)onCoreResponse:(uint64_t)handle response:(const core::domain::ApiResponse &)resp;
+- (void)onCoreError:(uint64_t)handle error:(const core::domain::ApiError &)err;
 - (void)onStreamOpenTransport:(int)transport;
 - (void)onStreamChunk:(NSString *)chunk events:(uint64_t)totalEvents;
 - (void)onStreamClose:(core::StreamStatus)status code:(int)code message:(NSString *)message
                events:(uint64_t)events elapsedMs:(long long)elapsedMs truncated:(BOOL)truncated;
-- (void)displayErrorKind:(core::ErrorKind)kind message:(NSString *)msg;
-- (void)cacheResponseAsync:(const core::ApiResponse &)resp forId:(const std::string &)reqId;
-- (void)cacheErrorAsync:(const core::ApiError &)err forId:(const std::string &)reqId;
+- (void)displayErrorKind:(core::domain::ErrorKind)kind message:(NSString *)msg;
+- (void)cacheResponseAsync:(const core::domain::ApiResponse &)resp forId:(const std::string &)reqId;
+- (void)cacheErrorAsync:(const core::domain::ApiError &)err forId:(const std::string &)reqId;
 - (void)finishSending;
 - (void)startSendSpinner;
 - (void)stopSendSpinner;
@@ -295,13 +307,13 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (NSString *)humanSize:(int64_t)bytes;   // "1.2kb" / "345b"
 - (void)rebuildResponseBuffers;
 - (void)rebuildResponseBuffersAsync;   // U2: format response off the main thread
-- (NSArray<NSString *> *)computeResponseBuffersFor:(const core::ApiResponse &)r
+- (NSArray<NSString *> *)computeResponseBuffersFor:(const core::domain::ApiResponse &)r
                                               type:(core::RequestType)type
                                         prettyMode:(int)prettyMode;
 - (void)applyResponseBuffers:(NSArray<NSString *> *)bufs;
 - (void)updateStatus:(NSString *)text;
 - (NSString *)clockFromEpochMs:(int64_t)ms;
-- (void)updateStatusFromResponse:(const core::ApiResponse &)r error:(BOOL)isErr endMs:(int64_t)endMs;
+- (void)updateStatusFromResponse:(const core::domain::ApiResponse &)r error:(BOOL)isErr endMs:(int64_t)endMs;
 - (void)envClicked:(id)sender;
 - (void)pickEnvNamed:(NSString *)name;
 - (void)refreshEnvButton;
@@ -312,7 +324,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)showSavedGrpcMethodLabel;
 - (void)reloadGrpcMethods;
 - (void)fetchGrpcMethodsThenOpen:(BOOL)openWhenDone;
-- (void)applyGrpcMethods:(const std::vector<core::GrpcMethodInfo> &)methods error:(NSString *)err                 openMenu:(BOOL)openMenu;
+- (void)applyGrpcMethods:(const std::vector<core::domain::GrpcMethodDescriptor> &)methods error:(NSString *)err                 openMenu:(BOOL)openMenu;
 - (void)serviceMethodChanged:(id)sender;
 - (void)applySelectedGrpcMethod:(NSInteger)idx;
 - (void)manageEnv:(id)sender;

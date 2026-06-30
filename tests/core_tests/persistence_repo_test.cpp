@@ -1,0 +1,79 @@
+// persistence_repo_test.cpp — REFACTOR_SPEC §6.3/§8.3: environment/session/appConfig repository ports
+// forward to the underlying stores. Verifies round-trips through the port interfaces (not the stores directly).
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <string>
+
+#include "core/app/persistence_repositories.hpp"
+
+namespace fs = std::filesystem;
+using namespace core::app;
+
+static int pr_pass = 0, pr_fail = 0;
+#define PR_CHECK(cond, msg)                                                                        \
+  do {                                                                                             \
+    if (cond) { ++pr_pass; }                                                                       \
+    else { ++pr_fail; std::printf("  FAIL: %s  (%s:%d)\n", msg, __FILE__, __LINE__); }             \
+  } while (0)
+
+int run_persistence_repo_tests() {
+  std::printf("[persistence_repos]\n");
+  auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  auto root = fs::temp_directory_path() / ("deed_prepo_" + std::to_string(stamp));
+  fs::create_directories(root);
+
+  // Environments
+  core::EnvironmentStore envStore(root.string());
+  EnvironmentRepository envs(envStore);
+  core::Environment e;
+  e.name = "staging";
+  e.keys.push_back({"baseUrl", "https://staging.example.com", true, false});
+  envs.save(e);
+  auto names = envs.list();
+  PR_CHECK(std::find(names.begin(), names.end(), "staging") != names.end(), "env repo list/save");
+  auto loaded = envs.load("staging");
+  PR_CHECK(loaded.keys.size() == 1 && loaded.keys[0].key == "baseUrl", "env repo load round-trip");
+  envs.remove("staging");
+  PR_CHECK(envs.list().empty(), "env repo remove");
+
+  // Session
+  core::SessionStore sessStore(root.string());
+  SessionRepository sess(sessStore);
+  sess.saveLastOpened("folder/req.json");
+  sess.setActiveEnv("prod");
+  PR_CHECK(sess.loadLastOpened() == "folder/req.json", "session repo lastOpened round-trip");
+  PR_CHECK(sess.getActiveEnv() == "prod", "session repo activeEnv round-trip");
+
+  // App config
+  core::AppConfigStore cfgStore((root / "config.json").string());
+  AppConfigRepository cfg(cfgStore);
+  core::AppConfig ac;
+  ac.fontName = "Monaco";
+  ac.fontSize = 13;
+  cfg.save(ac);
+  auto rc = cfg.load();
+  PR_CHECK(rc.fontName == "Monaco" && rc.fontSize == 13, "appconfig repo round-trip");
+
+  // Collection store (the app-layer ICollectionRepository now returns DOMAIN models + its concrete adapter
+  // lives in composition_root; the store keeps the legacy surface tested here).
+  auto collRoot = root / "collection";
+  fs::create_directories(collRoot);
+  core::CollectionStore collStore(collRoot.string());
+  std::string rel = collStore.createRequest("", core::RequestType::Http, "Ping");
+  PR_CHECK(!rel.empty(), "collection store createRequest");
+  auto level = collStore.scanLevel("");
+  PR_CHECK(!level.empty(), "collection store scanLevel sees the new request");
+  auto cm = collStore.loadRequest(rel);
+  PR_CHECK(cm.type() == core::domain::RequestType::Http, "collection store loadRequest type");
+  PR_CHECK(collStore.findRelPathById(cm.id().get()) == rel, "collection store findRelPathById");
+  std::string folder = collStore.createFolder("", "Group");
+  PR_CHECK(!folder.empty(), "collection store createFolder");
+  collStore.remove(rel);
+  PR_CHECK(collStore.findRelPathById(cm.id().get()).empty(), "collection store remove");
+
+  fs::remove_all(root);
+  std::printf("  persistence_repos: %d passed, %d failed\n", pr_pass, pr_fail);
+  return pr_fail;
+}

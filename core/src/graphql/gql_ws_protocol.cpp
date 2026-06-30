@@ -9,12 +9,13 @@ namespace core {
 
 using nlohmann::json;
 
-GraphQlWsProtocol::GraphQlWsProtocol(std::string streamId, GraphQlRequest req, IStreamSink* uiSink,
-                                     std::function<void(const std::string&)> sendRaw)
+GraphQlWsProtocol::GraphQlWsProtocol(std::string streamId, core::domain::GraphQlRequest req,
+                                     IStreamSink* uiSink, std::function<void(const std::string&)> sendRaw)
     : streamId_(std::move(streamId)), req_(std::move(req)), sink_(uiSink), sendRaw_(std::move(sendRaw)) {}
 
 bool GraphQlWsProtocol::legacy() const {
-    return req_.wsProtocol == GqlWsProtocol::SubscriptionsTransportWs;
+    // subprotocol "graphql-ws" == the legacy subscriptions-transport-ws library (SPEC_graphql §6.1 naming).
+    return req_.wsProtocol() == "graphql-ws";
 }
 // Legacy (subscriptions-transport-ws) uses connection_init/start/stop + data; modern uses
 // connection_init/subscribe/complete + next. The handshake (connection_init/ack) is identical.
@@ -47,9 +48,8 @@ void GraphQlWsProtocol::onOpen() {
     openOnce();
     json init;
     init["type"] = tInit();
-    if (!req_.connectionInitPayloadJson.empty()) {
-        try { init["payload"] = json::parse(req_.connectionInitPayloadJson); } catch (...) {}
-    }
+    // The domain GraphQlRequest carries no connection_init payload (not modeled), so none is sent — matching
+    // the domain send stack's behavior.
     sendRaw_(init.dump());
 }
 
@@ -59,10 +59,12 @@ void GraphQlWsProtocol::sendSubscribe() {
     sub["id"] = id_;
     sub["type"] = tSubscribe();
     json payload;
-    payload["query"] = req_.query;
-    try { payload["variables"] = json::parse(req_.variablesJson.empty() ? "{}" : req_.variablesJson); }
+    const auto& op = req_.op();
+    payload["query"] = op.query;
+    const std::string& vtxt = op.variables.text();
+    try { payload["variables"] = json::parse(vtxt.empty() ? "{}" : vtxt); }
     catch (...) { payload["variables"] = json::object(); }
-    if (!req_.operationName.empty()) payload["operationName"] = req_.operationName;
+    if (!op.operationName.empty()) payload["operationName"] = op.operationName;
     sub["payload"] = payload;
     sendRaw_(sub.dump());
 }

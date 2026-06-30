@@ -27,44 +27,40 @@
     [self autosaveCurrent];
     [_expandedFolders removeAllObjects];   // new collection: reset fold state (folded by default)
     _root = path.UTF8String;
-    core::EngineConfig cfg; cfg.collectionRoot = _root;
-    // Cache ceiling/floor read from .env (DeedConfig) -> passed into Core (Core doesn't read .env).
+    // REFACTOR_SPEC: CoreApiClient owns its own stores + response cache (no Engine). .env tunables (read by
+    // DeedConfig; Core never reads .env) map into the self-sufficient Config.
+    core::app::CoreApiClient::Config cfg;
+    cfg.collectionRoot = _root;
     DeedConfig *dc = [DeedConfig shared];
-    cfg.cacheLimits.ramMaxMb = (int)[dc intFor:@"RAM_CACHE_SIZE_MAX" def:0];
-    cfg.cacheLimits.ramMinMb = (int)[dc intFor:@"RAM_CACHE_SIZE_MIN" def:0];
-    cfg.cacheLimits.diskMaxMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MAX" def:0];
-    cfg.cacheLimits.diskMinMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MIN" def:0];
-    cfg.cacheLimits.thresholdKb = (int)[dc intFor:@"RAM_CACHE_THRESHOLD_KB" def:0];
-    // Stream ceilings from .env (SPEC_grpc_streaming §9; 0 -> sender default). MiB -> bytes for max bytes.
-    cfg.streamLimits.maxEvents = (uint64_t)[dc intFor:@"STREAM_MAX_EVENTS" def:0];
-    cfg.streamLimits.maxBytes = (uint64_t)[dc intFor:@"STREAM_MAX_BYTES_MB" def:0] * 1024ull * 1024ull;
+    cfg.ramCacheMaxMb = (int)[dc intFor:@"RAM_CACHE_SIZE_MAX" def:0];
+    cfg.ramCacheMinMb = (int)[dc intFor:@"RAM_CACHE_SIZE_MIN" def:0];
+    cfg.diskCacheMaxMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MAX" def:0];
+    cfg.diskCacheMinMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MIN" def:0];
+    cfg.ramCacheThresholdKb = (int)[dc intFor:@"RAM_CACHE_THRESHOLD_KB" def:0];
     // WebSocket tunables from .env (SPEC_websocket §9; 0 -> WsSender default).
-    cfg.wsLimits.pingIntervalMs = (int)[dc intFor:@"WS_PING_INTERVAL_MS" def:0];
-    cfg.wsLimits.idleTimeoutMs = (int)[dc intFor:@"WS_IDLE_TIMEOUT_MS" def:0];
-    cfg.wsLimits.closeTimeoutMs = (int)[dc intFor:@"WS_CLOSE_TIMEOUT_MS" def:0];
-    cfg.wsLimits.maxFrameBytes = (int)[dc intFor:@"WS_MAX_FRAME_MB" def:0] * 1024 * 1024;
-    cfg.wsLimits.sendQueueMaxFrames = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_FRAMES" def:0];
-    cfg.wsLimits.sendQueueMaxBytes = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_MB" def:0] * 1024 * 1024;
+    cfg.wsPingIntervalMs = (int)[dc intFor:@"WS_PING_INTERVAL_MS" def:0];
+    cfg.wsIdleTimeoutMs = (int)[dc intFor:@"WS_IDLE_TIMEOUT_MS" def:0];
+    cfg.wsCloseTimeoutMs = (int)[dc intFor:@"WS_CLOSE_TIMEOUT_MS" def:0];
+    cfg.wsMaxFrameMb = (int)[dc intFor:@"WS_MAX_FRAME_MB" def:0];
+    cfg.wsSendQueueMaxFrames = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_FRAMES" def:0];
+    cfg.wsSendQueueMaxMb = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_MB" def:0];
     cfg.appDefaults = [self appDefaultsFromEnv];   // app-config defaults from .env
-    _engine = std::make_unique<core::Engine>(cfg);
-    // coalesce cadence + UI buffer high-water mark (backpressure valve, perf spec §2.2/§10).
-    _bridge = std::make_shared<UiDelegateBridge>(self,
-                                                 (int)[dc intFor:@"STREAM_COALESCE_MS" def:50],
-                                                 (int)[dc intFor:@"STREAM_UI_BUFFER_MAX_KB" def:8192]);
-    _envVC = [[EnvWindowController alloc] initWithEngine:_engine.get()];
+    _apiClient = core::app::CoreApiClient::create(std::move(cfg));
+    _envVC = [[EnvWindowController alloc] initWithEnvRepo:&_apiClient->environments()
+                                                 session:&_apiClient->session()];
     // Remember this folder in app-support so it reopens next time.
-    try { core::AppConfig ac = _engine->appConfig().load(); ac.lastCollectionRoot = _root;
-          _engine->appConfig().save(ac); } catch (...) {}
+    try { core::AppConfig ac = _apiClient->appConfig().load(); ac.lastCollectionRoot = _root;
+          _apiClient->appConfig().save(ac); } catch (...) {}
     _openButton.title = [self abbreviatePath:path];
     _openButton.toolTip = path;
     [self setHasRequest:NO];
     // One-time migrate: old files -> add id to filename (only touches files missing id). Before building tree.
-    try { _engine->collection().migrateAddIdToFilenames(); } catch (...) {}
+    try { _apiClient->collection().migrateAddIdToFilenames(); } catch (...) {}
     [self reloadTree];
     [self refreshEnvButton];
 
     try {
-        std::string last = _engine->session().loadLastOpened();
+        std::string last = _apiClient->session().loadLastOpened();
         if (!last.empty()) {
             NSString *full = N(_root + "/" + last);
             if ([[NSFileManager defaultManager] fileExistsAtPath:full]) [self loadRequestAtRel:N(last)];
@@ -76,8 +72,8 @@
 // Resync _currentRel by stable id before writing: after rename/move the old path has changed
 // -> avoid save writing to the old path and creating a "ghost" file. Returns NO if the open request was deleted.
 - (BOOL)resyncCurrentRelById {
-    if (_currentId.empty() || !_engine) return !_currentRel.empty();
-    std::string rel = _engine->collection().findRelPathById(_currentId);
+    if (_currentId.empty() || !_apiClient) return !_currentRel.empty();
+    std::string rel = _apiClient->collection().findRelPathById(_currentId);
     if (rel.empty()) return NO;          // no longer on disk (deleted) -> don't recreate
     _currentRel = rel;
     return YES;
@@ -89,10 +85,10 @@
 // size. If a single folder is ever expected to hold thousands of requests, move this scan to a background
 // queue with a placeholder row + async reload (a larger rearchitecture).
 - (void)loadChildrenOf:(TreeItem *)folder {
-    if (!folder || folder.childrenLoaded || !_engine) return;
+    if (!folder || folder.childrenLoaded || !_apiClient) return;
     [folder.children removeAllObjects];
     try {
-        for (const auto &c : _engine->collection().scanLevel(folder.relPath.UTF8String))
+        for (const auto &c : _apiClient->collection().scanLevel(folder.relPath.UTF8String))
             [folder.children addObject:TreeItemFromNode(c)];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
     folder.childrenLoaded = YES;
@@ -109,9 +105,9 @@
     }
 
     [_roots removeAllObjects];
-    if (_engine) {
+    if (_apiClient) {
         try {                               // scan ROOT level only; child folders folded by default (§3)
-            for (const auto &c : _engine->collection().scanLevel(""))
+            for (const auto &c : _apiClient->collection().scanLevel(""))
                 [_roots addObject:TreeItemFromNode(c)];
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
     }
@@ -170,9 +166,9 @@
 // Rescan one level (rel; "" = root) then MERGE into `items` in place: keep old TreeItems matching by
 // relPath (preserving loaded children + that branch's open state), create new only for new entries.
 - (void)mergeScanLevel:(const std::string &)rel into:(NSMutableArray<TreeItem *> *)items {
-    if (!_engine) return;
+    if (!_apiClient) return;
     std::vector<core::TreeNode> nodes;
-    try { nodes = _engine->collection().scanLevel(rel); }
+    try { nodes = _apiClient->collection().scanLevel(rel); }
     catch (const std::exception &e) { [self toastWarn:N(e.what())]; return; }
     NSMutableDictionary<NSString *, TreeItem *> *byRel = [NSMutableDictionary dictionary];
     for (TreeItem *t in items) if (t.relPath) byRel[t.relPath] = t;
@@ -197,7 +193,7 @@
 
 // Incremental update for one changed level (§T1) — does NOT tear down the whole tree.
 - (void)refreshTreeLevel:(NSString *)parentRel {
-    if (!_engine) return;
+    if (!_apiClient) return;
     if (parentRel.length == 0) {                 // mutation at ROOT
         [self mergeScanLevel:"" into:_roots];
         [_tree reloadData];
@@ -243,7 +239,7 @@
 
 // Rename via Platinum dialog (CUSTOM_DIALOG §6.1): prompt + validate, then sync the filename (LAZY_TREE §4).
 - (void)promptRenameItem:(TreeItem *)t {
-    if (!t || t.relPath.length == 0 || !_engine) return;
+    if (!t || t.relPath.length == 0 || !_apiClient) return;
     NSString *newName = [OS9Dialog promptWithTitle:StrRename
                                            message:StrDlgRenameMsg
                                        defaultText:(t.name ?: @"")
@@ -262,11 +258,11 @@
     NSString *oldRel = t.relPath;
     NSString *parentRel = [oldRel stringByDeletingLastPathComponent];
     try {
-        std::string newRel = _engine->collection().rename(oldRel.UTF8String, newName.UTF8String);
+        std::string newRel = _apiClient->collection().rename(oldRel.UTF8String, newName.UTF8String);
         if (t.isFolder) [self remapExpandedFoldersFrom:oldRel to:N(newRel)];  // §T3: keep open state
         if (wasCurrent) {
             // Sync the name into the open model: otherwise a later Save writes the OLD name -> filename rollback.
-            _model.name = newName.UTF8String;
+            if (_model) _model = _model->withName(newName.UTF8String);
             _currentRel = newRel;
             [self updateTitle];
         }
@@ -399,7 +395,7 @@
     return NSDragOperationNone;
 }
 - (BOOL)outlineView:(NSOutlineView *)ov acceptDrop:(id<NSDraggingInfo>)info item:(id)item childIndex:(NSInteger)idx {
-    if (!_engine) return NO;
+    if (!_apiClient) return NO;
     TreeItem *dest = item;
     std::string destFolder = (dest && dest.isFolder) ? std::string(dest.relPath.UTF8String) : std::string();
     BOOL any = NO;
@@ -409,7 +405,7 @@
         if (!src.length) continue;
         NSString *srcParent = [src stringByDeletingLastPathComponent];
         try {
-            std::string newRel = _engine->collection().move(src.UTF8String, destFolder);
+            std::string newRel = _apiClient->collection().move(src.UTF8String, destFolder);
             [self remapExpandedFoldersFrom:src to:N(newRel)];  // folder: keep open (no-op for files)
             [affected addObject:srcParent];                    // source level also changes
             any = YES;
@@ -422,7 +418,7 @@
 #pragma mark Tree context menu (right-click) + multi-select
 
 - (void)showContextMenuForRow:(NSInteger)row atWindowPoint:(NSPoint)pt {
-    if (!_engine) return;
+    if (!_apiClient) return;
     // Right-click on an unselected item -> select just that item.
     if (row >= 0 && ![_tree.selectedRowIndexes containsIndex:row])
         [_tree selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
@@ -473,12 +469,11 @@
 // necessarily the one open in the editor. If it IS the open request, defer to copyAsCurl: so any
 // unsaved editor edits are included.
 - (void)copyCurlForRel:(NSString *)rel {
-    if (!_engine || rel.length == 0) return;
+    if (!_apiClient || rel.length == 0) return;
     if (_hasRequest && _currentRel == S(rel)) { [self copyAsCurl:nil]; return; }
     try {
-        core::RequestModel m = _engine->collection().loadRequest(rel.UTF8String);
-        core::ResolvedRequest rr = _engine->resolveRequest(m);
-        std::string curl = core::toCurl(rr.model);
+        core::domain::RequestModel m = _apiClient->collection().loadRequest(rel.UTF8String);
+        std::string curl = _apiClient->exportCurl(m);
         NSPasteboard *pb = [NSPasteboard generalPasteboard];
         [pb clearContents];
         [pb setString:N(curl) forType:NSPasteboardTypeString];
@@ -490,20 +485,20 @@
 // via parseRequestFilename/scanLevel; ONLY fall back to reading (and possibly writing) content for
 // legacy files missing the id in their name -> avoid reading/writing the whole folder right before delete.
 - (void)purgeCacheAtRel:(NSString *)rel isFolder:(BOOL)isFolder {
-    if (!_engine || rel.length == 0) return;
+    if (!_apiClient || rel.length == 0) return;
     if (!isFolder) {
         core::ParsedRequestName p = core::parseRequestFilename(rel.lastPathComponent.UTF8String);
         std::string id = p.id;
         if (id.empty()) {                         // legacy file with no id in name -> read content
-            try { id = _engine->collection().loadRequest(rel.UTF8String).id; } catch (...) {}
+            try { id = _apiClient->collection().loadRequest(rel.UTF8String).id().get(); } catch (...) {}
         }
-        if (!id.empty()) _engine->removeResponse(id);
+        if (!id.empty()) _apiClient->cache().removeResponse(id);
         return;
     }
     try {
-        for (const auto &c : _engine->collection().scanLevel(rel.UTF8String)) {
+        for (const auto &c : _apiClient->collection().scanLevel(rel.UTF8String)) {
             if (c.isFolder) [self purgeCacheAtRel:N(c.relPath) isFolder:YES];
-            else if (!c.id.empty()) _engine->removeResponse(c.id);  // id already from scanLevel (zero-read)
+            else if (!c.id.empty()) _apiClient->cache().removeResponse(c.id);  // id from scanLevel (zero-read)
             else [self purgeCacheAtRel:N(c.relPath) isFolder:NO];   // legacy -> content-reading branch
         }
     } catch (...) {}
@@ -526,7 +521,7 @@
     NSMutableSet<NSString *> *parents = [NSMutableSet set];
     for (TreeItem *t in items) [parents addObject:[t.relPath stringByDeletingLastPathComponent]];
     for (TreeItem *t in items) [self purgeCacheAtRel:t.relPath isFolder:t.isFolder];
-    for (TreeItem *t in items) { try { _engine->collection().remove(t.relPath.UTF8String); } catch (...) {} }
+    for (TreeItem *t in items) { try { _apiClient->collection().remove(t.relPath.UTF8String); } catch (...) {} }
     for (NSString *p in parents) [self refreshTreeLevel:p];   // §T1: only the affected parent levels
 }
 - (std::string)selectedFolderRel {
@@ -543,20 +538,20 @@
 // Default name, NO popup. Rename later via inline-rename in the tree. loadRequestAtRel
 // autosaves the open request before switching.
 - (void)createRequest:(core::RequestType)t name:(NSString *)name {
-    if (!_engine) { [self toastWarn:StrToastOpenFolderFirst]; return; }
+    if (!_apiClient) { [self toastWarn:StrToastOpenFolderFirst]; return; }
     try {
         std::string folderRel = [self selectedFolderRel];
-        std::string rel = _engine->collection().createRequest(folderRel, t, name.UTF8String);
+        std::string rel = _apiClient->collection().createRequest(folderRel, t, name.UTF8String);
         [self refreshTreeLevel:N(folderRel)];   // §T1: rescan only the target folder (reveal opens it if closed)
         [self loadRequestAtRel:N(rel)];
         [self toastOk:[NSString stringWithFormat:StrFmtToastCreated, name]];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 - (void)newFolder:(id)s {
-    if (!_engine) { [self toastWarn:StrToastOpenFolderFirst]; return; }
+    if (!_apiClient) { [self toastWarn:StrToastOpenFolderFirst]; return; }
     try {
         std::string folderRel = [self selectedFolderRel];
-        _engine->collection().createFolder(folderRel, StrNewFolder.UTF8String);
+        _apiClient->collection().createFolder(folderRel, StrNewFolder.UTF8String);
         [self refreshTreeLevel:N(folderRel)];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
@@ -571,7 +566,7 @@
     [self autosaveCurrent];   // flush current edits first (avoid dangling state)
     NSString *parentRel = [t.relPath stringByDeletingLastPathComponent];
     try {
-        std::string dupRel = _engine->collection().duplicate(t.relPath.UTF8String);
+        std::string dupRel = _apiClient->collection().duplicate(t.relPath.UTF8String);
         [self refreshTreeLevel:parentRel];   // §T1: the copy is at the same level -> rescan only that level
         if (!t.isFolder) [self loadRequestAtRel:N(dupRel)];   // open the copy -> correct _currentRel
         [self toastOk:StrToastDuplicated];
@@ -588,7 +583,7 @@
     [self closeEditorIfDeleted:@[ t ]];   // prevent autosave from recreating the just-deleted file
     [self purgeCacheAtRel:t.relPath isFolder:t.isFolder];
     NSString *parentRel = [t.relPath stringByDeletingLastPathComponent];
-    try { _engine->collection().remove(t.relPath.UTF8String); [self refreshTreeLevel:parentRel]; }
+    try { _apiClient->collection().remove(t.relPath.UTF8String); [self refreshTreeLevel:parentRel]; }
     catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 

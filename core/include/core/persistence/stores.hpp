@@ -11,7 +11,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "core/types.hpp"
+#include "core/domain/request/request_model.hpp" // domain RequestModel (collection load/save/create)
+#include "core/env_config.hpp"                   // Environment/Session/AppConfig/TreeNode (config PODs)
+#include "core/request_type.hpp"                 // RequestType (createRequest)
 
 namespace core {
 
@@ -32,15 +34,15 @@ public:
     // UI builds the tree via lazy scanLevel instead of this.
     TreeNode scanTree() const;
 
-    RequestModel loadRequest(const std::string& relPath) const;     // throws on error
+    core::domain::RequestModel loadRequest(const std::string& relPath) const;     // throws on error
     // Atomic write; if filename mismatches type/method/name -> rename to match (§4).
     // Returns relPath AFTER write (may change on rename). Atomic.
-    std::string saveRequest(const std::string& relPath, const RequestModel&) const;
+    std::string saveRequest(const std::string& relPath, const core::domain::RequestModel&) const;
 
     // CRUD — return relPath of the created/changed item.
     std::string createRequest(const std::string& folderRel, RequestType, const std::string& name) const;
     // Create a new request FROM an existing model (e.g. cURL/grpcurl import). Assign new id + name, atomic write.
-    std::string createRequestFromModel(const std::string& folderRel, RequestModel model,
+    std::string createRequestFromModel(const std::string& folderRel, core::domain::RequestModel model,
                                        const std::string& name) const;
     std::string createFolder(const std::string& parentRel, const std::string& name) const;
     std::string rename(const std::string& relPath, const std::string& newName) const;

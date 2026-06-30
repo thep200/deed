@@ -96,7 +96,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     [self buildConfigPane];
     [self buildToast];
 
-    [self setRequestType:core::RequestType::Http];
+    [self setRequestType:core::domain::RequestType::Http];
     [self setHasRequest:NO];
     [self relayout];
 
@@ -237,10 +237,10 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
 // Transform body per an explicit `mode` (reads NO ivars) -> safe to call from a background thread (U2).
 - (NSString *)applyView:(const std::string &)body mode:(int)mode {
     switch (mode) {
-        case 1: return N(core::fieldcodec::formatJson(body, false));
-        case 2: return N(core::fieldcodec::jsonEncodeString(body));
-        case 3: return N(core::fieldcodec::jsonDecodeString(body));
-        default: return N(core::fieldcodec::formatJson(body, true));
+        case 1: return N(core::serial::formatJson(body, false));
+        case 2: return N(core::serial::jsonEncodeString(body));
+        case 3: return N(core::serial::jsonDecodeString(body));
+        default: return N(core::serial::formatJson(body, true));
     }
 }
 
@@ -332,7 +332,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _backButton = [[OS9BevelButton alloc] initWithTitle:StrBtnBack target:self action:@selector(exitConfig:)];
     [_configPane addSubview:_backButton];   // screen title goes in the title bar (see updateTitle)
 
-    _envVC = [[EnvWindowController alloc] initWithEngine:nil]; // engine set on open
+    _envVC = [[EnvWindowController alloc] initWithEnvRepo:nullptr session:nullptr]; // repos set on open
 
     // Settings = JSON -> use SciTextView (Scintilla) like the request editor: JSON syntax coloring,
     // line numbers, Platinum theme, OS9 scrollbar. Scintilla manages its own buffer (no AppleSpell spawn).
@@ -431,9 +431,10 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
 
     _settingButton.frame = NSMakeRect(x, ty, wSetting, btnH); x += wSetting + 6;
     _envButton.frame = NSMakeRect(x, ty, wEnv, btnH); x += wEnv + 6;
-    BOOL grpc = (_model.type == core::RequestType::Grpc);
-    BOOL noPopup = (_model.type == core::RequestType::WebSocket ||
-                    _model.type == core::RequestType::GraphQL);   // WS/GraphQL: no method/proto popup
+    core::RequestType _t = [self requestType];
+    BOOL grpc = (_t == core::RequestType::Grpc);
+    BOOL noPopup = (_t == core::RequestType::WebSocket ||
+                    _t == core::RequestType::GraphQL);   // WS/GraphQL: no method/proto popup
     _methodPopup.frame = NSMakeRect(x, ty, wMethod, btnH);
     _protoPopup.frame = NSMakeRect(x, ty, wProto, btnH);
     _methodPopup.hidden = grpc || noPopup;   // only HTTP shows the method popup
@@ -488,18 +489,78 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
 
 #pragma mark Conditional render by type
 
-- (void)setRequestType:(core::RequestType)t {
-    _model.type = t;
+// The current request's protocol as the UI view-enum (core::RequestType survives types.hpp). Reads the
+// domain _model directly — no legacy materialization. (Empty -> Http, harmless when no request is open.)
+- (core::RequestType)requestType {
+    if (!_model) return core::RequestType::Http;
+    switch (_model->type()) {
+    case core::domain::RequestType::Grpc: return core::RequestType::Grpc;
+    case core::domain::RequestType::WebSocket: return core::RequestType::WebSocket;
+    case core::domain::RequestType::GraphQl: return core::RequestType::GraphQL;
+    default: return core::RequestType::Http;
+    }
+}
+
+- (void)mutateGrpc:(void (^)(core::domain::GrpcRequest::Parts &))fn {
+    if (!_model || _model->type() != core::domain::RequestType::Grpc) return;
+    const auto &g = std::get<core::domain::GrpcRequest>(_model->payload());
+    core::domain::GrpcRequest::Parts p;
+    p.target = g.target();
+    p.service = g.service();
+    p.method = g.method();
+    p.methodType = g.methodType();
+    p.message = g.message();
+    p.metadata = g.metadata();
+    p.protoSource = g.protoSource();
+    p.tls = g.tls();
+    fn(p);
+    _model = _model->withPayload(core::domain::GrpcRequest::create(std::move(p)).take());
+}
+
+// Build a fresh default domain payload of type `t` (used only for the initial Http default + a real
+// type-switch — load/import pass the model's existing type, so setRequestType keeps the loaded payload).
+static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::RequestType t) {
+    using namespace core::domain;
+    switch (t) {
+    case RequestType::Grpc: return GrpcRequest::create({}).take();
+    case RequestType::WebSocket:
+        return WebSocketRequest::create({Url::create("").take(), {}, {}, Auth::none(), {}, WsSendKind::Text})
+            .take();
+    case RequestType::GraphQl: {
+        GraphQlOperation op;
+        op.query = "query {\n  \n}"; // domain requires a non-empty query
+        return GraphQlRequest::create({Url::create("").take(), op, {}, Auth::none(), GqlSubTransport::Http, ""})
+            .take();
+    }
+    default:
+        return HttpRequest::create(
+                   {HttpMethod::Get, Url::create("").take(), {}, {}, {}, Body::none(), Auth::none()})
+            .take();
+    }
+}
+
+- (void)setRequestType:(core::domain::RequestType)t {
+    // Ensure _model is of type t. Loading/import pass the model's current type -> no rebuild (keeps data);
+    // the initial default + any real switch -> a fresh default payload of the new type.
+    if (!_model || _model->type() != t) {
+        core::domain::RequestId id = _model ? _model->id() : core::domain::RequestId("");
+        std::string nm = _model ? _model->name() : std::string();
+        int seq = _model ? _model->seq() : 0;
+        core::domain::RequestConfig cfg =
+            _model ? _model->config()
+                   : core::domain::RequestConfig{core::domain::Timeout::fromMillis(1800000).take(), true};
+        _model = core::domain::RequestModel::create(id, nm, seq, cfg, DefaultPayloadOfType(t)).take();
+    }
     // Config is the LAST request tab for every type (sits right before the cURL button).
-    if (t == core::RequestType::Http) {
+    if (t == core::domain::RequestType::Http) {
         _reqTabTitles = @[ StrTabBody, StrTabQuery, StrTabHeaders, StrTabAuth, StrTabConfig ];  // "Query" (avoid confusion with path params); Body leftmost
         _respTabTitles = @[ StrTabResponse, StrTabHeaders, StrTabRequest, StrTabCookie ];
-    } else if (t == core::RequestType::WebSocket) {
+    } else if (t == core::domain::RequestType::WebSocket) {
         // WS: Message = frame to send (also auto-sent on connect); Headers = handshake headers; Auth.
         // Response pane = the in/out frame log array (reuses the streaming render).
         _reqTabTitles = @[ StrTabMessage, StrTabHeaders, StrTabAuth, StrTabConfig ];
         _respTabTitles = @[ StrTabMessage, StrTabRequest ];
-    } else if (t == core::RequestType::GraphQL) {
+    } else if (t == core::domain::RequestType::GraphQl) {
         // GraphQL: Query document + Variables (JSON) + Headers + Auth. query/mutation -> normal response pane.
         _reqTabTitles = @[ StrTabGqlQuery, StrTabVariables, StrTabHeaders, StrTabAuth, StrTabConfig ];
         _respTabTitles = @[ StrTabResponse, StrTabRequest ];
@@ -586,7 +647,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
 // Persist deferred cache metadata. Called on window close + applicationWillTerminate because C++ dtors
 // (which would otherwise flush) do NOT run on macOS app terminate (Fix 2).
 - (void)flushCaches {
-    if (_engine) _engine->flushCache();
+    if (_apiClient) _apiClient->cache().flush();
 }
 - (void)windowDidResize:(NSNotification *)note { [self relayout]; }
 

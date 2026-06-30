@@ -1,0 +1,16 @@
+syntax = "proto3";
+package echo;
+option go_package = "grpcserver/pb;pb";
+
+// Minimal echo service for DEED gRPC e2e (reflection-enabled).
+service Echo {
+  rpc Unary(EchoRequest) returns (EchoResponse);          // echoes msg back once
+  rpc ServerStream(EchoRequest) returns (stream EchoResponse); // emits `count` echoes
+  rpc ClientStream(stream EchoRequest) returns (EchoResponse);       // joins all msgs with ","
+  rpc BiDi(stream EchoRequest) returns (stream EchoResponse);        // echoes each msg back
+}
+message EchoRequest {
+  string msg = 1;
+  int32 count = 2; // ServerStream: number of responses (default 1)
+}
+message EchoResponse { string msg = 1; }

@@ -16,28 +16,28 @@ static void StressCollectRels(const core::TreeNode &n, NSMutableArray<NSString *
     [[NSFileManager defaultManager] removeItemAtPath:root error:nil];
     [[NSFileManager defaultManager] createDirectoryAtPath:root withIntermediateDirectories:YES attributes:nil error:nil];
     [self openCollectionRoot:root];
-    if (!_engine) return;
+    if (!_apiClient) return;
     try {
         for (int i = 0; i < 6; i++)
-            _engine->collection().createRequest("", (i % 2) ? core::RequestType::Grpc : core::RequestType::Http,
+            _apiClient->collection().createRequest("", (i % 2) ? core::RequestType::Grpc : core::RequestType::Http,
                                                  std::string("req_") + std::to_string(i));
-        std::string sub = _engine->collection().createFolder("", "sub");
+        std::string sub = _apiClient->collection().createFolder("", "sub");
         for (int i = 0; i < 3; i++)
-            _engine->collection().createRequest(sub, core::RequestType::Http, std::string("child_") + std::to_string(i));
+            _apiClient->collection().createRequest(sub, core::RequestType::Http, std::string("child_") + std::to_string(i));
     } catch (...) {}
     [self reloadTree];
 }
 
 - (NSArray<NSString *> *)stressRequestRels {
     NSMutableArray<NSString *> *out = [NSMutableArray array];
-    if (_engine) { try { StressCollectRels(_engine->collection().scanTree(), out); } catch (...) {} }
+    if (_apiClient) { try { StressCollectRels(_apiClient->collection().scanTree(), out); } catch (...) {} }
     return out;
 }
 
 - (NSString *)stressOpenRequestId { return N(_currentId); }
 
 - (uint64_t)stressRamCacheBytes {
-    if (_engine && _engine->responseCache()) return _engine->responseCache()->l1UsedBytes();
+    if (_apiClient) return _apiClient->cache().l1UsedBytes();
     return 0;
 }
 
@@ -77,25 +77,23 @@ static void StressCollectRels(const core::TreeNode &n, NSMutableArray<NSString *
 - (void)stressExitConfig { if (_configMode) [self exitConfig:nil]; }
 
 - (void)stressPickRandomEnv:(uint32_t)r {
-    if (!_engine) return;
+    if (!_apiClient) return;
     NSMutableArray<NSString *> *envs = [NSMutableArray array];
-    try { for (const auto &n : _engine->environments().list()) [envs addObject:N(n)]; }
+    try { for (const auto &n : _apiClient->environments().list()) [envs addObject:N(n)]; }
     catch (...) {}
     if (!envs.count) return;   // no envs -> nothing to switch to
     [self pickEnvNamed:envs[r % envs.count]];
 }
 
 - (void)stressInjectResponse:(BOOL)large {
-    if (!_engine) return;
+    if (!_apiClient) return;
     NSUInteger n = large ? (20u * 1024 * 1024) : (NSUInteger)(2 * 1024);
-    _lastResp = core::ApiResponse{};
+    _lastResp = core::domain::ApiResponse{};
     _lastResp.statusCode = 200;
-    _lastResp.statusText = "OK";
     _lastResp.body = std::string(n, 'x');
-    _lastResp.sizeBytes = (std::int64_t)n;
     _hasResp = YES;
     [self rebuildResponseBuffers];
-    if (!_currentId.empty()) _engine->putResponse(_currentId, _lastResp);   // through cache (cap/evict)
+    if (!_currentId.empty()) _apiClient->cache().putResponse(_currentId, _lastResp);  // through cache (cap/evict)
 }
 
 - (void)stressRenameAutoDismiss:(uint32_t)r {
