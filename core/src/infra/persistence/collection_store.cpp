@@ -113,11 +113,6 @@ core::domain::RequestModel::Payload defaultPayloadForCreate(core::domain::Reques
   }
   }
 }
-// Default per-request config for a new request (30-min timeout, TLS verify on) — matches the legacy default.
-core::domain::RequestConfig defaultConfig() {
-  return {core::domain::Timeout::fromMillis(1800000).take(), true};
-}
-
 // Special dirs that are NOT shown in the request tree.
 bool isReservedDir(const std::string &name) {
   return name == ".session" || name == ".secrets" || name == ".git" ||
@@ -292,6 +287,10 @@ TreeNode buildRequestLeaf(const fs::path &fullPath,
 } // namespace
 
 CollectionStore::CollectionStore(std::string root) : root_(std::move(root)) {}
+void CollectionStore::setRequestDefaults(long long timeoutMs, bool verifyTls) {
+  if (timeoutMs > 0) defaultTimeoutMs_ = timeoutMs;
+  defaultVerifyTls_ = verifyTls;
+}
 void CollectionStore::setRoot(std::string root) {
   root_ = std::move(root);
   invalidateIdIndex();
@@ -505,8 +504,11 @@ std::string CollectionStore::createRequest(const std::string &folderRel,
   // OFF-by-default except User-Agent=deed; gRPC reflection/unary; GraphQL starter doc). NEW requests only —
   // existing requests (load/save) and imports are never auto-modified.
   std::string id = genId();
+  // New-request default config: timeout + TLS verify from .env (via setRequestDefaults), not hardcoded.
+  core::domain::RequestConfig cfg{core::domain::Timeout::fromMillis(defaultTimeoutMs_).take(),
+                                  defaultVerifyTls_};
   core::domain::RequestModel m = core::domain::RequestModel::create(
-      core::domain::RequestId(id), name, 0, defaultConfig(), defaultPayloadForCreate(toDomainType(type)))
+      core::domain::RequestId(id), name, 0, cfg, defaultPayloadForCreate(toDomainType(type)))
       .take();
   std::string method = httpMethodOf(m);
   fs::path full = dir / uniqueEncodedName(dir, id, type, method, name);

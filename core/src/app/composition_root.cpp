@@ -240,6 +240,7 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
     c->ownAppConfig_ = cfg.appConfigPath.empty() ? std::make_unique<core::AppConfigStore>()
                                                  : std::make_unique<core::AppConfigStore>(cfg.appConfigPath);
     c->ownAppConfig_->setDefaults(cfg.appDefaults);
+    c->ownCollection_->setRequestDefaults(cfg.defaultTimeoutMs, cfg.defaultVerifyTls); // new-request .env defaults
     c->ownEnv_->migrateLegacySecrets(); // SPEC §T5 (Engine ctor did this)
     c->ownCollection_->ensureGitignore();
 

@@ -50,6 +50,11 @@ public:
     std::string saveRequest(const std::string& relPath, const core::domain::RequestModel&,
                             const std::map<std::string, std::string>& bodyDrafts) const;
 
+    // New-request default per-request config (timeout + TLS verify). Sourced from .env via
+    // CoreApiClient::Config -> the composition root (Core never reads .env itself). timeoutMs <= 0 keeps
+    // the built-in default. Affects createRequest only; existing requests load their own saved config.
+    void setRequestDefaults(long long timeoutMs, bool verifyTls);
+
     // CRUD — return relPath of the created/changed item.
     std::string createRequest(const std::string& folderRel, RequestType, const std::string& name) const;
     // Create a new request FROM an existing model (e.g. cURL/grpcurl import). Assign new id + name, atomic write.
@@ -74,6 +79,8 @@ public:
 
 private:
     std::string root_;
+    long long defaultTimeoutMs_ = 1800000; // new-request default timeout (.env DEFAULT_TIMEOUT_MS; 30 min)
+    bool defaultVerifyTls_ = true;         // new-request default TLS verify (.env VERIFY_TLS)
 
     // id->relPath index built LAZILY from filenames (zero-read after migrate) -> findRelPathById O(1)
     // instead of scanning the WHOLE tree each call (resyncCurrentRelById runs before every save/switch).

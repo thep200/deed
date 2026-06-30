@@ -546,9 +546,16 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
         core::domain::RequestId id = _model ? _model->id() : core::domain::RequestId("");
         std::string nm = _model ? _model->name() : std::string();
         int seq = _model ? _model->seq() : 0;
-        core::domain::RequestConfig cfg =
-            _model ? _model->config()
-                   : core::domain::RequestConfig{core::domain::Timeout::fromMillis(1800000).take(), true};
+        // Keep the current request's config across a type switch; for a fresh editor (no model) take the
+        // default per-request config from .env (not hardcoded). RequestConfig has no default ctor -> lambda.
+        core::domain::RequestConfig cfg = [&]() -> core::domain::RequestConfig {
+            if (_model) return _model->config();
+            DeedConfig *dc = [DeedConfig shared];
+            long long toMs = (long long)[dc intFor:@"DEFAULT_TIMEOUT_MS" def:1800000];
+            if (toMs <= 0) toMs = 1800000;
+            return core::domain::RequestConfig{core::domain::Timeout::fromMillis(toMs).take(),
+                                               (bool)[dc boolFor:@"VERIFY_TLS" def:YES]};
+        }();
         _model = core::domain::RequestModel::create(id, nm, seq, cfg, DefaultPayloadOfType(t)).take();
     }
     // Config is the LAST request tab for every type (sits right before the cURL button).

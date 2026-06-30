@@ -44,6 +44,9 @@
     cfg.wsMaxFrameMb = (int)[dc intFor:@"WS_MAX_FRAME_MB" def:0];
     cfg.wsSendQueueMaxFrames = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_FRAMES" def:0];
     cfg.wsSendQueueMaxMb = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_MB" def:0];
+    // New-request per-request defaults from .env (Core never reads .env; 0 -> Core built-in 30-min timeout).
+    cfg.defaultTimeoutMs = (long long)[dc intFor:@"DEFAULT_TIMEOUT_MS" def:0];
+    cfg.defaultVerifyTls = [dc boolFor:@"VERIFY_TLS" def:YES];
     cfg.appDefaults = [self appDefaultsFromEnv];   // app-config defaults from .env
     _apiClient = core::app::CoreApiClient::create(std::move(cfg));
     _envVC = [[EnvWindowController alloc] initWithEnvRepo:&_apiClient->environments()

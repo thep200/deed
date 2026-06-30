@@ -39,6 +39,9 @@ public:
     std::string collectionRoot;   // collection dir; empty -> send-only
     std::string appConfigPath;    // empty -> OS app-support default
     core::AppConfig appDefaults;  // app-config defaults from .env (env_config.hpp)
+    // New-request defaults from .env (Core never reads .env itself; 0 -> Core built-in 30-min timeout):
+    long long defaultTimeoutMs = 0; // DEFAULT_TIMEOUT_MS
+    bool defaultVerifyTls = true;   // VERIFY_TLS
     // Response-cache ceilings/floor from .env (0 -> default):
     int ramCacheMaxMb = 0, ramCacheMinMb = 0, diskCacheMaxMb = 0, diskCacheMinMb = 0, ramCacheThresholdKb = 0;
     // WebSocket tunables from .env (0 -> default):
