@@ -8,8 +8,8 @@
 #include <string>
 #include <vector>
 
-#include "core/streaming/i_stream_channel.hpp"
-#include "core/streaming/i_stream_sink.hpp" // Stream{Event,Meta,End} + enums via stream_events.hpp
+#include "infra/transport/shared/i_stream_channel.hpp"
+#include "infra/transport/shared/i_stream_sink.hpp" // Stream{Event,Meta,End} + enums via stream_events.hpp
 
 namespace {
 

@@ -1,4 +1,4 @@
-// core/streaming/i_stream_sink.hpp — the reusable stream-receiving contract (SPEC_grpc_streaming §3).
+// infra/transport/shared/i_stream_sink.hpp — the reusable stream-receiving contract (SPEC_grpc_streaming §3).
 // INV-1: UI (and any consumer) depends ONLY on this + the StreamEvent DTO — never on a transport type
 // (grpc/cpr/libcurl/protobuf). A new transport = a new sender that emits StreamEvent; consumers untouched.
 //
@@ -10,7 +10,7 @@
 //      thread — the consumer marshals to its UI thread itself (§6).
 #pragma once
 
-#include "core/streaming/stream_events.hpp"
+#include "infra/transport/shared/stream_events.hpp"
 
 namespace core {
 

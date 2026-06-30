@@ -8,8 +8,8 @@
 
 #include "core/graphql/gql_ws_protocol.hpp" // GraphQlWsProtocol (graphql-transport-ws / graphql-ws)
 #include "core/sending/cancel_token.hpp"
-#include "core/streaming/i_stream_channel.hpp"
-#include "core/streaming/i_stream_sink.hpp"
+#include "infra/transport/shared/i_stream_channel.hpp"
+#include "infra/transport/shared/i_stream_sink.hpp"
 #include "graphql/graphql.hpp"               // gql::effectiveOperation / gql::buildHttpModel (domain)
 #include "sending/ws_sender.hpp"             // wsMakeSession/wsMakeChannel/wsRunProtocol (shared WS pump)
 

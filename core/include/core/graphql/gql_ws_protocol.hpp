@@ -13,7 +13,7 @@
 #include <string>
 
 #include "core/domain/graphql/graphql_request.hpp"
-#include "core/streaming/i_stream_sink.hpp"
+#include "infra/transport/shared/i_stream_sink.hpp"
 
 namespace core {
 

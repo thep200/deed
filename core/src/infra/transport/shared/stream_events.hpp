@@ -1,20 +1,21 @@
-// core/streaming/stream_events.hpp — the transport-internal streaming-callback DTOs (SPEC_grpc_streaming §3).
-// These are the model a SENDER emits to an IStreamSink; the app/UI never sees them (it consumes the domain
-// ResponseEvent — the native senders' translators convert StreamEvent/Meta/End -> domain). Kept out of the
-// legacy types.hpp cluster so the WS pump + gql-ws protocol survive the types.hpp removal (REFACTOR_SPEC P6).
+// infra/transport/shared/stream_events.hpp — the transport-internal streaming-callback DTOs
+// (SPEC_grpc_streaming §3). These are the model a SENDER emits to an IStreamSink; the app/UI never sees
+// them (it consumes the domain ResponseEvent — the native senders' translators convert StreamEvent/Meta/End
+// -> domain). Private to infra/transport (RESTRUCTURE_PLAN S2); the UI-facing StreamStatus/InteractionKind
+// enums live in domain/response/interaction.hpp.
 #pragma once
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
-#include "core/dto_common.hpp" // KeyValue (neutral key/value pair)
+#include "core/domain/response/interaction.hpp" // StreamStatus (used by StreamEnd)
+#include "core/dto_common.hpp"                   // KeyValue (neutral key/value pair)
 
 namespace core {
 
 enum class StreamTransport { Grpc, Sse, WebSocket };
 enum class StreamPayloadKind { Json, Text, Binary }; // Binary -> payload is base64
-enum class StreamStatus { Ok, Error, Cancelled, Timeout };
 
 // SPEC_websocket §2.1 — duplex deltas. Defaults keep gRPC server-streaming unchanged: direction defaults
 // Inbound, frameType defaults Message.
@@ -52,9 +53,5 @@ struct StreamEnd { // emitted at onStreamClose
   long long elapsedMs = 0;
   bool truncated = false; // true if a configured ceiling was hit (§9)
 };
-
-// Request interaction classification (UI send routing). Transport-free; relocated here so it survives the
-// legacy types.hpp removal (the rest of streaming_dto.hpp — ResolvedRequest — dies with RequestModel).
-enum class InteractionKind { Unary, ServerStream, ClientStream, BiDi, Duplex /* WebSocket session */ };
 
 } // namespace core

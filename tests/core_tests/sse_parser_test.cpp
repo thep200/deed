@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "core/streaming/sse_parser.hpp"
+#include "infra/transport/shared/sse_parser.hpp"
 
 namespace {
 

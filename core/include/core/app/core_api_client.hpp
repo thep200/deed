@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "core/app/persistence_repositories.hpp" // env/session/app-config repository ports
-#include "core/streaming/stream_events.hpp"      // InteractionKind (send routing classification)
+#include "core/domain/response/interaction.hpp"      // InteractionKind (send routing classification)
 #include "core/app/request_orchestrator.hpp"
 #include "core/domain/ports/driving/i_api_client.hpp"
 #include "core/domain/ports/driven/i_clock.hpp"

@@ -10,7 +10,7 @@
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
 
-#include "core/streaming/sse_parser.hpp" // pure text/event-stream parser (no transport coupling)
+#include "infra/transport/shared/sse_parser.hpp" // pure text/event-stream parser (no transport coupling)
 #include "infra/url_util.hpp"
 
 namespace core::infra {

@@ -1,4 +1,4 @@
-// core/streaming/sse_parser.hpp — pure text/event-stream parser (SPEC_sse §3, WHATWG EventSource).
+// infra/transport/shared/sse_parser.hpp — pure text/event-stream parser (SPEC_sse §3, WHATWG EventSource).
 // A buffered state machine: feed it arbitrary byte chunks, it emits completed events. It depends on
 // NOTHING transport-related (no libcurl) — that keeps INV-1 and lets it be unit-tested directly (AC-7).
 #pragma once

@@ -8,7 +8,7 @@
 
 #include "core/domain/response/api_error.hpp"
 #include "core/domain/response/api_response.hpp"
-#include "core/streaming/stream_events.hpp" // StreamStatus (streaming-close enum; survives types.hpp removal)
+#include "core/domain/response/interaction.hpp" // StreamStatus (streaming-close enum; survives types.hpp removal)
 
 // Protocol implemented by MainWindowController (already on the main thread when called).
 @protocol CoreResponseSink <NSObject>

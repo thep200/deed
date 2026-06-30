@@ -9,7 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/graphql/gql_ws_protocol.hpp"
-#include "core/streaming/i_stream_sink.hpp"
+#include "infra/transport/shared/i_stream_sink.hpp"
 
 namespace {
 

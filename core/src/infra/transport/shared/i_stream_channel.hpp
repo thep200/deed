@@ -1,4 +1,4 @@
-// core/streaming/i_stream_channel.hpp — the SEND side of a duplex session (SPEC_websocket §2.2).
+// infra/transport/shared/i_stream_channel.hpp — the SEND side of a duplex session (SPEC_websocket §2.2).
 // Pairs with IStreamSink (receive): IStreamChannel + IStreamSink = a full-duplex session. The UI holds
 // a channel to push frames into an open session; it depends only on this interface + StreamEvent — never
 // on a transport type (libcurl/curl_ws) — keeping INV-1. Reused as-is for gRPC bidi v2.

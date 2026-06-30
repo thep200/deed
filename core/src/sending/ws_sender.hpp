@@ -11,8 +11,8 @@
 
 #include "core/domain/ws/websocket_request.hpp"
 #include "core/sending/cancel_token.hpp"
-#include "core/streaming/i_stream_channel.hpp"
-#include "core/streaming/i_stream_sink.hpp" // StreamStatus / StreamEvent / IStreamSink (infra-internal)
+#include "infra/transport/shared/i_stream_channel.hpp"
+#include "infra/transport/shared/i_stream_sink.hpp" // StreamStatus / StreamEvent / IStreamSink (infra-internal)
 
 namespace core {
 

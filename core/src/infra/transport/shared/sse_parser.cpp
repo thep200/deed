@@ -1,5 +1,5 @@
 // sse_parser.cpp — pure text/event-stream parser (SPEC_sse §3). No transport deps.
-#include "core/streaming/sse_parser.hpp"
+#include "infra/transport/shared/sse_parser.hpp"
 
 #include <algorithm>
 

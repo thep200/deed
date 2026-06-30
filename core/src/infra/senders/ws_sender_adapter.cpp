@@ -5,8 +5,8 @@
 #include <variant>
 #include <vector>
 
-#include "core/streaming/i_stream_channel.hpp"
-#include "core/streaming/i_stream_sink.hpp"
+#include "infra/transport/shared/i_stream_channel.hpp"
+#include "infra/transport/shared/i_stream_sink.hpp"
 
 namespace core::infra {
 namespace d = core::domain;
