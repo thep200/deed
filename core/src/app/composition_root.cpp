@@ -219,6 +219,28 @@ public:
 private:
   core::CollectionStore &s_;
 };
+
+// .env -> WsConfig / CacheLimits builders (value-returning; keep create() under the size threshold).
+core::WsConfig buildWsConfig(const CoreApiClient::Config &cfg) {
+  core::WsConfig ws; // 0 -> ws_sender default
+  if (cfg.wsPingIntervalMs > 0) ws.pingIntervalMs = cfg.wsPingIntervalMs;
+  if (cfg.wsIdleTimeoutMs > 0) ws.idleTimeoutMs = cfg.wsIdleTimeoutMs;
+  if (cfg.wsCloseTimeoutMs > 0) ws.closeTimeoutMs = cfg.wsCloseTimeoutMs;
+  if (cfg.wsMaxFrameMb > 0) ws.maxFrameBytes = static_cast<std::uint64_t>(cfg.wsMaxFrameMb) * 1024 * 1024;
+  if (cfg.wsSendQueueMaxFrames > 0) ws.sendQueueMaxFrames = static_cast<std::size_t>(cfg.wsSendQueueMaxFrames);
+  if (cfg.wsSendQueueMaxMb > 0)
+    ws.sendQueueMaxBytes = static_cast<std::uint64_t>(cfg.wsSendQueueMaxMb) * 1024 * 1024;
+  return ws;
+}
+core::CacheLimits buildCacheLimits(const CoreApiClient::Config &cfg) {
+  core::CacheLimits limits;
+  limits.ramMaxMb = cfg.ramCacheMaxMb;
+  limits.ramMinMb = cfg.ramCacheMinMb;
+  limits.diskMaxMb = cfg.diskCacheMaxMb;
+  limits.diskMinMb = cfg.diskCacheMinMb;
+  limits.thresholdKb = cfg.ramCacheThresholdKb;
+  return limits;
+}
 } // namespace
 
 CoreApiClient::~CoreApiClient() = default; // ThreadPool complete here -> can destroy the unique_ptr member
@@ -249,28 +271,14 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
     c->sessionRepo_ = std::make_unique<SessionRepository>(*c->ownSession_);
     c->appConfigRepo_ = std::make_unique<AppConfigRepository>(*c->ownAppConfig_);
 
-    core::CacheLimits limits;
-    limits.ramMaxMb = cfg.ramCacheMaxMb;
-    limits.ramMinMb = cfg.ramCacheMinMb;
-    limits.diskMaxMb = cfg.diskCacheMaxMb;
-    limits.diskMinMb = cfg.diskCacheMinMb;
-    limits.thresholdKb = cfg.ramCacheThresholdKb;
     c->cacheRepo_ = std::make_unique<NativeResponseCacheRepository>(
-        c->ownAppConfig_.get(), limits, core::fsutil::join(cfg.collectionRoot, ".session"));
+        c->ownAppConfig_.get(), buildCacheLimits(cfg), core::fsutil::join(cfg.collectionRoot, ".session"));
   }
 
   c->senders_.push_back(std::make_unique<infra::NativeHttpSender>());
   c->senders_.push_back(std::make_unique<infra::NativeGrpcSender>());
   c->senders_.push_back(std::make_unique<infra::NativeGraphQlSender>());
-  core::WsConfig wsBase; // .env WS tunables (0 -> ws_sender default)
-  if (cfg.wsPingIntervalMs > 0) wsBase.pingIntervalMs = cfg.wsPingIntervalMs;
-  if (cfg.wsIdleTimeoutMs > 0) wsBase.idleTimeoutMs = cfg.wsIdleTimeoutMs;
-  if (cfg.wsCloseTimeoutMs > 0) wsBase.closeTimeoutMs = cfg.wsCloseTimeoutMs;
-  if (cfg.wsMaxFrameMb > 0) wsBase.maxFrameBytes = static_cast<std::uint64_t>(cfg.wsMaxFrameMb) * 1024 * 1024;
-  if (cfg.wsSendQueueMaxFrames > 0) wsBase.sendQueueMaxFrames = static_cast<std::size_t>(cfg.wsSendQueueMaxFrames);
-  if (cfg.wsSendQueueMaxMb > 0)
-    wsBase.sendQueueMaxBytes = static_cast<std::uint64_t>(cfg.wsSendQueueMaxMb) * 1024 * 1024;
-  c->senders_.push_back(std::make_unique<infra::WsSenderAdapter>(wsBase));
+  c->senders_.push_back(std::make_unique<infra::WsSenderAdapter>(buildWsConfig(cfg)));
 
   std::vector<d::IRequestSender *> ptrs;
   for (auto &s : c->senders_) ptrs.push_back(s.get());
@@ -278,7 +286,9 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
   core::ThreadPool *pool = c->pool_.get();
   SendRequestSaga::Deps deps{ptrs, c->clock_.get(), c->validator_.get(), nullptr};
   c->orchestrator_ = std::make_unique<RequestOrchestrator>(deps, [pool](std::function<void()> job) {
-    if (!pool->submit(std::move(job))) job();
+    // submit() takes the task BY VALUE -> pass a copy so `job` stays valid for the inline fallback
+    // when the pool rejects it (full/stopped). Moving here would leave `job` empty -> bad_function_call.
+    if (!pool->submit(job)) job();
   });
   return c;
 }

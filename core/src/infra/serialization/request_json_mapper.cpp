@@ -4,9 +4,11 @@
 
 #include "infra/serialization/json_codec.hpp"               // core::codec::parseGuarded — JSON nesting-depth guard (H5)
 #include "core/infra/serialization/field_json.hpp"  // core::serial — domain field codecs (headers/auth/body/...)
+#include "infra/serialization/wire_format.hpp"      // core::wire::* on-disk request type tokens
 
 namespace core::infra {
 namespace d = core::domain;
+namespace w = core::wire;
 using nlohmann::json;
 
 namespace {
@@ -29,12 +31,12 @@ bool gb(const json &j, const char *k, bool def) {
 
 const char *typeStr(d::RequestType t) {
   switch (t) {
-  case d::RequestType::Http: return "http";
-  case d::RequestType::Grpc: return "grpc";
-  case d::RequestType::GraphQl: return "graphql";
-  case d::RequestType::WebSocket: return "ws";
+  case d::RequestType::Http: return w::kHttp;
+  case d::RequestType::Grpc: return w::kGrpc;
+  case d::RequestType::GraphQl: return w::kGraphql;
+  case d::RequestType::WebSocket: return w::kWs;
   }
-  return "http";
+  return w::kHttp;
 }
 
 // PathVariables (no core::serial codec — inline here). JSON array [{key,value,enabled}].
@@ -172,6 +174,93 @@ json gqlToJson(const d::GraphQlRequest &g) {
                                                             : "graphql-transport-ws"}};
 }
 
+// Per-type payload parsers — kept out of fromJson so it stays a flat dispatch (clang-tidy complexity).
+using Payload = d::RequestModel::Payload;
+
+d::Result<Payload> parseGrpcPayload(const json &b) {
+  d::GrpcRequest::Parts p;
+  p.target = gs(b, "target");
+  p.service = gs(b, "service");
+  p.method = gs(b, "method");
+  auto mt = d::parseGrpcMethodType(gs(b, "methodType", "unary"));
+  p.methodType = mt ? mt.take() : d::GrpcMethodType::Unary;
+  p.message = d::JsonText::of(gs(b, "message", "{}"));
+  auto md = serialFrom<d::GrpcMetadata>(b, "metadata", core::serial::jsonToMetadata, "[]");
+  if (!md) return d::Result<Payload>::fail(md.error());
+  p.metadata = md.take();
+  auto ps = protoSourceFromJson(b.value("protoSource", json::object()));
+  if (!ps) return d::Result<Payload>::fail(ps.error());
+  p.protoSource = ps.take();
+  p.tls = tlsFromJson(b.value("tls", json::object()));
+  auto r = d::GrpcRequest::create(std::move(p));
+  if (!r) return d::Result<Payload>::fail(r.error());
+  return d::Result<Payload>::ok(Payload{r.take()});
+}
+
+d::Result<Payload> parseWsPayload(const json &b) {
+  d::WebSocketRequest::Parts p{d::Url::create(gs(b, "url")).take()};
+  p.defaultSendKind = gs(b, "defaultSendKind", "text") == "binary" ? d::WsSendKind::Binary
+                                                                   : d::WsSendKind::Text;
+  if (auto it = b.find("subprotocols"); it != b.end() && it->is_array())
+    for (const auto &e : *it) if (e.is_string()) p.subprotocols.push_back(e.get<std::string>());
+  // onOpenSend is a string[] of payloads (json_codec compat); kind = defaultSendKind.
+  if (auto it = b.find("onOpenSend"); it != b.end() && it->is_array())
+    for (const auto &e : *it)
+      if (e.is_string()) p.onOpenSend.push_back({p.defaultSendKind, e.get<std::string>()});
+  auto h = serialFrom<d::HeaderList>(b, "headers", core::serial::jsonToHeaders, "[]");
+  if (!h) return d::Result<Payload>::fail(h.error());
+  p.headers = h.take();
+  auto a = serialFrom<d::Auth>(b, "auth", core::serial::jsonToAuth, "{\"type\":\"none\"}");
+  if (!a) return d::Result<Payload>::fail(a.error());
+  p.auth = a.take();
+  auto r = d::WebSocketRequest::create(std::move(p));
+  if (!r) return d::Result<Payload>::fail(r.error());
+  return d::Result<Payload>::ok(Payload{r.take()});
+}
+
+d::Result<Payload> parseGraphqlPayload(const json &b) {
+  d::GraphQlRequest::Parts p{d::Url::create(gs(b, "url")).take()};
+  p.op.query = gs(b, "query");
+  p.op.operationName = gs(b, "operationName");
+  p.op.variables = d::JsonText::of(gs(b, "variables", "{}"));
+  p.op.operation = gqlOpFrom(gs(b, "operation", "auto"));
+  // json_codec compat (request-bridge bijection): "ws"->Ws, "sse"->Http; wsProtocol alias; clear for Http.
+  p.subTransport = gs(b, "subTransport", "ws") == "sse" ? d::GqlSubTransport::Http : d::GqlSubTransport::Ws;
+  p.wsProtocol = gs(b, "wsProtocol", "graphql-transport-ws") == "subscriptions-transport-ws"
+                     ? "graphql-ws"
+                     : "graphql-transport-ws";
+  if (p.subTransport == d::GqlSubTransport::Http) p.wsProtocol.clear();
+  auto h = serialFrom<d::HeaderList>(b, "headers", core::serial::jsonToHeaders, "[]");
+  if (!h) return d::Result<Payload>::fail(h.error());
+  p.headers = h.take();
+  auto a = serialFrom<d::Auth>(b, "auth", core::serial::jsonToAuth, "{\"type\":\"none\"}");
+  if (!a) return d::Result<Payload>::fail(a.error());
+  p.auth = a.take();
+  auto r = d::GraphQlRequest::create(std::move(p));
+  if (!r) return d::Result<Payload>::fail(r.error());
+  return d::Result<Payload>::ok(Payload{r.take()});
+}
+
+d::Result<Payload> parseHttpPayload(const json &b) {
+  auto mr = d::parseHttpMethod(gs(b, "method", "GET"));
+  d::HttpRequest::Parts p{mr ? mr.take() : d::HttpMethod::Get, d::Url::create(gs(b, "url")).take()};
+  auto pv = pathVarsFromJson(b.value("pathVariables", json::array()));
+  if (!pv) return d::Result<Payload>::fail(pv.error());
+  p.pathVariables = pv.take();
+  auto pa = serialFrom<d::QueryParamList>(b, "params", core::serial::jsonToParams, "[]");
+  if (!pa) return d::Result<Payload>::fail(pa.error());
+  p.params = pa.take();
+  auto h = serialFrom<d::HeaderList>(b, "headers", core::serial::jsonToHeaders, "[]");
+  if (!h) return d::Result<Payload>::fail(h.error());
+  p.headers = h.take();
+  auto bd = serialFrom<d::Body>(b, "body", core::serial::jsonToBody, "{\"mode\":\"none\"}");
+  if (!bd) return d::Result<Payload>::fail(bd.error());
+  p.body = bd.take();
+  auto a = serialFrom<d::Auth>(b, "auth", core::serial::jsonToAuth, "{\"type\":\"none\"}");
+  if (!a) return d::Result<Payload>::fail(a.error());
+  p.auth = a.take();
+  return d::Result<Payload>::ok(Payload{d::HttpRequest::create(std::move(p)).take()});
+}
 } // namespace
 
 domain::Result<domain::RequestModel> RequestJsonMapper::fromJson(const std::string &jsonText) const {
@@ -188,95 +277,15 @@ domain::Result<domain::RequestModel> RequestJsonMapper::fromJson(const std::stri
       cfg = c.take();
     }
 
-    std::string type = gs(j, "type", "http");
-    // placeholder payload (overwritten per type below; Parts holds a non-default Url -> brace-init).
-    d::RequestModel::Payload payload =
-        d::HttpRequest::create(d::HttpRequest::Parts{d::HttpMethod::Get, d::Url::create("").take()}).take();
+    // Dispatch to the per-type parser (string type -> can't be a switch; block key == type token).
+    std::string type = gs(j, "type", w::kHttp);
+    d::Result<Payload> pr = type == w::kGrpc      ? parseGrpcPayload(j.value(w::kGrpc, json::object()))
+                            : type == w::kWs      ? parseWsPayload(j.value(w::kWs, json::object()))
+                            : type == w::kGraphql ? parseGraphqlPayload(j.value(w::kGraphql, json::object()))
+                                                  : parseHttpPayload(j.value(w::kHttp, json::object()));
+    if (!pr) return d::Result<d::RequestModel>::fail(pr.error());
 
-    if (type == "grpc") {
-      const json b = j.value("grpc", json::object());
-      d::GrpcRequest::Parts p;
-      p.target = gs(b, "target");
-      p.service = gs(b, "service");
-      p.method = gs(b, "method");
-      auto mt = d::parseGrpcMethodType(gs(b, "methodType", "unary"));
-      p.methodType = mt ? mt.take() : d::GrpcMethodType::Unary;
-      p.message = d::JsonText::of(gs(b, "message", "{}"));
-      auto md = serialFrom<d::GrpcMetadata>(b, "metadata", core::serial::jsonToMetadata, "[]");
-      if (!md) return d::Result<d::RequestModel>::fail(md.error());
-      p.metadata = md.take();
-      auto ps = protoSourceFromJson(b.value("protoSource", json::object()));
-      if (!ps) return d::Result<d::RequestModel>::fail(ps.error());
-      p.protoSource = ps.take();
-      p.tls = tlsFromJson(b.value("tls", json::object()));
-      auto r = d::GrpcRequest::create(std::move(p));
-      if (!r) return d::Result<d::RequestModel>::fail(r.error());
-      payload = r.take();
-    } else if (type == "ws") {
-      const json b = j.value("ws", json::object());
-      d::WebSocketRequest::Parts p{d::Url::create(gs(b, "url")).take()};
-      p.defaultSendKind = gs(b, "defaultSendKind", "text") == "binary" ? d::WsSendKind::Binary
-                                                                       : d::WsSendKind::Text;
-      if (auto it = b.find("subprotocols"); it != b.end() && it->is_array())
-        for (const auto &e : *it) if (e.is_string()) p.subprotocols.push_back(e.get<std::string>());
-      // onOpenSend is a string[] of payloads (json_codec compat); kind = defaultSendKind.
-      if (auto it = b.find("onOpenSend"); it != b.end() && it->is_array())
-        for (const auto &e : *it)
-          if (e.is_string()) p.onOpenSend.push_back({p.defaultSendKind, e.get<std::string>()});
-      auto h = serialFrom<d::HeaderList>(b, "headers", core::serial::jsonToHeaders, "[]");
-      if (!h) return d::Result<d::RequestModel>::fail(h.error());
-      p.headers = h.take();
-      auto a = serialFrom<d::Auth>(b, "auth", core::serial::jsonToAuth, "{\"type\":\"none\"}");
-      if (!a) return d::Result<d::RequestModel>::fail(a.error());
-      p.auth = a.take();
-      auto r = d::WebSocketRequest::create(std::move(p));
-      if (!r) return d::Result<d::RequestModel>::fail(r.error());
-      payload = r.take();
-    } else if (type == "graphql") {
-      const json b = j.value("graphql", json::object());
-      d::GraphQlRequest::Parts p{d::Url::create(gs(b, "url")).take()};
-      p.op.query = gs(b, "query");
-      p.op.operationName = gs(b, "operationName");
-      p.op.variables = d::JsonText::of(gs(b, "variables", "{}"));
-      p.op.operation = gqlOpFrom(gs(b, "operation", "auto"));
-      // json_codec compat (request-bridge bijection): "ws"->Ws, "sse"->Http; wsProtocol alias; clear for Http.
-      p.subTransport = gs(b, "subTransport", "ws") == "sse" ? d::GqlSubTransport::Http : d::GqlSubTransport::Ws;
-      p.wsProtocol = gs(b, "wsProtocol", "graphql-transport-ws") == "subscriptions-transport-ws"
-                         ? "graphql-ws"
-                         : "graphql-transport-ws";
-      if (p.subTransport == d::GqlSubTransport::Http) p.wsProtocol.clear();
-      auto h = serialFrom<d::HeaderList>(b, "headers", core::serial::jsonToHeaders, "[]");
-      if (!h) return d::Result<d::RequestModel>::fail(h.error());
-      p.headers = h.take();
-      auto a = serialFrom<d::Auth>(b, "auth", core::serial::jsonToAuth, "{\"type\":\"none\"}");
-      if (!a) return d::Result<d::RequestModel>::fail(a.error());
-      p.auth = a.take();
-      auto r = d::GraphQlRequest::create(std::move(p));
-      if (!r) return d::Result<d::RequestModel>::fail(r.error());
-      payload = r.take();
-    } else { // http
-      const json b = j.value("http", json::object());
-      auto mr = d::parseHttpMethod(gs(b, "method", "GET"));
-      d::HttpRequest::Parts p{mr ? mr.take() : d::HttpMethod::Get, d::Url::create(gs(b, "url")).take()};
-      auto pv = pathVarsFromJson(b.value("pathVariables", json::array()));
-      if (!pv) return d::Result<d::RequestModel>::fail(pv.error());
-      p.pathVariables = pv.take();
-      auto pa = serialFrom<d::QueryParamList>(b, "params", core::serial::jsonToParams, "[]");
-      if (!pa) return d::Result<d::RequestModel>::fail(pa.error());
-      p.params = pa.take();
-      auto h = serialFrom<d::HeaderList>(b, "headers", core::serial::jsonToHeaders, "[]");
-      if (!h) return d::Result<d::RequestModel>::fail(h.error());
-      p.headers = h.take();
-      auto bd = serialFrom<d::Body>(b, "body", core::serial::jsonToBody, "{\"mode\":\"none\"}");
-      if (!bd) return d::Result<d::RequestModel>::fail(bd.error());
-      p.body = bd.take();
-      auto a = serialFrom<d::Auth>(b, "auth", core::serial::jsonToAuth, "{\"type\":\"none\"}");
-      if (!a) return d::Result<d::RequestModel>::fail(a.error());
-      p.auth = a.take();
-      payload = d::HttpRequest::create(std::move(p)).take();
-    }
-
-    return d::RequestModel::create(std::move(id), std::move(name), seq, cfg, std::move(payload));
+    return d::RequestModel::create(std::move(id), std::move(name), seq, cfg, pr.take());
   } catch (const std::exception &e) {
     return d::Result<d::RequestModel>::fail({d::ErrorCode::Parse, e.what(), ""});
   }
@@ -291,10 +300,10 @@ std::string RequestJsonMapper::toJson(const domain::RequestModel &m) const {
   j["config"] = serialTo(core::serial::configToJson(m.config()));
   m.match([&](auto &&payload) {
     using T = std::decay_t<decltype(payload)>;
-    if constexpr (std::is_same_v<T, d::HttpRequest>) j["http"] = httpToJson(payload);
-    else if constexpr (std::is_same_v<T, d::GrpcRequest>) j["grpc"] = grpcToJson(payload);
-    else if constexpr (std::is_same_v<T, d::WebSocketRequest>) j["ws"] = wsToJson(payload);
-    else if constexpr (std::is_same_v<T, d::GraphQlRequest>) j["graphql"] = gqlToJson(payload);
+    if constexpr (std::is_same_v<T, d::HttpRequest>) j[w::kHttp] = httpToJson(payload);
+    else if constexpr (std::is_same_v<T, d::GrpcRequest>) j[w::kGrpc] = grpcToJson(payload);
+    else if constexpr (std::is_same_v<T, d::WebSocketRequest>) j[w::kWs] = wsToJson(payload);
+    else if constexpr (std::is_same_v<T, d::GraphQlRequest>) j[w::kGraphql] = gqlToJson(payload);
   });
   return j.dump(2);
 }

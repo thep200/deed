@@ -2,10 +2,12 @@
 
 #include <nlohmann/json.hpp>
 
-#include "infra/serialization/json_codec.hpp" // core::codec::parseGuarded — JSON nesting-depth guard (H5)
+#include "infra/serialization/json_codec.hpp"  // core::codec::parseGuarded — JSON nesting-depth guard (H5)
+#include "infra/serialization/wire_format.hpp" // core::wire::* on-disk body-mode tokens
 
 namespace core::serial {
 namespace d = core::domain;
+namespace w = core::wire;
 using nlohmann::json;
 
 namespace {
@@ -25,6 +27,36 @@ json parseGuarded(const std::string &text, const char *fallback) {
 }
 template <class T> d::Result<T> parseErr(const std::string &what) {
   return d::Result<T>::fail({d::ErrorCode::Parse, what, ""});
+}
+// Raw-body subtype -> its wire "mode" token (and the key its text is stored under).
+const char *rawSubtypeKey(d::RawSubtype s) {
+  switch (s) {
+  case d::RawSubtype::Text: return w::kBodyText;
+  case d::RawSubtype::Xml: return w::kBodyXml;
+  case d::RawSubtype::Json: return w::kBodyJson;
+  }
+  return w::kBodyJson;
+}
+// Body sub-collection parsers — keep jsonToBody a flat mode-dispatch (clang-tidy function-size).
+std::vector<d::FormField> formFieldsFrom(const json &j) {
+  std::vector<d::FormField> fields;
+  if (auto it = j.find("formUrlEncoded"); it != j.end() && it->is_array())
+    for (const auto &e : *it) fields.push_back({gs(e, "key"), gs(e, "value"), gb(e, "enabled", true)});
+  return fields;
+}
+std::vector<d::MultipartPart> multipartPartsFrom(const json &j) {
+  std::vector<d::MultipartPart> parts;
+  if (auto it = j.find("multipart"); it != j.end() && it->is_array())
+    for (const auto &e : *it) {
+      d::MultipartPart p;
+      p.key = gs(e, "key");
+      p.value = gs(e, "value");
+      p.kind = gs(e, "type", "text") == "file" ? d::PartKind::File : d::PartKind::Text;
+      p.filePath = gs(e, "filePath");
+      p.enabled = gb(e, "enabled", true);
+      parts.push_back(std::move(p));
+    }
+  return parts;
 }
 } // namespace
 
@@ -128,21 +160,19 @@ std::string bodyToJson(const d::Body &body) {
   body.match([&](auto &&b) {
     using T = std::decay_t<decltype(b)>;
     if constexpr (std::is_same_v<T, d::BodyNone>) {
-      j["mode"] = "none";
+      j["mode"] = w::kBodyNone;
     } else if constexpr (std::is_same_v<T, d::BodyRaw>) {
-      const char *mode = b.subtype == d::RawSubtype::Text ? "text"
-                         : b.subtype == d::RawSubtype::Xml ? "xml"
-                                                           : "json";
+      const char *mode = rawSubtypeKey(b.subtype);
       j["mode"] = mode;
       j[mode] = b.text;
     } else if constexpr (std::is_same_v<T, d::BodyFormUrlEncoded>) {
-      j["mode"] = "form-urlencoded";
+      j["mode"] = w::kBodyForm;
       json a = json::array();
       for (const auto &f : b.fields)
         a.push_back({{"key", f.key}, {"value", f.value}, {"enabled", f.enabled ? 1 : 0}});
       j["formUrlEncoded"] = a;
     } else if constexpr (std::is_same_v<T, d::BodyMultipart>) {
-      j["mode"] = "multipart";
+      j["mode"] = w::kBodyMultipart;
       json a = json::array();
       for (const auto &p : b.parts)
         a.push_back({{"key", p.key},
@@ -152,7 +182,7 @@ std::string bodyToJson(const d::Body &body) {
                      {"enabled", p.enabled ? 1 : 0}});
       j["multipart"] = a;
     } else if constexpr (std::is_same_v<T, d::BodyBinary>) {
-      j["mode"] = "binary";
+      j["mode"] = w::kBodyBinary;
       j["binary"] = {{"filePath", b.filePath}};
     }
   });
@@ -162,34 +192,17 @@ d::Result<d::Body> jsonToBody(const std::string &text) {
   try {
     auto j = parseGuarded(text, "{\"mode\":\"none\"}");
     if (!j.is_object()) return parseErr<d::Body>("body must be a JSON object");
-    std::string mode = gs(j, "mode", "none");
-    if (mode == "json") return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Json, gs(j, "json")));
-    if (mode == "text") return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Text, gs(j, "text")));
-    if (mode == "xml") return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Xml, gs(j, "xml")));
-    if (mode == "form-urlencoded") {
-      std::vector<d::FormField> fields;
-      if (auto it = j.find("formUrlEncoded"); it != j.end() && it->is_array())
-        for (const auto &e : *it)
-          fields.push_back({gs(e, "key"), gs(e, "value"), gb(e, "enabled", true)});
-      return d::Result<d::Body>::ok(d::Body::formUrlEncoded(std::move(fields)));
-    }
-    if (mode == "multipart" || mode == "form-data") {
-      std::vector<d::MultipartPart> parts;
-      if (auto it = j.find("multipart"); it != j.end() && it->is_array())
-        for (const auto &e : *it) {
-          d::MultipartPart p;
-          p.key = gs(e, "key");
-          p.value = gs(e, "value");
-          p.kind = gs(e, "type", "text") == "file" ? d::PartKind::File : d::PartKind::Text;
-          p.filePath = gs(e, "filePath");
-          p.enabled = gb(e, "enabled", true);
-          parts.push_back(std::move(p));
-        }
-      return d::Body::multipart(std::move(parts));
-    }
-    if (mode == "binary") {
+    std::string mode = gs(j, "mode", w::kBodyNone);
+    if (mode == w::kBodyJson) return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Json, gs(j, w::kBodyJson)));
+    if (mode == w::kBodyText) return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Text, gs(j, w::kBodyText)));
+    if (mode == w::kBodyXml) return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Xml, gs(j, w::kBodyXml)));
+    if (mode == w::kBodyForm)
+      return d::Result<d::Body>::ok(d::Body::formUrlEncoded(formFieldsFrom(j)));
+    if (mode == w::kBodyMultipart || mode == w::kBodyFormData)
+      return d::Body::multipart(multipartPartsFrom(j));
+    if (mode == w::kBodyBinary) {
       std::string fp;
-      if (auto it = j.find("binary"); it != j.end() && it->is_object()) fp = gs(*it, "filePath");
+      if (auto it = j.find(w::kBodyBinary); it != j.end() && it->is_object()) fp = gs(*it, "filePath");
       if (fp.empty()) return d::Result<d::Body>::ok(d::Body::none()); // binary chosen, no file yet
       return d::Body::binary(fp);
     }
@@ -201,20 +214,20 @@ d::Result<d::Body> jsonToBody(const std::string &text) {
 
 // ---- Editor body view (unwrapped per-mode) ----
 EditorBody bodyToEditor(const d::Body &body) {
-  EditorBody eb{"json", ""};
+  EditorBody eb{w::kBodyJson, ""};
   body.match([&](auto &&b) {
     using T = std::decay_t<decltype(b)>;
     if constexpr (std::is_same_v<T, d::BodyRaw>) {
-      eb.mode = b.subtype == d::RawSubtype::Text ? "text" : b.subtype == d::RawSubtype::Xml ? "xml" : "json";
+      eb.mode = rawSubtypeKey(b.subtype);
       eb.content = b.text;
     } else if constexpr (std::is_same_v<T, d::BodyFormUrlEncoded>) {
-      eb.mode = "form-urlencoded";
+      eb.mode = w::kBodyForm;
       json a = json::array();
       for (const auto &f : b.fields)
         a.push_back({{"key", f.key}, {"value", f.value}, {"enabled", f.enabled ? 1 : 0}});
       eb.content = a.dump(2);
     } else if constexpr (std::is_same_v<T, d::BodyBinary>) {
-      eb.mode = "binary";
+      eb.mode = w::kBodyBinary;
       eb.content = json({{"filePath", b.filePath}}).dump(2);
     }
     // BodyNone / BodyMultipart -> default {"json",""} (the editor has no multipart mode).
@@ -223,10 +236,10 @@ EditorBody bodyToEditor(const d::Body &body) {
 }
 d::Result<d::Body> bodyFromEditor(const std::string &mode, const std::string &content) {
   try {
-    if (mode == "json") return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Json, content));
-    if (mode == "text") return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Text, content));
-    if (mode == "xml") return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Xml, content));
-    if (mode == "form-urlencoded") {
+    if (mode == w::kBodyJson) return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Json, content));
+    if (mode == w::kBodyText) return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Text, content));
+    if (mode == w::kBodyXml) return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Xml, content));
+    if (mode == w::kBodyForm) {
       std::vector<d::FormField> fields;
       auto j = parseGuarded(content, "[]");
       if (j.is_array())
@@ -234,7 +247,7 @@ d::Result<d::Body> bodyFromEditor(const std::string &mode, const std::string &co
           if (e.is_object()) fields.push_back({gs(e, "key"), gs(e, "value"), gb(e, "enabled", true)});
       return d::Result<d::Body>::ok(d::Body::formUrlEncoded(std::move(fields)));
     }
-    if (mode == "binary") {
+    if (mode == w::kBodyBinary) {
       std::string fp;
       auto t = content;
       try {

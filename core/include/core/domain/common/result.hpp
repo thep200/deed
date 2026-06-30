@@ -20,9 +20,10 @@ public:
   bool isOk() const noexcept { return value_.has_value(); }
   explicit operator bool() const noexcept { return isOk(); }
 
-  // Precondition: isOk(). Reading the value of a failed Result is a programming error.
-  const T &value() const & { return *value_; }
-  T &&take() { return std::move(*value_); } // move the value out (single use)
+  // Precondition: isOk(). Reading the value of a failed Result is a programming error. The unchecked
+  // optional deref is by-contract (callers gate on isOk()/operator bool), so the clang-tidy check is muted.
+  const T &value() const & { return *value_; } // NOLINT(bugprone-unchecked-optional-access)
+  T &&take() { return std::move(*value_); }    // NOLINT(bugprone-unchecked-optional-access) — move out (single use)
 
   const Error &error() const { return error_; }
 
