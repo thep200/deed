@@ -1,5 +1,5 @@
 // gql_operation.cpp — operation detection + GraphQL->HTTP packaging (SPEC_graphql §2/§4). DOMAIN-native.
-#include "graphql/graphql.hpp"
+#include "infra/transport/graphql/graphql.hpp"
 
 #include <cctype>
 #include <variant>

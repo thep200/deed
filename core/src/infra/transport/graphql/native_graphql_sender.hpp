@@ -1,4 +1,4 @@
-// core/src/infra/senders/native_graphql_sender.hpp — REFACTOR_SPEC P6 / Phase C3 (GraphQL transport, native).
+// core/src/infra/transport/graphql/native_graphql_sender.hpp — REFACTOR_SPEC P6 / Phase C3 (GraphQL transport, native).
 // query/mutation -> NATIVE HTTP (gql::buildHttpModel repackaging + NativeHttpSender). subscription -> NATIVE
 // WebSocket: drives GraphQlWsProtocol (graphql-transport-ws / graphql-ws) directly over the ws_sender pump
 // and emits domain ResponseEvents. No legacy GraphQlSender / LegacySenderAdapter anymore.
@@ -9,7 +9,7 @@
 #include <string>
 
 #include "core/domain/ports/driven/i_request_sender.hpp"
-#include "infra/senders/native_http_sender.hpp"
+#include "infra/transport/http/native_http_sender.hpp"
 
 namespace core {
 struct WsSession;

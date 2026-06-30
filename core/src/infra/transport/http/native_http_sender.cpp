@@ -1,4 +1,4 @@
-#include "infra/senders/native_http_sender.hpp"
+#include "infra/transport/http/native_http_sender.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -11,7 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include "infra/transport/shared/sse_parser.hpp" // pure text/event-stream parser (no transport coupling)
-#include "infra/url_util.hpp"
+#include "infra/transport/shared/url_util.hpp"
 
 namespace core::infra {
 namespace d = core::domain;

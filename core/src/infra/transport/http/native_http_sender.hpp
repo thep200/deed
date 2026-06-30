@@ -1,4 +1,4 @@
-// core/src/infra/senders/native_http_sender.hpp — REFACTOR_SPEC P6 / Phase C2: HTTP sender that consumes
+// core/src/infra/transport/http/native_http_sender.hpp — REFACTOR_SPEC P6 / Phase C2: HTTP sender that consumes
 // the DOMAIN model directly via cpr — both unary AND SSE are native now (no legacy core::HttpSender). SSE
 // streams the response, feeds each chunk to the pure SseParser, and emits EvMessage* then a terminal event.
 #pragma once

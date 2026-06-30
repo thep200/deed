@@ -7,8 +7,10 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
+#include "core/domain/ports/driven/i_request_sender.hpp"
 #include "core/domain/ws/websocket_request.hpp"
 #include "core/sending/cancel_token.hpp"
 #include "infra/transport/shared/i_stream_channel.hpp"
@@ -61,3 +63,31 @@ void wsRunProtocol(const core::domain::WebSocketRequest& req, const WsFrameHooks
                    const std::shared_ptr<CancelToken>& cancel);
 
 } // namespace core
+
+namespace core::infra {
+
+// Native WebSocket sender (domain IRequestSender). Runs the libcurl pump above DIRECTLY on the domain
+// model — execute() runs wsRun on the calling (saga pool) thread, which BLOCKS for the whole session
+// (keeping the saga alive so push/close from other threads reach the channel); inbound frames become
+// EvMessage, the close becomes EvClosed/EvFailed. Auth is applied by the pump (applyAuthHeaders on the
+// handshake), so the already-resolved domain model is enough. The .env WS tunables arrive as a pre-built
+// WsConfig base; per-request TLS/timeout from RequestConfig are layered on at execute time. One session
+// per adapter. (Merged here from the former ws_sender_adapter.* — RESTRUCTURE_PLAN S3.)
+class WsSenderAdapter final : public domain::IRequestSender {
+public:
+  explicit WsSenderAdapter(core::WsConfig base) : base_(base) {}
+
+  bool supports(domain::RequestType t) const override { return t == domain::RequestType::WebSocket; }
+  domain::Status execute(const domain::RequestModel &resolved, domain::IResponseSink &sink,
+                         const domain::ICancellationToken &cancel) override;
+  domain::Status push(domain::WsMessage) override;
+  domain::Status close(int code, std::string reason) override;
+
+private:
+  core::WsConfig base_;                            // .env tunables; per-request TLS/timeout layered at execute
+  std::uint64_t nextId_ = 1;                       // session-id counter (one session at a time)
+  std::mutex mu_;                                  // guards channel_ (set by execute, read by push/close)
+  std::shared_ptr<core::IStreamChannel> channel_;  // send side of the active session
+};
+
+} // namespace core::infra

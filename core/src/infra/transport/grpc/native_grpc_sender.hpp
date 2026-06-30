@@ -1,4 +1,4 @@
-// core/src/infra/senders/native_grpc_sender.hpp — REFACTOR_SPEC P6 / Phase C1.
+// core/src/infra/transport/grpc/native_grpc_sender.hpp — REFACTOR_SPEC P6 / Phase C1.
 // gRPC sender on the DOMAIN port (core::domain::IRequestSender). It owns the grpc++ machinery directly
 // (dynamic descriptors + GenericStub + CompletionQueue), emits domain ResponseEvents, and routes by the
 // request's GrpcMethodType: Unary/ClientStreaming -> a unary-shaped EvCompleted; ServerStreaming/

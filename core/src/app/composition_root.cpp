@@ -6,18 +6,18 @@
 #include "infra/import_export/import_service.hpp"
 #include "infra/platform/json_validator.hpp"
 #include "infra/platform/system_clock.hpp"
-#include "infra/senders/native_graphql_sender.hpp"
-#include "infra/senders/native_grpc_sender.hpp"
-#include "infra/senders/native_http_sender.hpp"
-#include "infra/senders/ws_sender_adapter.hpp"
+#include "infra/transport/graphql/native_graphql_sender.hpp"
+#include "infra/transport/grpc/native_grpc_sender.hpp"
+#include "infra/transport/http/native_http_sender.hpp"
+#include "infra/transport/ws/ws_sender.hpp"
 #include "app/cache_config.hpp"     // detail::buildCacheConfig (native response cache)
 #include "core/variables/variable_resolver.hpp" // valueToAlias/prefixToAlias (native aliasify)
 #include "core/import_export/importer.hpp" // core::toCurl (domain copy-as-cURL export)
-#include "graphql/graphql.hpp"      // gql::effectiveOperation (native interactionOf)
+#include "infra/transport/graphql/graphql.hpp"      // gql::effectiveOperation (native interactionOf)
 #include "infra/fs_util.hpp"        // fsutil::join (.session dir for the cache)
 #include "infra/thread_pool.hpp"
 #include "infra/variables/domain_variable_resolver.hpp"
-#include "sending/grpc_descriptors.hpp" // native gRPC reflection (buildDescriptors/listMethods)
+#include "infra/transport/grpc/grpc_descriptors.hpp" // native gRPC reflection (buildDescriptors/listMethods)
 
 #include <chrono>
 #include <functional>

@@ -8,7 +8,7 @@
 #include "core/dto_common.hpp" // surviving KeyValue / MultipartPart DTOs (parse scratch only)
 #include "core/import_export/importer.hpp"
 #include "import_export/shell_tokenize.hpp"
-#include "infra/url_util.hpp"
+#include "infra/transport/shared/url_util.hpp"
 
 namespace core {
 

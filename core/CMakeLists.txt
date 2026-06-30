@@ -26,10 +26,9 @@ add_library(core STATIC
   src/app/send_request_saga.cpp
   src/app/request_orchestrator.cpp
   src/app/composition_root.cpp
-  src/infra/senders/native_http_sender.cpp
-  src/infra/senders/native_grpc_sender.cpp
-  src/infra/senders/native_graphql_sender.cpp
-  src/infra/senders/ws_sender_adapter.cpp
+  src/infra/transport/http/native_http_sender.cpp
+  src/infra/transport/grpc/native_grpc_sender.cpp
+  src/infra/transport/graphql/native_graphql_sender.cpp
   src/infra/persistence/collection_repository.cpp
   src/infra/variables/domain_variable_resolver.cpp
   src/infra/import_export/import_service.cpp
@@ -44,11 +43,11 @@ add_library(core STATIC
   src/persistence/session_store.cpp
   src/persistence/environment_store.cpp
   src/persistence/app_config_store.cpp
-  src/sending/grpc_descriptors.cpp
-  src/sending/ws_sender.cpp
+  src/infra/transport/grpc/grpc_descriptors.cpp
+  src/infra/transport/ws/ws_sender.cpp
   src/infra/transport/shared/sse_parser.cpp
-  src/graphql/gql_operation.cpp
-  src/graphql/gql_ws_protocol.cpp
+  src/infra/transport/graphql/gql_operation.cpp
+  src/infra/transport/graphql/gql_ws_protocol.cpp
   src/import_export/shell_tokenize.cpp
   src/import_export/curl_importer.cpp
   src/import_export/curl_export.cpp

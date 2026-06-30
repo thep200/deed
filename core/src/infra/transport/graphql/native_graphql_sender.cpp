@@ -1,4 +1,4 @@
-#include "infra/senders/native_graphql_sender.hpp"
+#include "infra/transport/graphql/native_graphql_sender.hpp"
 
 #include <chrono>
 #include <memory>
@@ -6,12 +6,12 @@
 #include <variant>
 #include <vector>
 
-#include "core/graphql/gql_ws_protocol.hpp" // GraphQlWsProtocol (graphql-transport-ws / graphql-ws)
+#include "infra/transport/graphql/gql_ws_protocol.hpp" // GraphQlWsProtocol (graphql-transport-ws / graphql-ws)
 #include "core/sending/cancel_token.hpp"
 #include "infra/transport/shared/i_stream_channel.hpp"
 #include "infra/transport/shared/i_stream_sink.hpp"
-#include "graphql/graphql.hpp"               // gql::effectiveOperation / gql::buildHttpModel (domain)
-#include "sending/ws_sender.hpp"             // wsMakeSession/wsMakeChannel/wsRunProtocol (shared WS pump)
+#include "infra/transport/graphql/graphql.hpp"               // gql::effectiveOperation / gql::buildHttpModel (domain)
+#include "infra/transport/ws/ws_sender.hpp"             // wsMakeSession/wsMakeChannel/wsRunProtocol (shared WS pump)
 
 namespace core::infra {
 namespace d = core::domain;

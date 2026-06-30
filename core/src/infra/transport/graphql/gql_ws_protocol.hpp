@@ -1,4 +1,4 @@
-// core/graphql/gql_ws_protocol.hpp — the GraphQL-over-WebSocket protocol layer (SPEC_graphql §6).
+// infra/transport/graphql/gql_ws_protocol.hpp — the GraphQL-over-WebSocket protocol layer (SPEC_graphql §6).
 // PURE: it speaks `graphql-transport-ws` (modern) / `graphql-ws` legacy purely in terms of raw text frames
 // in (onFrame) and a sendRaw callback out — NO libcurl/curl_ws. It translates the connection_init/ack/
 // subscribe/next/error/complete envelope into clean StreamEvents on a UI IStreamSink, so the UI sees a

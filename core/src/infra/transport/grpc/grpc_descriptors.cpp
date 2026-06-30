@@ -1,4 +1,4 @@
-#include "sending/grpc_descriptors.hpp"
+#include "infra/transport/grpc/grpc_descriptors.hpp"
 
 #include <chrono>
 #include <mutex>

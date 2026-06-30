@@ -1,5 +1,5 @@
 // gql_ws_protocol.cpp — graphql-transport-ws / legacy graphql-ws protocol state machine (SPEC_graphql §6).
-#include "core/graphql/gql_ws_protocol.hpp"
+#include "infra/transport/graphql/gql_ws_protocol.hpp"
 
 #include <utility>
 

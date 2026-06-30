@@ -1,4 +1,4 @@
-#include "infra/senders/native_grpc_sender.hpp"
+#include "infra/transport/grpc/native_grpc_sender.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -21,7 +21,7 @@
 #include <grpcpp/support/slice.h>
 
 #include "core/sending/cancel_token.hpp"
-#include "sending/grpc_descriptors.hpp"
+#include "infra/transport/grpc/grpc_descriptors.hpp"
 
 namespace gp = google::protobuf;
 
