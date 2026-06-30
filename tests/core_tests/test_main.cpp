@@ -280,6 +280,24 @@ static void test_body_singlemode_roundtrip(const std::string& root) {
     rel = store.saveRequest(rel, f);
     auto fr = store.loadRequest(rel);
     CHECK_EQ(ts::bodyMode(ts::http(fr).body()), std::string("form-urlencoded"), "active form mode round-trip");
+
+    // UI body drafts: the user filled BOTH json and form; active=json persists in the domain Body, while the
+    // form draft rides along in "_uiBodyDrafts" so switching the editor's body mode after reload isn't empty.
+    auto jm = ts::withHttp(store.loadRequest(rel), core::domain::HttpMethod::Get, "",
+                           core::domain::Body::raw(core::domain::RawSubtype::Json, "{\"a\":1}"));
+    std::map<std::string, std::string> drafts{{"json", "{\"a\":1}"},
+                                              {"form-urlencoded", "[{\"key\":\"x\",\"value\":\"y\",\"enabled\":1}]"}};
+    rel = store.saveRequest(rel, jm, drafts);
+    auto back = store.loadBodyDrafts(rel);
+    CHECK_EQ(back["form-urlencoded"], std::string("[{\"key\":\"x\",\"value\":\"y\",\"enabled\":1}]"),
+             "non-active form draft persisted");
+    CHECK_EQ(back["json"], std::string("{\"a\":1}"), "active json draft persisted");
+    CHECK_EQ(ts::bodyMode(ts::http(store.loadRequest(rel)).body()), std::string("json"),
+             "domain Body still single-mode (json active) — drafts don't affect the sent body");
+    // 2-arg save (non-editor caller, e.g. rename/autosave w/o drafts) PRESERVES existing drafts.
+    rel = store.saveRequest(rel, store.loadRequest(rel));
+    CHECK_EQ(store.loadBodyDrafts(rel)["form-urlencoded"],
+             std::string("[{\"key\":\"x\",\"value\":\"y\",\"enabled\":1}]"), "drafts preserved by 2-arg save");
 }
 
 // ---------------- CollectionStore round-trip + CRUD ----------------

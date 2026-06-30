@@ -124,7 +124,14 @@ static NSArray<NSString *> *BodyAllModes(void);
 
 - (void)populateEditorsFromModel {
     [_reqBuffers removeAllObjects];
-    _bodyDrafts = [NSMutableDictionary dictionary];   // fresh request -> drop stale per-mode body drafts
+    // Seed per-mode body drafts from disk (UI-only "_uiBodyDrafts") so content the user typed in NON-active
+    // body modes survives save/reload + switching requests. The ACTIVE mode below overlays from the domain
+    // model (authoritative). A fresh/non-HTTP request -> empty (loadBodyDrafts returns {} on a missing key).
+    _bodyDrafts = [NSMutableDictionary dictionary];
+    if (!_currentRel.empty() && _apiClient) {
+        for (auto &kv : _apiClient->collection().loadBodyDrafts(_currentRel))
+            _bodyDrafts[N(kv.first)] = N(kv.second);
+    }
     namespace d = core::domain;
     if (!_model) { _reqText.string = @""; return; }
     const d::RequestModel &m = *_model;
@@ -293,13 +300,30 @@ static NSArray<NSString *> *BodyAllModes(void);
     }
 }
 
+// Snapshot of the per-mode body drafts to persist (UI-only "_uiBodyDrafts"): every non-empty mode draft
+// PLUS the active mode's live body buffer (index 0 for HTTP, authoritative for its mode). HTTP-only —
+// other request types have no body modes. Lets the user keep content typed in non-active modes (the
+// request still SENDS only the active mode = the domain Body).
+- (std::map<std::string, std::string>)collectBodyDrafts {
+    std::map<std::string, std::string> out;
+    if (!_model || _model->type() != core::domain::RequestType::Http) return out;
+    for (NSString *mode in _bodyDrafts) {
+        NSString *content = _bodyDrafts[mode];
+        if (content.length) out[S(mode)] = S(content);
+    }
+    NSString *active = _bodyMode.length ? _bodyMode : @"json";
+    NSString *activeBody = (_reqBuffers.count > 0) ? _reqBuffers[0] : @"";
+    if (activeBody.length) out[S(active)] = S(activeBody);
+    return out;
+}
+
 // Autosave all changes (no prompt). Bad JSON -> skip + light warning.
 - (void)autosaveCurrent {
     if (!_hasRequest || !_apiClient || _currentRel.empty()) return;
     if (![self resyncCurrentRelById]) return;     // request deleted/path-changed -> don't write back the old path
     if (![self syncModelFromEditors:YES]) { [self toastWarn:StrToastAutosaveFailed]; return; }
     if (!_model) return;
-    try { _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model);  // filename may change (sync §4)
+    try { _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model, [self collectBodyDrafts]);  // filename may change (sync §4)
           _apiClient->session().saveLastOpened(_currentRel);
           // §T1: autosave touches only 1 request -> update its containing level, do NOT re-scan root + reloadData the whole tree.
           NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];
@@ -668,7 +692,7 @@ static NSString *GqlImportLabel(NSInteger kind) {
     [self updateTitle];
     [self relayout];
     try {
-        _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model);   // save + sync filename (§4)
+        _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model, [self collectBodyDrafts]);   // save + sync filename (§4)
         _apiClient->session().saveLastOpened(_currentRel);
         NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];  // §A4: only the request's containing level
         [self refreshTreeLevel:parentRel];
@@ -771,7 +795,7 @@ static NSString *GqlImportLabel(NSInteger kind) {
     if (![self resyncCurrentRelById]) { [self toastWarn:StrToastRequestGone]; return; }
     if (![self syncModelFromEditors:NO] || !_model) return;
     try {
-        _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model);  // filename syncs to method/name (§4)
+        _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model, [self collectBodyDrafts]);  // filename syncs to method/name (§4)
         _apiClient->session().saveLastOpened(_currentRel);
         NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];  // §A4: incremental update
         [self refreshTreeLevel:parentRel];

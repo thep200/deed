@@ -5,6 +5,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -36,8 +37,18 @@ public:
 
     core::domain::RequestModel loadRequest(const std::string& relPath) const;     // throws on error
     // Atomic write; if filename mismatches type/method/name -> rename to match (§4).
-    // Returns relPath AFTER write (may change on rename). Atomic.
+    // Returns relPath AFTER write (may change on rename). Atomic. Preserves any existing "_uiBodyDrafts".
     std::string saveRequest(const std::string& relPath, const core::domain::RequestModel&) const;
+
+    // UI-only per-mode body drafts (body mode -> raw editor text), persisted in the request file under
+    // the "_uiBodyDrafts" key. The domain RequestModel + senders IGNORE them — a request still sends ONE
+    // body. They let the editor keep content the user typed in NON-active body modes across save/reload
+    // and request-switching (RESTRUCTURE follow-up: body-mode persistence). Empty map on a missing key.
+    std::map<std::string, std::string> loadBodyDrafts(const std::string& relPath) const;
+    // saveRequest overload that ALSO writes "_uiBodyDrafts" (overwriting any existing). Empty drafts ->
+    // the key is omitted. Same atomic write + filename-sync as the 2-arg version.
+    std::string saveRequest(const std::string& relPath, const core::domain::RequestModel&,
+                            const std::map<std::string, std::string>& bodyDrafts) const;
 
     // CRUD — return relPath of the created/changed item.
     std::string createRequest(const std::string& folderRel, RequestType, const std::string& name) const;

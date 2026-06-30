@@ -192,6 +192,13 @@ public:
   std::string saveRequest(const std::string &r, const core::domain::RequestModel &m) const override {
     return s_.saveRequest(r, m);
   }
+  std::map<std::string, std::string> loadBodyDrafts(const std::string &r) const override {
+    return s_.loadBodyDrafts(r);
+  }
+  std::string saveRequest(const std::string &r, const core::domain::RequestModel &m,
+                          const std::map<std::string, std::string> &drafts) const override {
+    return s_.saveRequest(r, m, drafts);
+  }
   std::string createRequest(const std::string &f, core::RequestType t, const std::string &n) const override {
     return s_.createRequest(f, t, n);
   }

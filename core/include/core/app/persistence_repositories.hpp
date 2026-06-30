@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -49,6 +50,11 @@ public:
   virtual core::TreeNode scanTree() const = 0;
   virtual core::domain::RequestModel loadRequest(const std::string &relPath) const = 0;
   virtual std::string saveRequest(const std::string &relPath, const core::domain::RequestModel &) const = 0;
+  // UI-only per-mode body drafts (see CollectionStore::loadBodyDrafts) — keep content typed in non-active
+  // body modes across save/reload. saveRequest overload writes them; the domain model ignores them.
+  virtual std::map<std::string, std::string> loadBodyDrafts(const std::string &relPath) const = 0;
+  virtual std::string saveRequest(const std::string &relPath, const core::domain::RequestModel &,
+                                  const std::map<std::string, std::string> &bodyDrafts) const = 0;
   virtual std::string createRequest(const std::string &folderRel, core::RequestType,
                                     const std::string &name) const = 0;
   virtual std::string createRequestFromModel(const std::string &folderRel, core::domain::RequestModel model,

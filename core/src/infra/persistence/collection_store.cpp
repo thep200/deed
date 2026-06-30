@@ -8,6 +8,8 @@
 
 #include <variant>
 
+#include <nlohmann/json.hpp>                                        // _uiBodyDrafts merge/extract (infra-only)
+
 #include "infra/serialization/json_codec.hpp"                       // parseGuarded (depth guard) for lightweight metadata reads
 #include "core/infra/persistence/request_naming.hpp"
 #include "core/infra/persistence/stores.hpp"
@@ -31,6 +33,19 @@ core::domain::RequestModel requestFromText(const std::string &txt) {
 std::string requestToText(const core::domain::RequestModel &m) {
   static const core::infra::RequestJsonMapper mapper;
   return mapper.toJson(m);
+}
+
+// Merge UI-only per-mode body drafts into a request JSON text under "_uiBodyDrafts" (the domain mapper
+// rebuilds the object fresh, so this key must be added AFTER toJson). Empty drafts -> text unchanged.
+std::string injectBodyDrafts(const std::string &reqJson,
+                             const std::map<std::string, std::string> &drafts) {
+  if (drafts.empty()) return reqJson;
+  nlohmann::json j = nlohmann::json::parse(reqJson, nullptr, /*allow_exceptions=*/false);
+  if (j.is_discarded() || !j.is_object()) return reqJson;
+  nlohmann::json d = nlohmann::json::object();
+  for (const auto &kv : drafts) d[kv.first] = kv.second;
+  j["_uiBodyDrafts"] = std::move(d);
+  return j.dump(2);
 }
 
 // --- domain helpers for the filename-encoding + immutable-update the store needs ---
@@ -439,16 +454,35 @@ int CollectionStore::migrateAddIdToFilenames() const {
   return migrated;
 }
 
+std::map<std::string, std::string> CollectionStore::loadBodyDrafts(const std::string &relPath) const {
+  std::map<std::string, std::string> out;
+  std::string txt;
+  if (!fsutil::readFile(fsutil::join(root_, relPath), txt)) return out;
+  nlohmann::json j = nlohmann::json::parse(txt, nullptr, /*allow_exceptions=*/false);
+  if (j.is_discarded() || !j.is_object()) return out;
+  auto it = j.find("_uiBodyDrafts");
+  if (it == j.end() || !it->is_object()) return out;
+  for (auto &el : it->items())
+    if (el.value().is_string()) out[el.key()] = el.value().get<std::string>();
+  return out;
+}
+
+// 2-arg overload: preserve any UI body drafts already on disk (non-editor callers don't touch them).
 std::string CollectionStore::saveRequest(const std::string &relPath,
                                          const core::domain::RequestModel &m) const {
+  return saveRequest(relPath, m, loadBodyDrafts(relPath));
+}
+
+std::string CollectionStore::saveRequest(const std::string &relPath, const core::domain::RequestModel &m,
+                                         const std::map<std::string, std::string> &bodyDrafts) const {
   invalidateIdIndex(); // may rename file (relPath changes) -> idIndex_ must be
                        // rebuilt
   fs::path cur = fs::path(fsutil::join(root_, relPath));
   fs::path dir = cur.parent_path();
   std::string method = httpMethodOf(m);
   // Write content first (source of truth), then sync the filename = derived
-  // cache (§4).
-  fsutil::writeFileAtomic(cur.string(), requestToText(m));
+  // cache (§4). UI body drafts ride along under "_uiBodyDrafts" (domain ignores them).
+  fsutil::writeFileAtomic(cur.string(), injectBodyDrafts(requestToText(m), bodyDrafts));
   std::string desired = encodeRequestFilename(m.id().get(), toViewType(m.type()), method, m.name());
   if (cur.filename().string() == desired)
     return relPath; // name already matches -> done

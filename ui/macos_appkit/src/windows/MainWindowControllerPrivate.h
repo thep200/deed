@@ -37,6 +37,7 @@
 #import "widgets/OS9Window.h"
 #import "editor/SciTextView.h"
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -252,6 +253,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)stashActiveReqBuffer;
 - (BOOL)syncModelFromEditors:(BOOL)silent;
 - (void)closeEditorIfDeleted:(NSArray<TreeItem *> *)deleted;
+- (std::map<std::string, std::string>)collectBodyDrafts;
 - (void)autosaveCurrent;
 - (NSString *)bodyButtonTitle;
 - (NSInteger)bodyTabIndex;
