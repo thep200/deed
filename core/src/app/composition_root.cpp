@@ -3,7 +3,7 @@
 // the domain-purity gate stays green for everything under core/include.
 #include "core/app/core_api_client.hpp"
 
-#include "infra/import_export/import_service.hpp"
+#include "infra/import/import_service.hpp"
 #include "infra/platform/json_validator.hpp"
 #include "infra/platform/system_clock.hpp"
 #include "infra/transport/graphql/native_graphql_sender.hpp"
@@ -12,7 +12,7 @@
 #include "infra/transport/ws/ws_sender.hpp"
 #include "app/cache_config.hpp"     // detail::buildCacheConfig (native response cache)
 #include "core/infra/variables/variable_resolver.hpp" // valueToAlias/prefixToAlias (native aliasify)
-#include "core/infra/import_export/importer.hpp" // core::toCurl (domain copy-as-cURL export)
+#include "core/infra/export/exporter.hpp" // core::toCurl (domain copy-as-cURL export)
 #include "infra/transport/graphql/graphql.hpp"      // gql::effectiveOperation (native interactionOf)
 #include "infra/platform/fs_util.hpp"        // fsutil::join (.session dir for the cache)
 #include "infra/platform/thread_pool.hpp"

@@ -1,9 +1,9 @@
-// core/src/infra/import_export/import_service.hpp — IImportService over the existing importers
+// core/src/infra/import/import_service.hpp — IImportService over the existing importers
 // (REFACTOR_SPEC P6). Wraps CurlImporter/GrpcImporter/GraphQlImporter + the request bridge.
 #pragma once
 
 #include "core/domain/ports/driving/i_import_service.hpp"
-#include "core/infra/import_export/importer.hpp"
+#include "core/infra/import/importer.hpp"
 
 namespace core::infra {
 

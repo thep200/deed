@@ -44,7 +44,7 @@
 #include <vector>
 
 #include "core/infra/serialization/field_json.hpp"   // core::serial — domain JSON field codec (replaces fieldcodec)
-#include "core/infra/import_export/importer.hpp"
+#include "core/infra/import/importer.hpp"
 #include "core/infra/persistence/stores.hpp"
 #include "core/infra/persistence/request_naming.hpp"
 #include "core/domain/environment/env_config.hpp"           // TreeNode/AppConfig/Environment/Session + RequestType (survive)

@@ -31,7 +31,7 @@ add_library(core STATIC
   src/infra/transport/graphql/native_graphql_sender.cpp
   src/infra/persistence/collection_repository.cpp
   src/infra/variables/domain_variable_resolver.cpp
-  src/infra/import_export/import_service.cpp
+  src/infra/import/import_service.cpp
   src/infra/platform/fs_util.cpp
   src/infra/platform/mem_probe.cpp
   src/infra/persistence/collection_store.cpp
@@ -48,11 +48,11 @@ add_library(core STATIC
   src/infra/transport/shared/sse_parser.cpp
   src/infra/transport/graphql/gql_operation.cpp
   src/infra/transport/graphql/gql_ws_protocol.cpp
-  src/infra/import_export/shell_tokenize.cpp
-  src/infra/import_export/curl_importer.cpp
-  src/infra/import_export/curl_export.cpp
-  src/infra/import_export/grpc_importer.cpp
-  src/infra/import_export/graphql_importer.cpp
+  src/infra/import/shell_tokenize.cpp
+  src/infra/import/curl_importer.cpp
+  src/infra/export/curl_export.cpp
+  src/infra/import/grpc_importer.cpp
+  src/infra/import/graphql_importer.cpp
   ${REFL_GEN_DIR}/reflection.pb.cc
   ${REFL_GEN_DIR}/reflection.grpc.pb.cc
 )

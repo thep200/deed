@@ -4,8 +4,8 @@
 #include <vector>
 
 #include "core/domain/common/dto_common.hpp" // surviving KeyValue DTO (parse scratch only)
-#include "core/infra/import_export/importer.hpp"
-#include "infra/import_export/shell_tokenize.hpp"
+#include "core/infra/import/importer.hpp"
+#include "infra/import/shell_tokenize.hpp"
 
 namespace core {
 

@@ -4,7 +4,7 @@
 #include <string>
 
 #include "core/domain/request/request_model.hpp"
-#include "infra/import_export/import_service.hpp"
+#include "infra/import/import_service.hpp"
 
 using namespace core::domain;
 using core::infra::ImportService;

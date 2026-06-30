@@ -11,7 +11,8 @@
 #include <vector>
 
 #include "core/infra/cache/cache.hpp"
-#include "core/infra/import_export/importer.hpp"
+#include "core/infra/export/exporter.hpp" // toCurl (export)
+#include "core/infra/import/importer.hpp"
 #include "core/infra/persistence/request_naming.hpp"
 #include "core/infra/persistence/stores.hpp"
 #include "core/infra/serialization/field_json.hpp"

@@ -26,8 +26,7 @@ public:
     virtual ImportParseResult parse(const std::string& input) const = 0;
 };
 
-// Export current request as a cURL (HTTP) / grpcurl (gRPC) command. Pass a RESOLVED domain model.
-std::string toCurl(const core::domain::RequestModel& resolved);
+// (Export — toCurl — lives in core/infra/export/exporter.hpp.)
 
 // cURL: tokenize the shell command line + map flags -> fields.
 class CurlImporter : public IImporter {

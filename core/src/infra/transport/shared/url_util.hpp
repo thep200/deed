@@ -1,5 +1,5 @@
 // url_util — shared URL utilities (percent-encoding decode, split query after '?').
-// Header-only (inline) -> usable in both import_export and sending without adding a CMake source.
+// Header-only (inline) -> usable in both infra/import and infra/transport without adding a CMake source.
 #pragma once
 
 #include <string>
