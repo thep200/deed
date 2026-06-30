@@ -2,7 +2,7 @@
 // parser; this is INFRA, so touching nlohmann here is allowed (the golden rule only forbids it in domain/app).
 #pragma once
 
-#include "codec/json_codec.hpp"
+#include "infra/serialization/json_codec.hpp"
 #include "core/domain/ports/driven/i_json_validator.hpp"
 
 namespace core::infra {

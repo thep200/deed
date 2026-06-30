@@ -1,4 +1,4 @@
-#include "codec/json_codec.hpp"
+#include "infra/serialization/json_codec.hpp"
 
 #include <stdexcept>
 #include <string>

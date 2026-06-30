@@ -10,11 +10,11 @@
 #include <string>
 #include <vector>
 
-#include "core/cache.hpp"
+#include "core/infra/cache/cache.hpp"
 #include "core/import_export/importer.hpp"
 #include "core/persistence/request_naming.hpp"
 #include "core/persistence/stores.hpp"
-#include "core/serialization/field_json.hpp"
+#include "core/infra/serialization/field_json.hpp"
 #include "core/variables/variable_resolver.hpp"
 #include "core/app/core_api_client.hpp" // domain stack facade (replaces Engine in these tests)
 #include "app/cache_config.hpp"         // detail::buildCacheConfig (core/src; white-box include path)

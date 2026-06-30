@@ -20,7 +20,7 @@ add_custom_command(
 # core — static lib, pure C++ (cross-platform). The UI links against this. README §3.
 add_library(core STATIC
   src/variables/variable_resolver.cpp
-  src/codec/json_codec.cpp
+  src/infra/serialization/json_codec.cpp
   src/infra/serialization/request_json_mapper.cpp
   src/infra/serialization/field_json.cpp
   src/app/send_request_saga.cpp
@@ -36,10 +36,10 @@ add_library(core STATIC
   src/infra/mem_probe.cpp
   src/persistence/collection_store.cpp
   src/persistence/request_naming.cpp
-  src/cache/ram_cache_driver.cpp
-  src/cache/disk_cache_driver.cpp
-  src/cache/response_cache.cpp
-  src/cache/cache_codec.cpp
+  src/infra/cache/ram_cache_driver.cpp
+  src/infra/cache/disk_cache_driver.cpp
+  src/infra/cache/response_cache.cpp
+  src/infra/cache/cache_codec.cpp
   src/persistence/session_store.cpp
   src/persistence/environment_store.cpp
   src/persistence/app_config_store.cpp

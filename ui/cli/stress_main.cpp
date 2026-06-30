@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-#include "core/cache.hpp"
+#include "core/infra/cache/cache.hpp"
 #include "core/import_export/importer.hpp"
 #include "core/persistence/stores.hpp" // CollectionStore (CRUD) — stress drives the store directly, no Engine
 #include "core/infra/mem_probe.hpp"

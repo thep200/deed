@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "core/cache.hpp"             // ResponseRecord (cache repo getResponse) — holds domain ApiResponse
+#include "core/infra/cache/cache.hpp"             // ResponseRecord (cache repo getResponse) — holds domain ApiResponse
 #include "core/domain/request/request_model.hpp" // domain RequestModel (collection repo load/save/create)
 #include "core/domain/response/api_error.hpp"    // domain ApiError (cache repo putError)
 #include "core/domain/response/api_response.hpp" // domain ApiResponse (cache repo putResponse)

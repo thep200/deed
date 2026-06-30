@@ -6,7 +6,7 @@
 
 #include "core/persistence/stores.hpp"
 #include "infra/fs_util.hpp"
-#include "codec/json_codec.hpp"
+#include "infra/serialization/json_codec.hpp"
 
 namespace fs = std::filesystem;
 

@@ -2,8 +2,8 @@
 
 #include <nlohmann/json.hpp>
 
-#include "codec/json_codec.hpp"               // core::codec::parseGuarded — JSON nesting-depth guard (H5)
-#include "core/serialization/field_json.hpp"  // core::serial — domain field codecs (headers/auth/body/...)
+#include "infra/serialization/json_codec.hpp"               // core::codec::parseGuarded — JSON nesting-depth guard (H5)
+#include "core/infra/serialization/field_json.hpp"  // core::serial — domain field codecs (headers/auth/body/...)
 
 namespace core::infra {
 namespace d = core::domain;

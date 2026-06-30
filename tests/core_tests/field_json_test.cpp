@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <string>
 
-#include "core/serialization/field_json.hpp"
+#include "core/infra/serialization/field_json.hpp"
 
 using namespace core;
 

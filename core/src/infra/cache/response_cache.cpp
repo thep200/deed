@@ -1,9 +1,9 @@
-#include "core/cache.hpp"
+#include "core/infra/cache/cache.hpp"
 
 #include <utility>   // std::move
 
-#include "cache/disk_cache_driver.hpp"
-#include "cache/ram_cache_driver.hpp"
+#include "infra/cache/disk_cache_driver.hpp"
+#include "infra/cache/ram_cache_driver.hpp"
 #include "infra/fs_util.hpp"
 
 namespace core {

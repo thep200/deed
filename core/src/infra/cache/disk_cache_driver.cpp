@@ -1,4 +1,4 @@
-#include "cache/disk_cache_driver.hpp"
+#include "infra/cache/disk_cache_driver.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -6,7 +6,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "cache/cache_codec.hpp"
+#include "infra/cache/cache_codec.hpp"
 #include "infra/fs_util.hpp"
 
 namespace fs = std::filesystem;

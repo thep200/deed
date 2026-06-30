@@ -7,7 +7,7 @@
 #include <mutex>
 #include <string>
 
-#include "core/cache.hpp"
+#include "core/infra/cache/cache.hpp"
 
 namespace core {
 

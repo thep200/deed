@@ -1,4 +1,4 @@
-// core/serialization/field_json.hpp — per-field JSON <-> DOMAIN value objects, for the editor's tabs
+// core/infra/serialization/field_json.hpp — per-field JSON <-> DOMAIN value objects, for the editor's tabs
 // (REFACTOR_SPEC P6, Phase E enabler). The domain replacement for the legacy core::fieldcodec: the UI shows
 // each tab (Params/Headers/Auth/Body/Config) as a JSON box; these helpers parse that box into domain VOs
 // (validated via Result) and format VOs back. nlohmann lives ONLY in the .cpp — this PUBLIC header (outside

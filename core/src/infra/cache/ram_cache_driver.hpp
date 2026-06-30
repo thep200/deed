@@ -7,7 +7,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "core/cache.hpp"
+#include "core/infra/cache/cache.hpp"
 
 namespace core {
 

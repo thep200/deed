@@ -1,4 +1,4 @@
-// core/cache.hpp — Two-tier response cache (RAM L1 -> Disk L2). RESPONSE_CACHE.md.
+// core/infra/cache/cache.hpp — Two-tier response cache (RAM L1 -> Disk L2). RESPONSE_CACHE.md.
 // Keyed by stable request `id`; each id keeps only the latest response. RAM is hard-capped
 // per CacheConfig (clamped from env+user, built in Engine). Driver abstracted via ICacheDriver
 // -> adding a backend (sqlite/mmap…) only needs an interface impl, NOT touching facade/Engine.

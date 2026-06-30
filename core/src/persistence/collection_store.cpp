@@ -8,7 +8,7 @@
 
 #include <variant>
 
-#include "codec/json_codec.hpp"                       // parseGuarded (depth guard) for lightweight metadata reads
+#include "infra/serialization/json_codec.hpp"                       // parseGuarded (depth guard) for lightweight metadata reads
 #include "core/persistence/request_naming.hpp"
 #include "core/persistence/stores.hpp"
 #include "infra/fs_util.hpp"

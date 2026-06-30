@@ -42,7 +42,7 @@
 #include <string>
 #include <vector>
 
-#include "core/serialization/field_json.hpp"   // core::serial — domain JSON field codec (replaces fieldcodec)
+#include "core/infra/serialization/field_json.hpp"   // core::serial — domain JSON field codec (replaces fieldcodec)
 #include "core/import_export/importer.hpp"
 #include "core/persistence/stores.hpp"
 #include "core/persistence/request_naming.hpp"
