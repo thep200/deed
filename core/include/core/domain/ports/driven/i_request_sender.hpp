@@ -1,4 +1,4 @@
-// core/domain/ports/i_request_sender.hpp — driven port: one impl per transport (REFACTOR_SPEC §6.3).
+// core/domain/ports/driven/i_request_sender.hpp — driven port: one impl per transport (REFACTOR_SPEC §6.3).
 // The sender receives the DOMAIN RequestModel and emits ResponseEvents through the sink; it NEVER sees JSON
 // (it translates to cpr/grpc/ws internally). Interactive streaming uses push/halfClose/close.
 #pragma once
@@ -6,8 +6,8 @@
 #include <string>
 
 #include "core/domain/common/result.hpp"
-#include "core/domain/ports/i_cancellation_token.hpp"
-#include "core/domain/ports/i_response_sink.hpp"
+#include "core/domain/ports/driven/i_cancellation_token.hpp"
+#include "core/domain/ports/driven/i_response_sink.hpp"
 #include "core/domain/request/request_model.hpp"
 #include "core/domain/ws/ws_message.hpp"
 

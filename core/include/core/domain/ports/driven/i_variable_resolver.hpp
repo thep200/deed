@@ -1,4 +1,4 @@
-// core/domain/ports/i_variable_resolver.hpp — substitute {{vars}} in a request (REFACTOR_SPEC §6.3).
+// core/domain/ports/driven/i_variable_resolver.hpp — substitute {{vars}} in a request (REFACTOR_SPEC §6.3).
 #pragma once
 
 #include <string>

@@ -3,7 +3,7 @@
 
 #include <atomic>
 
-#include "core/domain/ports/i_cancellation_token.hpp"
+#include "core/domain/ports/driven/i_cancellation_token.hpp"
 
 namespace core::app {
 

@@ -13,12 +13,12 @@
 #include "core/app/persistence_repositories.hpp" // env/session/app-config repository ports
 #include "core/streaming/stream_events.hpp"      // InteractionKind (send routing classification)
 #include "core/app/request_orchestrator.hpp"
-#include "core/domain/ports/i_api_client.hpp"
-#include "core/domain/ports/i_clock.hpp"
-#include "core/domain/ports/i_import_service.hpp"
-#include "core/domain/ports/i_json_validator.hpp"
-#include "core/domain/ports/i_request_sender.hpp"
-#include "core/domain/ports/i_variable_resolver.hpp"
+#include "core/domain/ports/driving/i_api_client.hpp"
+#include "core/domain/ports/driven/i_clock.hpp"
+#include "core/domain/ports/driving/i_import_service.hpp"
+#include "core/domain/ports/driven/i_json_validator.hpp"
+#include "core/domain/ports/driven/i_request_sender.hpp"
+#include "core/domain/ports/driven/i_variable_resolver.hpp"
 
 namespace core {
 class ThreadPool;

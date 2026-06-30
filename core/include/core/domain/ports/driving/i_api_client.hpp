@@ -1,4 +1,4 @@
-// core/domain/ports/i_api_client.hpp — driving port UI -> App (REFACTOR_SPEC §6.1).
+// core/domain/ports/driving/i_api_client.hpp — driving port UI -> App (REFACTOR_SPEC §6.1).
 // Only domain objects cross this boundary. Returns a RequestExecutionId handle to track/cancel/interact.
 #pragma once
 
@@ -9,8 +9,8 @@
 #include "core/domain/common/result.hpp"
 #include "core/domain/grpc/grpc_method.hpp"
 #include "core/domain/grpc/grpc_request.hpp"
-#include "core/domain/ports/exec_id.hpp"
-#include "core/domain/ports/i_request_observer.hpp"
+#include "core/domain/ports/driving/exec_id.hpp"
+#include "core/domain/ports/driven/i_request_observer.hpp"
 #include "core/domain/request/request_model.hpp"
 #include "core/domain/values/json_text.hpp"
 #include "core/domain/ws/ws_message.hpp"

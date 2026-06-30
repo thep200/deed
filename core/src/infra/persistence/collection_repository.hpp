@@ -6,7 +6,7 @@
 #include <memory>
 #include <string>
 
-#include "core/domain/ports/i_collection_repository.hpp"
+#include "core/domain/ports/driven/i_collection_repository.hpp"
 #include "core/persistence/stores.hpp"
 
 namespace core::infra {

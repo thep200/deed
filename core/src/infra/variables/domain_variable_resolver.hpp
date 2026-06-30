@@ -4,7 +4,7 @@
 // pure resolver, then bridging back. Reuses battle-tested logic instead of re-implementing it.
 #pragma once
 
-#include "core/domain/ports/i_variable_resolver.hpp"
+#include "core/domain/ports/driven/i_variable_resolver.hpp"
 
 namespace core::infra {
 

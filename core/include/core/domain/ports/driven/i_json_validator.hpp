@@ -1,4 +1,4 @@
-// core/domain/ports/i_json_validator.hpp — JSON validity check as a port (REFACTOR_SPEC §6.3).
+// core/domain/ports/driven/i_json_validator.hpp — JSON validity check as a port (REFACTOR_SPEC §6.3).
 // The domain never parses JSON itself; the saga asks this port to validate a Raw{Json}/gRPC message body.
 #pragma once
 

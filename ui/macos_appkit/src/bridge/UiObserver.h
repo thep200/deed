@@ -13,7 +13,7 @@
 #include <string>
 
 #include "bridge/CoreBridge.h" // CoreResponseSink + legacy DTOs + StreamStatus
-#include "core/domain/ports/i_request_observer.hpp"
+#include "core/domain/ports/driven/i_request_observer.hpp"
 #include "core/domain/response/response_event.hpp"
 
 class UiObserver final : public core::domain::IRequestObserver {

@@ -10,7 +10,7 @@
 #include <memory>
 #include <mutex>
 
-#include "core/domain/ports/i_request_sender.hpp"
+#include "core/domain/ports/driven/i_request_sender.hpp"
 
 namespace core {
 class CancelToken;

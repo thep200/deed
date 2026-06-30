@@ -8,7 +8,7 @@
 #include <mutex>
 #include <string>
 
-#include "core/domain/ports/i_request_sender.hpp"
+#include "core/domain/ports/driven/i_request_sender.hpp"
 #include "infra/senders/native_http_sender.hpp"
 
 namespace core {

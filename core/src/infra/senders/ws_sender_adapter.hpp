@@ -13,7 +13,7 @@
 #include <mutex>
 #include <string>
 
-#include "core/domain/ports/i_request_sender.hpp"
+#include "core/domain/ports/driven/i_request_sender.hpp"
 #include "sending/ws_sender.hpp" // WsConfig (base from .env) — internal core/src header
 
 namespace core {

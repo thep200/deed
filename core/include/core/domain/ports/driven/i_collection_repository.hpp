@@ -1,4 +1,4 @@
-// core/domain/ports/i_collection_repository.hpp — persistence as a port returning DOMAIN objects
+// core/domain/ports/driven/i_collection_repository.hpp — persistence as a port returning DOMAIN objects
 // (REFACTOR_SPEC §6.3/§8.3). The repository hides JSON + on-disk layout; callers see only domain values.
 #pragma once
 

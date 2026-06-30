@@ -1,7 +1,7 @@
 // core/src/infra/platform/system_clock.hpp — IClock backed by std::chrono::steady_clock (REFACTOR_SPEC §8).
 #pragma once
 
-#include "core/domain/ports/i_clock.hpp"
+#include "core/domain/ports/driven/i_clock.hpp"
 
 namespace core::infra {
 

@@ -3,7 +3,7 @@
 #pragma once
 
 #include "codec/json_codec.hpp"
-#include "core/domain/ports/i_json_validator.hpp"
+#include "core/domain/ports/driven/i_json_validator.hpp"
 
 namespace core::infra {
 

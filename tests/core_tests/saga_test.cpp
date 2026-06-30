@@ -9,11 +9,11 @@
 
 #include "core/app/request_orchestrator.hpp"
 #include "core/app/send_request_saga.hpp"
-#include "core/domain/ports/i_clock.hpp"
-#include "core/domain/ports/i_json_validator.hpp"
-#include "core/domain/ports/i_request_observer.hpp"
-#include "core/domain/ports/i_request_sender.hpp"
-#include "core/domain/ports/i_response_cache.hpp"
+#include "core/domain/ports/driven/i_clock.hpp"
+#include "core/domain/ports/driven/i_json_validator.hpp"
+#include "core/domain/ports/driven/i_request_observer.hpp"
+#include "core/domain/ports/driven/i_request_sender.hpp"
+#include "core/domain/ports/driven/i_response_cache.hpp"
 #include "core/domain/request/request_model.hpp"
 
 using namespace core::domain;

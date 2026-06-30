@@ -2,7 +2,7 @@
 // (REFACTOR_SPEC P6). Wraps CurlImporter/GrpcImporter/GraphQlImporter + the request bridge.
 #pragma once
 
-#include "core/domain/ports/i_import_service.hpp"
+#include "core/domain/ports/driving/i_import_service.hpp"
 #include "core/import_export/importer.hpp"
 
 namespace core::infra {

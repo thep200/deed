@@ -1,4 +1,4 @@
-// core/domain/ports/i_response_cache.hpp — store/fetch the last response per request (REFACTOR_SPEC §6.3/§8.4).
+// core/domain/ports/driven/i_response_cache.hpp — store/fetch the last response per request (REFACTOR_SPEC §6.3/§8.4).
 #pragma once
 
 #include <optional>

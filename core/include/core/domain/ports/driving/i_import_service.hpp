@@ -1,4 +1,4 @@
-// core/domain/ports/i_import_service.hpp — detect + parse a pasted command into a domain RequestModel
+// core/domain/ports/driving/i_import_service.hpp — detect + parse a pasted command into a domain RequestModel
 // (REFACTOR_SPEC P6, replaces the UI's direct use of Engine import). Pure: no network, no JSON outward.
 #pragma once
 
