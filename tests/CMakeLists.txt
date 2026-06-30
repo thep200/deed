@@ -20,6 +20,11 @@ add_test(NAME domain_tests COMMAND domain_tests)
 add_test(NAME domain_purity
          COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/scripts/check_domain_purity.sh ${CMAKE_SOURCE_DIR})
 
+# RESTRUCTURE_PLAN §5: architecture gate — fail if legacy parallel dirs re-appear, domain depends on
+# app/infra, or transport libs leak outside src/infra/transport. Locks the 3-layer cleanup in place.
+add_test(NAME layering_gate
+         COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/scripts/check_layering.sh ${CMAKE_SOURCE_DIR})
+
 # REFACTOR_SPEC P5/P6 e2e: real HTTP + GraphQL + WebSocket through the new domain stack (CoreApiClient),
 # verified against the Go test server (tests/testserver, stdlib-only, builds offline). One runner starts the
 # server once and drives both binaries (HTTP/GraphQL via http_e2e, WebSocket via ws_e2e). SKIPs if no Go.
