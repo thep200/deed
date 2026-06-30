@@ -166,11 +166,11 @@ NSString *const StrGrpcTagServerStream = @"[S-> C]";
 NSString *const StrGrpcTagClientStream = @"[S <-C]";
 NSString *const StrGrpcTagBidiStream = @"[S<->C]";
 
-NSString *const StrFmtReqElapsed = @"%ldms";                       // live: elapsed only (unary in-flight)
-NSString *const StrFmtStreamLive = @"%ldms | %@ | %llu events";    // live: elapsed | size | events (streaming)
-NSString *const StrFmtStreamOk = @"OK%@ | %@ | %llu events | %lldms";   // trunc | size | events | ms
+NSString *const StrFmtReqElapsed = @"%@";                          // live: elapsed only (unary in-flight); %@ = elapsed text
+NSString *const StrFmtStreamLive = @"%@ | %@ | %llu events";       // live: elapsed | size | events (streaming)
+NSString *const StrFmtStreamOk = @"OK%@ | %@ | %llu events | %@";   // trunc | size | events | elapsed text
 NSString *const StrStreamTruncated = @" (truncated)";
-NSString *const StrFmtStreamCancelled = @"%@ | %@ | %llu events";       // Cancelled | size | events
+NSString *const StrFmtStreamCancelled = @"%@ | %@ | %llu events | %@";   // Cancelled | size | events | elapsed text
 NSString *const StrFmtStreamError = @"%@ | %d | %@";
 NSString *const StrStreamKindError = @"Error";
 NSString *const StrStreamKindTimeout = @"Timeout";

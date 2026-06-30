@@ -91,10 +91,13 @@ bool looksBase64(const std::string& s) {
 
 // Decode base64 (skip unknown chars/whitespace; stop at '='). Used to split Basic user:pass.
 std::string base64Decode(const std::string& in) {
-    static const std::string chars =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::vector<int> T(256, -1);
-    for (int i = 0; i < 64; i++) T[(unsigned char)chars[i]] = i;
+    // Decode table built ONCE (was a 256-entry vector alloc+fill on every call).
+    static const std::vector<int> T = [] {
+        const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::vector<int> t(256, -1);
+        for (int i = 0; i < 64; i++) t[(unsigned char)chars[i]] = i;
+        return t;
+    }();
     std::string out;
     int val = 0, bits = -8;
     for (unsigned char c : in) {

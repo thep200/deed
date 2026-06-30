@@ -152,7 +152,7 @@
     // dropdown open re-fetches it (requirement: re-fetch starting from the failed send).
     if ([self requestType] == core::RequestType::Grpc) _grpcMethodsFetched = NO;
     [self finishSending];
-    [self displayErrorKind:err.kind message:N(err.message)];
+    [self displayErrorKind:err.kind message:N(err.message) elapsedMs:[self measuredElapsedMs]];
     [self toastWarn:[NSString stringWithFormat:@"%@: %@", N(core::domain::toString(err.kind)), N(err.message)]];
     [self cacheErrorAsync:err forId:_currentId];       // cache errors too, to restore the exact state (§7)
 }
@@ -202,11 +202,15 @@
                                     status == core::StreamStatus::Cancelled)
                                        ? core::StreamStatus::Ok : status;
 
+    // A user-pressed Cancel/Disconnect settles the stream with elapsedMs==0 (the sender reports no duration);
+    // fall back to the UI's measured elapsed so the status shows the REAL time instead of 0ms.
+    long long effElapsedMs = (elapsedMs > 0) ? elapsedMs : [self measuredElapsedMs];
+
     // Build a neutral domain ApiResponse from the assembled array so the normal tab/cache pipeline takes over.
     core::domain::ApiResponse resp;
     resp.statusCode = 0;
     resp.body = S(_respText.string);   // the live doc already holds the valid [ … ] array (H3)
-    resp.elapsed = std::chrono::milliseconds(elapsedMs);
+    resp.elapsed = std::chrono::milliseconds(effElapsedMs);
 
     _lastResp = resp;
     _hasResp = YES;
@@ -220,11 +224,12 @@
     NSColor *color;
     NSString *trunc = truncated ? StrStreamTruncated : @"";
     if (effStatus == core::StreamStatus::Ok) {
-        line = [NSString stringWithFormat:StrFmtStreamOk, trunc, sizeStr, (unsigned long long)events, elapsedMs];
+        line = [NSString stringWithFormat:StrFmtStreamOk, trunc, sizeStr, (unsigned long long)events,
+                                          [self elapsedText:effElapsedMs]];
         color = [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1.0];
     } else if (effStatus == core::StreamStatus::Cancelled) {
         line = [NSString stringWithFormat:StrFmtStreamCancelled, StrStatusCancelled, sizeStr,
-                                          (unsigned long long)events];
+                                          (unsigned long long)events, [self elapsedText:effElapsedMs]];
         color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
     } else {
         NSString *kind = (effStatus == core::StreamStatus::Timeout) ? StrStreamKindTimeout : StrStreamKindError;
@@ -241,11 +246,14 @@
 }
 
 // Display the error state in the response pane (shared by new errors and cached errors).
-- (void)displayErrorKind:(core::domain::ErrorKind)kind message:(NSString *)msg {
+- (void)displayErrorKind:(core::domain::ErrorKind)kind message:(NSString *)msg elapsedMs:(long long)elapsedMs {
     NSString *k = N(core::domain::toString(kind));
     NSString *statusText = k;                                       // drop the ✕ before the error name
     if (kind == core::domain::ErrorKind::Cancelled) statusText = StrStatusCancelled;
     else if (kind == core::domain::ErrorKind::Network) statusText = StrStatusNetworkError;   // network error -> report clearly
+    // Show how long elapsed before the error/cancel (e.g. "Cancelled | 1.20s"). elapsedMs<=0 (cached errors,
+    // which carry no live duration) -> status only, no time.
+    if (elapsedMs > 0) statusText = [NSString stringWithFormat:@"%@ | %@", statusText, [self elapsedText:elapsedMs]];
     _statusLabel.stringValue = statusText;
     _statusLabel.textColor = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
     _hasResp = NO;
@@ -329,19 +337,35 @@
 // One live status frame: elapsed ms always; for streams also the running size + event count.
 - (void)liveTick {
     if (!_sending) return;   // defensive: never paint after the request settled
-    long ms = (long)((NSProcessInfo.processInfo.systemUptime - _reqStartTime) * 1000.0);
-    if (ms < 0) ms = 0;
+    NSString *t = [self elapsedText:[self measuredElapsedMs]];
     if (_streaming)
-        _statusLabel.stringValue = [NSString stringWithFormat:StrFmtStreamLive, ms,
+        _statusLabel.stringValue = [NSString stringWithFormat:StrFmtStreamLive, t,
                                     [self humanSize:_streamBytes], (unsigned long long)_streamEvents];
     else
-        _statusLabel.stringValue = [NSString stringWithFormat:StrFmtReqElapsed, ms];
+        _statusLabel.stringValue = [NSString stringWithFormat:StrFmtReqElapsed, t];
     _statusLabel.textColor = [NSColor blackColor];
 }
 
 - (NSString *)humanSize:(int64_t)bytes {
     return (bytes >= 1024) ? [NSString stringWithFormat:@"%.1fkb", bytes / 1024.0]
                            : [NSString stringWithFormat:@"%lldb", (long long)bytes];
+}
+
+// Elapsed-time display: milliseconds up to 1000ms, then switch to WHOLE seconds, no decimals
+// (e.g. 850ms -> "850ms", 1234ms -> "1s", 2999ms -> "2s"). Single source so the live ticker +
+// final/stream/error status all format alike.
+- (NSString *)elapsedText:(long long)ms {
+    if (ms < 0) ms = 0;
+    if (ms > 1000) return [NSString stringWithFormat:@"%llds", ms / 1000];
+    return [NSString stringWithFormat:@"%lldms", ms];
+}
+
+// Elapsed measured by the UI's own monotonic start mark (set in beginRequestTiming, kept after
+// finishSending). Used when the settled response/error carries no duration — e.g. a user-pressed Cancel,
+// where the sender reports 0ms — so the status shows the REAL time instead of 0ms.
+- (long long)measuredElapsedMs {
+    long long ms = (long long)((NSProcessInfo.processInfo.systemUptime - _reqStartTime) * 1000.0);
+    return ms < 0 ? 0 : ms;
 }
 
 // Compute the display buffers (format JSON body/headers/cookie) — the HEAVY part, does NOT touch UI ->
@@ -431,7 +455,8 @@
     int64_t startMs = (endMs > 0) ? endMs - (int64_t)elapsedMs : 0;   // derive the start mark
     NSString *range = [NSString stringWithFormat:@"%@ - %@",
                        [self clockFromEpochMs:startMs], [self clockFromEpochMs:endMs]];
-    _statusLabel.stringValue = [NSString stringWithFormat:@"%@ | %@ | %ldms | %@", code, size, elapsedMs, range];
+    _statusLabel.stringValue = [NSString stringWithFormat:@"%@ | %@ | %@ | %@", code, size,
+                                                          [self elapsedText:elapsedMs], range];
     _statusLabel.textColor = (r.statusCode >= 400) ? [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0]
                                                    : [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1.0];
 }

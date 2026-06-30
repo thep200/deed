@@ -82,6 +82,12 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     std::optional<core::domain::RequestModel> _model;
     std::string _root;
     std::string _currentRel;
+    std::map<std::string, std::string> _loadedBodyDrafts; // per-mode body drafts read OFF-MAIN during load
+                                                          // (populateEditorsFromModel consumes; no main-thread reparse)
+    // §C3 autosave skip: last-persisted model + drafts. autosaveCurrent compares the freshly-synced state to
+    // these and writes ONLY when something changed (content-based, so no missed-mutation data loss).
+    std::optional<core::domain::RequestModel> _savedModel;
+    std::map<std::string, std::string> _savedDrafts;
     std::string _currentId;   // id of open request (stable identifier)
     uint64_t _currentHandle;
     BOOL _hasRequest;
@@ -226,7 +232,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)refreshTreeLevel:(NSString *)parentRel;
 - (void)reselectTreeByRel:(NSString *)rel;   // reselect node by relPath after update (no auto-load)
 - (TreeItem *)loadedFolderItemForRel:(NSString *)rel;
-- (void)mergeScanLevel:(const std::string &)rel into:(NSMutableArray<TreeItem *> *)items;
+- (BOOL)mergeScanLevel:(const std::string &)rel into:(NSMutableArray<TreeItem *> *)items;
 // §T3: remap relPath prefix in _expandedFolders on folder rename/move to keep expansion state.
 - (void)remapExpandedFoldersFrom:(NSString *)oldRel to:(NSString *)newRel;
 - (void)treeClicked:(id)sender;
@@ -297,7 +303,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)onStreamChunk:(NSString *)chunk events:(uint64_t)totalEvents;
 - (void)onStreamClose:(core::StreamStatus)status code:(int)code message:(NSString *)message
                events:(uint64_t)events elapsedMs:(long long)elapsedMs truncated:(BOOL)truncated;
-- (void)displayErrorKind:(core::domain::ErrorKind)kind message:(NSString *)msg;
+- (void)displayErrorKind:(core::domain::ErrorKind)kind message:(NSString *)msg elapsedMs:(long long)elapsedMs;
 - (void)cacheResponseAsync:(const core::domain::ApiResponse &)resp forId:(const std::string &)reqId;
 - (void)cacheErrorAsync:(const core::domain::ApiError &)err forId:(const std::string &)reqId;
 - (void)finishSending;
@@ -307,6 +313,8 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)stopLiveTimer;
 - (void)liveTick;
 - (NSString *)humanSize:(int64_t)bytes;   // "1.2kb" / "345b"
+- (NSString *)elapsedText:(long long)ms;  // "850ms" / "1.23s" (>1000ms -> seconds)
+- (long long)measuredElapsedMs;           // UI's own monotonic elapsed (for cancel: real time, not 0ms)
 - (void)rebuildResponseBuffers;
 - (void)rebuildResponseBuffersAsync;   // U2: format response off the main thread
 - (NSArray<NSString *> *)computeResponseBuffersFor:(const core::domain::ApiResponse &)r

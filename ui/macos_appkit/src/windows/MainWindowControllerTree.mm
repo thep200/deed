@@ -168,11 +168,16 @@
 
 // Rescan one level (rel; "" = root) then MERGE into `items` in place: keep old TreeItems matching by
 // relPath (preserving loaded children + that branch's open state), create new only for new entries.
-- (void)mergeScanLevel:(const std::string &)rel into:(NSMutableArray<TreeItem *> *)items {
-    if (!_apiClient) return;
+// Returns YES if the child SET/ORDER changed (item added/removed/reordered) -> the caller must re-query
+// children (reloadChildren:YES). NO = same items in same order (only leaf metadata refreshed in place) ->
+// the caller can just redraw the existing rows, avoiding a recursive subtree rebuild (perf — §C2).
+- (BOOL)mergeScanLevel:(const std::string &)rel into:(NSMutableArray<TreeItem *> *)items {
+    if (!_apiClient) return NO;
     std::vector<core::TreeNode> nodes;
     try { nodes = _apiClient->collection().scanLevel(rel); }
-    catch (const std::exception &e) { [self toastWarn:N(e.what())]; return; }
+    catch (const std::exception &e) { [self toastWarn:N(e.what())]; return NO; }
+    NSMutableArray<NSString *> *oldOrder = [NSMutableArray arrayWithCapacity:items.count];
+    for (TreeItem *t in items) [oldOrder addObject:(t.relPath ?: @"")];
     NSMutableDictionary<NSString *, TreeItem *> *byRel = [NSMutableDictionary dictionary];
     for (TreeItem *t in items) if (t.relPath) byRel[t.relPath] = t;
     NSMutableArray<TreeItem *> *merged = [NSMutableArray arrayWithCapacity:nodes.size()];
@@ -192,23 +197,41 @@
         }
     }
     [items setArray:merged];
+    if (merged.count != oldOrder.count) return YES;
+    for (NSUInteger i = 0; i < merged.count; ++i)
+        if (![(merged[i].relPath ?: @"") isEqualToString:oldOrder[i]]) return YES;
+    return NO;
 }
 
 // Incremental update for one changed level (§T1) — does NOT tear down the whole tree.
 - (void)refreshTreeLevel:(NSString *)parentRel {
     if (!_apiClient) return;
     if (parentRel.length == 0) {                 // mutation at ROOT
-        [self mergeScanLevel:"" into:_roots];
-        [_tree reloadData];
-        [self restoreExpansion:_roots];          // expandItem -> NO re-scan (TreeItem keeps childrenLoaded)
+        BOOL changed = [self mergeScanLevel:"" into:_roots];
+        if (changed) {
+            [_tree reloadData];                  // structure changed -> rebuild + restore open state
+            [self restoreExpansion:_roots];      // expandItem -> NO re-scan (TreeItem keeps childrenLoaded)
+        } else {
+            for (TreeItem *c in _roots) [_tree reloadItem:c reloadChildren:NO]; // metadata only -> redraw rows
+        }
         return;
     }
     TreeItem *f = [self loadedFolderItemForRel:parentRel];
     if (!f) {                                    // parent folder not loaded (closed) -> lazy load on open
         return;                                  // nothing to do: next expand will scanLevel
     }
-    if (f.childrenLoaded) [self mergeScanLevel:f.relPath.UTF8String into:f.children];
-    [_tree reloadItem:f reloadChildren:YES];     // re-query only f's CHILDREN, other branches intact
+    if (!f.childrenLoaded) {                      // collapsed -> children re-queried on next expand; cheap mark
+        [_tree reloadItem:f reloadChildren:YES];
+        return;
+    }
+    // §C2: only re-query (and rebuild) f's whole subtree when the child set/order changed; otherwise just
+    // redraw the existing direct rows in place — avoids tearing down every visible descendant row view.
+    BOOL changed = [self mergeScanLevel:f.relPath.UTF8String into:f.children];
+    if (changed) {
+        [_tree reloadItem:f reloadChildren:YES]; // re-query only f's CHILDREN, other branches intact
+    } else {
+        for (TreeItem *c in f.children) [_tree reloadItem:c reloadChildren:NO];
+    }
 }
 
 // Remap old->new relPath prefix in _expandedFolders (folder rename/move) — keep open state (§T3).

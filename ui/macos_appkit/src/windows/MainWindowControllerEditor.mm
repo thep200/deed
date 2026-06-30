@@ -40,14 +40,19 @@ static NSArray<NSString *> *BodyAllModes(void);
         if (!s || !s->_apiClient) return;
         std::optional<core::domain::RequestModel> model;
         std::string err;
-        try { model = s->_apiClient->collection().loadRequest(relCopy.UTF8String); }  // I/O OFF main
-        catch (const std::exception &e) { err = e.what(); }
+        std::map<std::string, std::string> drafts;
+        try {
+            model = s->_apiClient->collection().loadRequest(relCopy.UTF8String);  // I/O OFF main
+            drafts = s->_apiClient->collection().loadBodyDrafts(relCopy.UTF8String); // OFF main too (was re-read on main)
+        } catch (const std::exception &e) { err = e.what(); }
         __block std::optional<core::domain::RequestModel> modelCopy = std::move(model);
         __block std::string errCopy = std::move(err);
+        __block std::map<std::string, std::string> draftsCopy = std::move(drafts);
         dispatch_async(dispatch_get_main_queue(), ^{
             MainWindowController *s2 = ws;
             if (!s2 || token != s2->_loadReqSeq) return;   // a different request was selected -> drop stale result
             if (!modelCopy) { [s2 toastWarn:N(errCopy.empty() ? "load failed" : errCopy)]; return; }
+            s2->_loadedBodyDrafts = std::move(draftsCopy);  // consumed by populateEditorsFromModel (no main reparse)
             [s2 applyLoadedModel:*modelCopy rel:relCopy];
         });
     });
@@ -82,6 +87,9 @@ static NSArray<NSString *> *BodyAllModes(void);
         _hasResp = NO;
         [self setRequestType:model.type()];
         [self populateEditorsFromModel];
+        // §C3 baseline: the just-loaded model + drafts ARE the on-disk state -> autosave skips until edited.
+        _savedModel = _model;
+        _savedDrafts = [self collectBodyDrafts];
         [self setHasRequest:YES];
         _apiClient->session().saveLastOpened(_currentRel);
         [self updateTitle];
@@ -111,7 +119,7 @@ static NSArray<NSString *> *BodyAllModes(void);
             MainWindowController *s2 = ws;
             if (!s2 || s2->_currentId != idCopy) return;   // request switched -> drop stale result
             if (recCopy.isError) {
-                [s2 displayErrorKind:recCopy.errorKind message:N(recCopy.errorMessage)];
+                [s2 displayErrorKind:recCopy.errorKind message:N(recCopy.errorMessage) elapsedMs:0]; // cached: no live time
             } else {
                 s2->_lastResp = recCopy.response;   // cache speaks domain now (REFACTOR_SPEC D)
                 s2->_hasResp = YES;
@@ -124,14 +132,12 @@ static NSArray<NSString *> *BodyAllModes(void);
 
 - (void)populateEditorsFromModel {
     [_reqBuffers removeAllObjects];
-    // Seed per-mode body drafts from disk (UI-only "_uiBodyDrafts") so content the user typed in NON-active
-    // body modes survives save/reload + switching requests. The ACTIVE mode below overlays from the domain
-    // model (authoritative). A fresh/non-HTTP request -> empty (loadBodyDrafts returns {} on a missing key).
+    // Seed per-mode body drafts (UI-only "_uiBodyDrafts") so content the user typed in NON-active body modes
+    // survives save/reload + switching requests. The drafts were read OFF-MAIN during the request load
+    // (_loadedBodyDrafts) — do NOT re-read+parse the file here on the main thread. The ACTIVE mode below
+    // overlays from the domain model (authoritative).
     _bodyDrafts = [NSMutableDictionary dictionary];
-    if (!_currentRel.empty() && _apiClient) {
-        for (auto &kv : _apiClient->collection().loadBodyDrafts(_currentRel))
-            _bodyDrafts[N(kv.first)] = N(kv.second);
-    }
+    for (auto &kv : _loadedBodyDrafts) _bodyDrafts[N(kv.first)] = N(kv.second);
     namespace d = core::domain;
     if (!_model) { _reqText.string = @""; return; }
     const d::RequestModel &m = *_model;
@@ -323,12 +329,18 @@ static NSArray<NSString *> *BodyAllModes(void);
     if (![self resyncCurrentRelById]) return;     // request deleted/path-changed -> don't write back the old path
     if (![self syncModelFromEditors:YES]) { [self toastWarn:StrToastAutosaveFailed]; return; }
     if (!_model) return;
-    try { _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model, [self collectBodyDrafts]);  // filename may change (sync §4)
+    // Perf (§C3): skip the disk write + tree refresh + reselect when nothing actually changed since
+    // load/last-save. Compares the SYNCED model + body drafts (content-based, not a dirty flag) -> can't
+    // miss a mutation and lose data; just avoids re-writing + rebuilding the tree on every request switch.
+    std::map<std::string, std::string> drafts = [self collectBodyDrafts];
+    if (_savedModel && *_savedModel == *_model && _savedDrafts == drafts) return;
+    try { _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model, drafts);  // filename may change (sync §4)
           _apiClient->session().saveLastOpened(_currentRel);
           // §T1: autosave touches only 1 request -> update its containing level, do NOT re-scan root + reloadData the whole tree.
           NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];
           [self refreshTreeLevel:parentRel];
-          [self reselectTreeByRel:N(_currentRel)]; }   // keep highlight (filename may change due to sync §4)
+          [self reselectTreeByRel:N(_currentRel)];     // keep highlight (filename may change due to sync §4)
+          _savedModel = *_model; _savedDrafts = std::move(drafts); }   // snapshot the just-persisted state
     catch (...) {}
 }
 
@@ -795,11 +807,13 @@ static NSString *GqlImportLabel(NSInteger kind) {
     if (![self resyncCurrentRelById]) { [self toastWarn:StrToastRequestGone]; return; }
     if (![self syncModelFromEditors:NO] || !_model) return;
     try {
-        _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model, [self collectBodyDrafts]);  // filename syncs to method/name (§4)
+        std::map<std::string, std::string> drafts = [self collectBodyDrafts];
+        _currentRel = _apiClient->collection().saveRequest(_currentRel, *_model, drafts);  // filename syncs to method/name (§4)
         _apiClient->session().saveLastOpened(_currentRel);
         NSString *parentRel = [N(_currentRel) stringByDeletingLastPathComponent];  // §A4: incremental update
         [self refreshTreeLevel:parentRel];
         [self reselectTreeByRel:N(_currentRel)];
+        _savedModel = _model; _savedDrafts = std::move(drafts);   // §C3: in sync with disk -> autosave skips
         [self toastOk:StrToastSaved];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }

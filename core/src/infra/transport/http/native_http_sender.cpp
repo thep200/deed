@@ -408,9 +408,12 @@ d::Status NativeHttpSender::execute(const d::RequestModel &model, d::IResponseSi
   resp.elapsed = elapsed;
   for (const auto &kv : r.header) {
     resp.headers.push_back({kv.first, kv.second});
-    std::string k = kv.first;
-    for (auto &c : k) c = (char)::tolower((unsigned char)c);
-    if (k == "set-cookie") resp.cookies.push_back(parseSetCookie(kv.second));
+    // Case-insensitive "set-cookie" check WITHOUT allocating a lowercased copy of every header name.
+    static const std::string kSetCookie = "set-cookie";
+    bool isSetCookie = kv.first.size() == kSetCookie.size();
+    for (size_t i = 0; isSetCookie && i < kSetCookie.size(); ++i)
+      isSetCookie = (char)::tolower((unsigned char)kv.first[i]) == kSetCookie[i];
+    if (isSetCookie) resp.cookies.push_back(parseSetCookie(kv.second));
   }
   sink.emit(d::ResponseEvent(d::EvCompleted{std::move(resp)}));
   return d::ok();

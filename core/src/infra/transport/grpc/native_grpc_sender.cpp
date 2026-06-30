@@ -77,6 +77,7 @@ std::string byteBufferToString(const grpc::ByteBuffer &bb) {
   std::vector<grpc::Slice> slices;
   if (!bb.Dump(&slices).ok()) return {};
   std::string out;
+  out.reserve(bb.Length()); // one allocation for the whole message (avoids per-slice reallocs)
   for (const auto &s : slices) out.append(reinterpret_cast<const char *>(s.begin()), s.size());
   return out;
 }
@@ -113,10 +114,14 @@ bool splitMessages(const std::string &message, std::vector<std::string> &out, st
 bool serializeMessages(const std::vector<std::string> &jsons, const gp::Descriptor *type,
                        gp::DynamicMessageFactory &factory, std::vector<std::string> &wire, std::string &err) {
   wire.reserve(jsons.size());
+  // Resolve the prototype + allocate one scratch message ONCE, then Clear()+reparse per element
+  // (hoisted out of the loop; the old code re-fetched the prototype and heap-allocated a message per msg).
+  const gp::Message *proto = factory.GetPrototype(type);
+  std::unique_ptr<gp::Message> rm(proto->New());
+  gp::util::JsonParseOptions popts;
+  popts.ignore_unknown_fields = true;
   for (size_t i = 0; i < jsons.size(); ++i) {
-    std::unique_ptr<gp::Message> rm(factory.GetPrototype(type)->New());
-    gp::util::JsonParseOptions popts;
-    popts.ignore_unknown_fields = true;
+    rm->Clear();
     auto st = gp::util::JsonStringToMessage(jsons[i], rm.get(), popts);
     if (!st.ok()) {
       err = "invalid message #" + std::to_string(i) + " for " + std::string(type->full_name()) + ": " +
