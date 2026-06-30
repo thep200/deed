@@ -9,8 +9,8 @@
 #include <variant>
 
 #include "infra/serialization/json_codec.hpp"                       // parseGuarded (depth guard) for lightweight metadata reads
-#include "core/persistence/request_naming.hpp"
-#include "core/persistence/stores.hpp"
+#include "core/infra/persistence/request_naming.hpp"
+#include "core/infra/persistence/stores.hpp"
 #include "infra/fs_util.hpp"
 #include "infra/serialization/request_json_mapper.hpp" // NATIVE JSON <-> domain RequestModel (REFACTOR_SPEC D)
 

@@ -17,10 +17,10 @@
 #include <vector>
 
 #include "core/infra/cache/cache.hpp"
-#include "core/import_export/importer.hpp"
-#include "core/persistence/stores.hpp" // CollectionStore (CRUD) — stress drives the store directly, no Engine
+#include "core/infra/import_export/importer.hpp"
+#include "core/infra/persistence/stores.hpp" // CollectionStore (CRUD) — stress drives the store directly, no Engine
 #include "core/infra/mem_probe.hpp"
-#include "core/variables/variable_resolver.hpp"
+#include "core/infra/variables/variable_resolver.hpp"
 
 #include "infra/thread_pool.hpp"   // core/src internal (header-only) — via the target's include dir
 

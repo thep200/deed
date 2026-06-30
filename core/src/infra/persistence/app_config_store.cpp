@@ -1,6 +1,6 @@
 #include <nlohmann/json.hpp>
 
-#include "core/persistence/stores.hpp"
+#include "core/infra/persistence/stores.hpp"
 #include "infra/fs_util.hpp"
 #include "infra/serialization/json_codec.hpp"
 

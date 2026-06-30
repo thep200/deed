@@ -43,9 +43,9 @@
 #include <vector>
 
 #include "core/infra/serialization/field_json.hpp"   // core::serial — domain JSON field codec (replaces fieldcodec)
-#include "core/import_export/importer.hpp"
-#include "core/persistence/stores.hpp"
-#include "core/persistence/request_naming.hpp"
+#include "core/infra/import_export/importer.hpp"
+#include "core/infra/persistence/stores.hpp"
+#include "core/infra/persistence/request_naming.hpp"
 #include "core/env_config.hpp"           // TreeNode/AppConfig/Environment/Session + RequestType (survive)
 #include "core/domain/response/interaction.hpp" // StreamStatus / InteractionKind (survive types.hpp removal)
 #include "core/app/core_api_client.hpp"   // REFACTOR_SPEC P6: new send path (IApiClient)

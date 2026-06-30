@@ -6,7 +6,7 @@
 #include <variant>
 #include <vector>
 
-#include "core/variables/variable_resolver.hpp"
+#include "core/infra/variables/variable_resolver.hpp"
 
 // Native {{var}} resolution on the DOMAIN RequestModel — no legacy struct / request_bridge. Substitutes each
 // string VALUE through the proven pure core::VariableResolver, then rebuilds the immutable VOs. Keys/names are

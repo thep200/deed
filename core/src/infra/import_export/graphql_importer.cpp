@@ -3,7 +3,7 @@
 // from cURL.)
 #include <cctype>
 
-#include "core/import_export/importer.hpp"
+#include "core/infra/import_export/importer.hpp"
 
 namespace core {
 

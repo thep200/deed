@@ -15,7 +15,7 @@
 #include "core/domain/response/api_error.hpp"    // domain ApiError (cache repo putError)
 #include "core/domain/response/api_response.hpp" // domain ApiResponse (cache repo putResponse)
 #include "core/env_config.hpp"        // TreeNode (collection tree) + the config PODs
-#include "core/persistence/stores.hpp"
+#include "core/infra/persistence/stores.hpp"
 #include "core/request_type.hpp"      // RequestType (createRequest) — survives types.hpp removal
 
 namespace core::app {

@@ -9,7 +9,7 @@
 
 #include "core/domain/request/request_model.hpp"
 #include "infra/persistence/collection_repository.hpp"
-#include "core/persistence/stores.hpp"
+#include "core/infra/persistence/stores.hpp"
 
 namespace fs = std::filesystem;
 using namespace core::domain;

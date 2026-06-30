@@ -19,7 +19,7 @@ add_custom_command(
 
 # core — static lib, pure C++ (cross-platform). The UI links against this. README §3.
 add_library(core STATIC
-  src/variables/variable_resolver.cpp
+  src/infra/variables/variable_resolver.cpp
   src/infra/serialization/json_codec.cpp
   src/infra/serialization/request_json_mapper.cpp
   src/infra/serialization/field_json.cpp
@@ -34,25 +34,25 @@ add_library(core STATIC
   src/infra/import_export/import_service.cpp
   src/infra/fs_util.cpp
   src/infra/mem_probe.cpp
-  src/persistence/collection_store.cpp
-  src/persistence/request_naming.cpp
+  src/infra/persistence/collection_store.cpp
+  src/infra/persistence/request_naming.cpp
   src/infra/cache/ram_cache_driver.cpp
   src/infra/cache/disk_cache_driver.cpp
   src/infra/cache/response_cache.cpp
   src/infra/cache/cache_codec.cpp
-  src/persistence/session_store.cpp
-  src/persistence/environment_store.cpp
-  src/persistence/app_config_store.cpp
+  src/infra/persistence/session_store.cpp
+  src/infra/persistence/environment_store.cpp
+  src/infra/persistence/app_config_store.cpp
   src/infra/transport/grpc/grpc_descriptors.cpp
   src/infra/transport/ws/ws_sender.cpp
   src/infra/transport/shared/sse_parser.cpp
   src/infra/transport/graphql/gql_operation.cpp
   src/infra/transport/graphql/gql_ws_protocol.cpp
-  src/import_export/shell_tokenize.cpp
-  src/import_export/curl_importer.cpp
-  src/import_export/curl_export.cpp
-  src/import_export/grpc_importer.cpp
-  src/import_export/graphql_importer.cpp
+  src/infra/import_export/shell_tokenize.cpp
+  src/infra/import_export/curl_importer.cpp
+  src/infra/import_export/curl_export.cpp
+  src/infra/import_export/grpc_importer.cpp
+  src/infra/import_export/graphql_importer.cpp
   ${REFL_GEN_DIR}/reflection.pb.cc
   ${REFL_GEN_DIR}/reflection.grpc.pb.cc
 )

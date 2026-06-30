@@ -11,7 +11,7 @@
 
 #include "core/app/core_api_client.hpp"
 #include "core/domain/request/request_model.hpp" // build domain models directly for gql/sse/ws
-#include "core/import_export/importer.hpp"
+#include "core/infra/import_export/importer.hpp"
 
 using core::app::CoreApiClient;
 namespace d = core::domain;

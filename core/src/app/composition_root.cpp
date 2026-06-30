@@ -11,8 +11,8 @@
 #include "infra/transport/http/native_http_sender.hpp"
 #include "infra/transport/ws/ws_sender.hpp"
 #include "app/cache_config.hpp"     // detail::buildCacheConfig (native response cache)
-#include "core/variables/variable_resolver.hpp" // valueToAlias/prefixToAlias (native aliasify)
-#include "core/import_export/importer.hpp" // core::toCurl (domain copy-as-cURL export)
+#include "core/infra/variables/variable_resolver.hpp" // valueToAlias/prefixToAlias (native aliasify)
+#include "core/infra/import_export/importer.hpp" // core::toCurl (domain copy-as-cURL export)
 #include "infra/transport/graphql/graphql.hpp"      // gql::effectiveOperation (native interactionOf)
 #include "infra/fs_util.hpp"        // fsutil::join (.session dir for the cache)
 #include "infra/thread_pool.hpp"

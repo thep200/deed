@@ -5,7 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/domain/request/request_model.hpp"
-#include "core/import_export/importer.hpp"
+#include "core/infra/import_export/importer.hpp"
 
 namespace core {
 namespace d = core::domain;

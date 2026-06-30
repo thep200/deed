@@ -1,4 +1,4 @@
-#include "core/persistence/request_naming.hpp"
+#include "core/infra/persistence/request_naming.hpp"
 
 #include <cctype>
 

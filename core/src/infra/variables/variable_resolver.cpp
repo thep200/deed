@@ -1,4 +1,4 @@
-#include "core/variables/variable_resolver.hpp"
+#include "core/infra/variables/variable_resolver.hpp"
 
 namespace core {
 
