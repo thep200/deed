@@ -1,4 +1,4 @@
-// core/dto_common.hpp — primitives shared by every neutral DTO (README §7). Keep tiny + dependency-free.
+// core/domain/common/dto_common.hpp — primitives shared by every neutral DTO (README §7). Keep tiny + dependency-free.
 #pragma once
 
 #include <string>

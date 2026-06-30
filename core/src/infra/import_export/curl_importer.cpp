@@ -5,7 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "core/dto_common.hpp" // surviving KeyValue / MultipartPart DTOs (parse scratch only)
+#include "core/domain/common/dto_common.hpp" // surviving KeyValue / MultipartPart DTOs (parse scratch only)
 #include "core/infra/import_export/importer.hpp"
 #include "infra/import_export/shell_tokenize.hpp"
 #include "infra/transport/shared/url_util.hpp"

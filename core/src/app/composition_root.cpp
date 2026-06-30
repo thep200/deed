@@ -14,8 +14,8 @@
 #include "core/infra/variables/variable_resolver.hpp" // valueToAlias/prefixToAlias (native aliasify)
 #include "core/infra/import_export/importer.hpp" // core::toCurl (domain copy-as-cURL export)
 #include "infra/transport/graphql/graphql.hpp"      // gql::effectiveOperation (native interactionOf)
-#include "infra/fs_util.hpp"        // fsutil::join (.session dir for the cache)
-#include "infra/thread_pool.hpp"
+#include "infra/platform/fs_util.hpp"        // fsutil::join (.session dir for the cache)
+#include "infra/platform/thread_pool.hpp"
 #include "infra/variables/domain_variable_resolver.hpp"
 #include "infra/transport/grpc/grpc_descriptors.hpp" // native gRPC reflection (buildDescriptors/listMethods)
 

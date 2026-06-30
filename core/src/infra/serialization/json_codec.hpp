@@ -5,7 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "core/env_config.hpp" // Environment / AppConfig / Session config PODs
+#include "core/domain/environment/env_config.hpp" // Environment / AppConfig / Session config PODs
 
 namespace core::codec {
 

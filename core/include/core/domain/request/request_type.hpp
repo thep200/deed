@@ -1,4 +1,4 @@
-// core/request_type.hpp — the request protocol classification enum, split out of request_model.hpp so it
+// core/domain/request/request_type.hpp — the request protocol classification enum, split out of request_model.hpp so it
 // SURVIVES the legacy types.hpp removal (REFACTOR_SPEC P6). It is a transport-free view/classification enum
 // used by the UI, the lazy-tree TreeNode (env_config.hpp), and the request serializers. Tiny + dependency-free.
 #pragma once

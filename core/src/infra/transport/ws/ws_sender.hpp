@@ -12,7 +12,7 @@
 
 #include "core/domain/ports/driven/i_request_sender.hpp"
 #include "core/domain/ws/websocket_request.hpp"
-#include "core/sending/cancel_token.hpp"
+#include "infra/transport/shared/cancel_token.hpp"
 #include "infra/transport/shared/i_stream_channel.hpp"
 #include "infra/transport/shared/i_stream_sink.hpp" // StreamStatus / StreamEvent / IStreamSink (infra-internal)
 

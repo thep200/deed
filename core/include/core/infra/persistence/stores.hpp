@@ -12,8 +12,8 @@
 #include <vector>
 
 #include "core/domain/request/request_model.hpp" // domain RequestModel (collection load/save/create)
-#include "core/env_config.hpp"                   // Environment/Session/AppConfig/TreeNode (config PODs)
-#include "core/request_type.hpp"                 // RequestType (createRequest)
+#include "core/domain/environment/env_config.hpp"                   // Environment/Session/AppConfig/TreeNode (config PODs)
+#include "core/domain/request/request_type.hpp"                 // RequestType (createRequest)
 
 namespace core {
 

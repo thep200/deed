@@ -8,7 +8,7 @@
 #include <cstdlib>
 
 #include "core/infra/cache/cache.hpp"      // CacheConfig + CacheLimits
-#include "core/env_config.hpp" // AppConfig
+#include "core/domain/environment/env_config.hpp" // AppConfig
 
 namespace core::detail {
 

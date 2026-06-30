@@ -2,7 +2,7 @@
 
 #include <chrono>
 
-#include "infra/fs_util.hpp"
+#include "infra/platform/fs_util.hpp"
 #include "infra/serialization/json_codec.hpp"
 
 namespace core {

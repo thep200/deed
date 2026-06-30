@@ -20,7 +20,7 @@
 #include <grpcpp/support/channel_arguments.h>
 #include <grpcpp/support/slice.h>
 
-#include "core/sending/cancel_token.hpp"
+#include "infra/transport/shared/cancel_token.hpp"
 #include "infra/transport/grpc/grpc_descriptors.hpp"
 
 namespace gp = google::protobuf;

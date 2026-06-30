@@ -8,7 +8,7 @@
 
 #include <grpcpp/support/sync_stream.h>
 
-#include "infra/fs_util.hpp"
+#include "infra/platform/fs_util.hpp"
 
 // Reflection stub generated from third_party/grpc_reflection/reflection.proto (codegen in CMake).
 #include "reflection.grpc.pb.h"

@@ -1,4 +1,4 @@
-// core/infra/mem_probe.hpp — measure process RAM + structured logger for the stress harness.
+// core/infra/platform/mem_probe.hpp — measure process RAM + structured logger for the stress harness.
 // STRESS_TEST.md §3. Public header (usable by both CLI and the macOS UI that links core).
 #pragma once
 

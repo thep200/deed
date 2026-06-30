@@ -1,4 +1,4 @@
-// core/sending/cancel_token.hpp — cancel signal shared between Engine and a sender (SPEC_grpc_streaming §5).
+// infra/transport/shared/cancel_token.hpp — cancel signal shared between Engine and a sender (SPEC_grpc_streaming §5).
 // Senders poll cancelled() in their loop AND/OR register an onCancel hook (e.g. ctx.TryCancel()) for an
 // immediate stop. Thread-safe: cancel() may race with the sender on another thread.
 #pragma once

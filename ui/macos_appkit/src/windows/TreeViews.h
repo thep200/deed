@@ -3,7 +3,7 @@
 // OS9RowView (gray highlight). No dependency on controller ivars -> stands alone.
 #import <Cocoa/Cocoa.h>
 
-#include "core/env_config.hpp" // TreeNode (+ RequestType via request_type.hpp) — survives types.hpp removal
+#include "core/domain/environment/env_config.hpp" // TreeNode (+ RequestType via request_type.hpp) — survives types.hpp removal
 
 // Pasteboard type for drag-and-drop moving of a request within the tree.
 extern NSString *const kTreeDragType;

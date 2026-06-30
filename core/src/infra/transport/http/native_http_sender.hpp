@@ -7,7 +7,7 @@
 #include <mutex>
 
 #include "core/domain/ports/driven/i_request_sender.hpp"
-#include "core/sending/cancel_token.hpp" // cancel primitive (cpr progress callback + write-callback abort)
+#include "infra/transport/shared/cancel_token.hpp" // cancel primitive (cpr progress callback + write-callback abort)
 
 namespace core::infra {
 

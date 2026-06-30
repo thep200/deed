@@ -7,7 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include "infra/cache/cache_codec.hpp"
-#include "infra/fs_util.hpp"
+#include "infra/platform/fs_util.hpp"
 
 namespace fs = std::filesystem;
 

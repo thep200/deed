@@ -14,9 +14,9 @@
 #include "core/domain/request/request_model.hpp" // domain RequestModel (collection repo load/save/create)
 #include "core/domain/response/api_error.hpp"    // domain ApiError (cache repo putError)
 #include "core/domain/response/api_response.hpp" // domain ApiResponse (cache repo putResponse)
-#include "core/env_config.hpp"        // TreeNode (collection tree) + the config PODs
+#include "core/domain/environment/env_config.hpp"        // TreeNode (collection tree) + the config PODs
 #include "core/infra/persistence/stores.hpp"
-#include "core/request_type.hpp"      // RequestType (createRequest) — survives types.hpp removal
+#include "core/domain/request/request_type.hpp"      // RequestType (createRequest) — survives types.hpp removal
 
 namespace core::app {
 

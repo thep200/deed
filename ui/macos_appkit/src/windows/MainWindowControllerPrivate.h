@@ -46,7 +46,7 @@
 #include "core/infra/import_export/importer.hpp"
 #include "core/infra/persistence/stores.hpp"
 #include "core/infra/persistence/request_naming.hpp"
-#include "core/env_config.hpp"           // TreeNode/AppConfig/Environment/Session + RequestType (survive)
+#include "core/domain/environment/env_config.hpp"           // TreeNode/AppConfig/Environment/Session + RequestType (survive)
 #include "core/domain/response/interaction.hpp" // StreamStatus / InteractionKind (survive types.hpp removal)
 #include "core/app/core_api_client.hpp"   // REFACTOR_SPEC P6: new send path (IApiClient)
 #include "bridge/UiObserver.h"            // domain ResponseEvent -> CoreResponseSink

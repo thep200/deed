@@ -32,8 +32,8 @@ add_library(core STATIC
   src/infra/persistence/collection_repository.cpp
   src/infra/variables/domain_variable_resolver.cpp
   src/infra/import_export/import_service.cpp
-  src/infra/fs_util.cpp
-  src/infra/mem_probe.cpp
+  src/infra/platform/fs_util.cpp
+  src/infra/platform/mem_probe.cpp
   src/infra/persistence/collection_store.cpp
   src/infra/persistence/request_naming.cpp
   src/infra/cache/ram_cache_driver.cpp

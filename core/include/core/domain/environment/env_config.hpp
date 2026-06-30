@@ -1,10 +1,10 @@
-// core/env_config.hpp — environment, app-config, session, and the lazy collection-tree DTOs (README §7/§12).
+// core/domain/environment/env_config.hpp — environment, app-config, session, and the lazy collection-tree DTOs (README §7/§12).
 #pragma once
 
 #include <string>
 #include <vector>
 
-#include "core/request_type.hpp" // TreeNode carries a RequestType (relocated; survives types.hpp removal)
+#include "core/domain/request/request_type.hpp" // TreeNode carries a RequestType (relocated; survives types.hpp removal)
 
 namespace core {
 
