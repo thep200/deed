@@ -6,6 +6,7 @@
     "cpr",
     { "name": "curl", "features": ["websockets"] },
     "nlohmann-json",
-    "grpc"
+    "grpc",
+    { "name": "librdkafka", "default-features": false, "features": ["zlib"] }
   ]
 }

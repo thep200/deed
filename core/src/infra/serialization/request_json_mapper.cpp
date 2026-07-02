@@ -35,9 +35,14 @@ const char *typeStr(d::RequestType t) {
   case d::RequestType::Grpc: return w::kGrpc;
   case d::RequestType::GraphQl: return w::kGraphql;
   case d::RequestType::WebSocket: return w::kWs;
+  case d::RequestType::Kafka: return w::kKafka;
   }
   return w::kHttp;
 }
+
+// match() dispatch helper (no shared utility header — pasted locally, same idiom as grpc_descriptors.cpp).
+template <class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
+template <class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
 // PathVariables (no core::serial codec — inline here). JSON array [{key,value,enabled}].
 json pathVarsToJson(const d::PathVariableList &list) {
@@ -125,6 +130,58 @@ d::GqlOperationType gqlOpFrom(const std::string &s) {
   if (s == "mutation") return d::GqlOperationType::Mutation;
   if (s == "subscription") return d::GqlOperationType::Subscription;
   return d::GqlOperationType::Auto;
+}
+
+// ---- Kafka: config/message sub-blocks delegate to core::serial (SAME shapes the UI's Message/Config
+// editor tabs use, field_json.cpp) — no logic duplicated between the on-disk mapper and the editor. ----
+json kafkaSecurityToJson(const d::KafkaSecurity &s) {
+  json j;
+  s.match([&](auto &&v) {
+    using T = std::decay_t<decltype(v)>;
+    if constexpr (std::is_same_v<T, d::KafkaPlaintext>) j["type"] = "plaintext";
+  });
+  return j;
+}
+d::Result<d::KafkaSecurity> kafkaSecurityFromJson(const json &j) {
+  std::string type = j.is_object() ? gs(j, "type", "plaintext") : "plaintext";
+  if (type != "plaintext")
+    return d::Result<d::KafkaSecurity>::fail(
+        {d::ErrorCode::Unsupported, "unsupported kafka security type: " + type, "kafka.security.type"});
+  return d::Result<d::KafkaSecurity>::ok(d::KafkaSecurity::plaintext());
+}
+
+json kafkaProducerToJson(const d::KafkaProduceSpec &p) {
+  return json{{"config", serialTo(core::serial::kafkaProduceConfigToJson(p.config))},
+              {"message", serialTo(core::serial::kafkaMessageToJson(p.message))}};
+}
+d::Result<d::KafkaProduceSpec> kafkaProducerFromJson(const json &b) {
+  auto cfg = serialFrom<d::KafkaProduceConfig>(b, "config", core::serial::jsonToKafkaProduceConfig, "{}");
+  if (!cfg) return d::Result<d::KafkaProduceSpec>::fail(cfg.error());
+  auto msg = serialFrom<d::KafkaMessage>(b, "message", core::serial::jsonToKafkaMessage, "{}");
+  if (!msg) return d::Result<d::KafkaProduceSpec>::fail(msg.error());
+  return d::Result<d::KafkaProduceSpec>::ok(d::KafkaProduceSpec{cfg.take(), msg.take()});
+}
+
+json kafkaConsumerToJson(const d::KafkaConsumeSpec &spec) {
+  return json{{"config", serialTo(core::serial::kafkaConsumeConfigToJson(spec.config))}};
+}
+d::Result<d::KafkaConsumeSpec> kafkaConsumerFromJson(const json &outer) {
+  auto cfg = serialFrom<d::KafkaConsumeConfig>(outer, "config", core::serial::jsonToKafkaConsumeConfig, "{}");
+  if (!cfg) return d::Result<d::KafkaConsumeSpec>::fail(cfg.error());
+  return d::Result<d::KafkaConsumeSpec>::ok(d::KafkaConsumeSpec{cfg.take()});
+}
+
+json kafkaToJson(const d::KafkaRequest &k) {
+  json j{{"brokers", k.brokers().toBootstrapServers()},
+        {"clientKind", k.kind() == d::KafkaClientKind::Producer ? "producer" : "consumer"},
+        {"security", kafkaSecurityToJson(k.security())},
+        {"producer", nullptr},
+        {"consumer", nullptr}};
+  k.match(overloaded{
+      [&](const d::KafkaProduceSpec &p) { j["producer"] = kafkaProducerToJson(p); },
+      [&](const d::KafkaConsumeSpec &c) { j["consumer"] = kafkaConsumerToJson(c); },
+  });
+  return j;
 }
 
 // ===== per-type block builders (domain -> json) =====
@@ -241,6 +298,30 @@ d::Result<Payload> parseGraphqlPayload(const json &b) {
   return d::Result<Payload>::ok(Payload{r.take()});
 }
 
+d::Result<Payload> parseKafkaPayload(const json &b) {
+  auto brokers = d::BrokerList::parse(gs(b, "brokers"));
+  if (!brokers) return d::Result<Payload>::fail(brokers.error());
+  auto security = kafkaSecurityFromJson(b.value("security", json::object()));
+  if (!security) return d::Result<Payload>::fail(security.error());
+
+  std::string kind = gs(b, "clientKind", "producer");
+  d::Result<d::KafkaRequest::Mode> mode = [&]() -> d::Result<d::KafkaRequest::Mode> {
+    if (kind == "consumer") {
+      auto c = kafkaConsumerFromJson(b.value("consumer", json::object()));
+      if (!c) return d::Result<d::KafkaRequest::Mode>::fail(c.error());
+      return d::Result<d::KafkaRequest::Mode>::ok(d::KafkaRequest::Mode{c.take()});
+    }
+    auto p = kafkaProducerFromJson(b.value("producer", json::object()));
+    if (!p) return d::Result<d::KafkaRequest::Mode>::fail(p.error());
+    return d::Result<d::KafkaRequest::Mode>::ok(d::KafkaRequest::Mode{p.take()});
+  }();
+  if (!mode) return d::Result<Payload>::fail(mode.error());
+
+  auto r = d::KafkaRequest::create(brokers.take(), security.take(), mode.take());
+  if (!r) return d::Result<Payload>::fail(r.error());
+  return d::Result<Payload>::ok(Payload{r.take()});
+}
+
 d::Result<Payload> parseHttpPayload(const json &b) {
   auto mr = d::parseHttpMethod(gs(b, "method", "GET"));
   d::HttpRequest::Parts p{mr ? mr.take() : d::HttpMethod::Get, d::Url::create(gs(b, "url")).take()};
@@ -282,6 +363,7 @@ domain::Result<domain::RequestModel> RequestJsonMapper::fromJson(const std::stri
     d::Result<Payload> pr = type == w::kGrpc      ? parseGrpcPayload(j.value(w::kGrpc, json::object()))
                             : type == w::kWs      ? parseWsPayload(j.value(w::kWs, json::object()))
                             : type == w::kGraphql ? parseGraphqlPayload(j.value(w::kGraphql, json::object()))
+                            : type == w::kKafka   ? parseKafkaPayload(j.value(w::kKafka, json::object()))
                                                   : parseHttpPayload(j.value(w::kHttp, json::object()));
     if (!pr) return d::Result<d::RequestModel>::fail(pr.error());
 
@@ -304,6 +386,7 @@ std::string RequestJsonMapper::toJson(const domain::RequestModel &m) const {
     else if constexpr (std::is_same_v<T, d::GrpcRequest>) j[w::kGrpc] = grpcToJson(payload);
     else if constexpr (std::is_same_v<T, d::WebSocketRequest>) j[w::kWs] = wsToJson(payload);
     else if constexpr (std::is_same_v<T, d::GraphQlRequest>) j[w::kGraphql] = gqlToJson(payload);
+    else if constexpr (std::is_same_v<T, d::KafkaRequest>) j[w::kKafka] = kafkaToJson(payload);
   });
   return j.dump(2);
 }

@@ -288,6 +288,11 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _methodPopup = [[OS9PopupButton alloc] initWithItems:@[ StrMethodGet, StrMethodPost, StrMethodPut, StrMethodPatch, StrMethodDelete, StrMethodHead, StrMethodOptions ]
                                                   target:self action:@selector(methodChanged:)];
 
+    // Kafka client-kind selector (SPEC_kafka §2.0): ONLY visible when type=Kafka, sits right before the
+    // URL/brokers field. Reuses the existing OS9Toggle (same idiom as the former gRPC TLS toggle) with a
+    // dynamic label reflecting the current side (kafkaModeToggled: flips it).
+    _kafkaModeToggle = [[OS9Toggle alloc] initWithLabel:StrKafkaProducer target:self action:@selector(kafkaModeToggled:)];
+
     // URL field: NO native bezel -> wrapped in OS9SerratedInset (retro serrated corners).
     _urlInset = [[OS9SerratedInset alloc] initWithFrame:NSZeroRect];
     _urlField = [[NSTextField alloc] initWithFrame:NSZeroRect];
@@ -307,7 +312,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _urlField.delegate = self;   // controlTextDidChange: -> detect cURL/grpcurl paste
     [_urlInset addSubview:_urlField];
 
-    for (NSView *v in @[ _settingButton, _envButton, _sendButton, _cancelButton, _protoPopup, _servicePopup, _methodPopup, _urlInset ])
+    for (NSView *v in @[ _settingButton, _envButton, _sendButton, _cancelButton, _protoPopup, _servicePopup, _methodPopup, _kafkaModeToggle, _urlInset ])
         [_mainPane addSubview:v];
 }
 
@@ -433,14 +438,27 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _envButton.frame = NSMakeRect(x, ty, wEnv, btnH); x += wEnv + 6;
     core::RequestType _t = [self requestType];
     BOOL grpc = (_t == core::RequestType::Grpc);
-    BOOL noPopup = (_t == core::RequestType::WebSocket ||
-                    _t == core::RequestType::GraphQL);   // WS/GraphQL: no method/proto popup
+    BOOL kafka = (_t == core::RequestType::Kafka);
+    BOOL noPopup = (_t == core::RequestType::WebSocket || _t == core::RequestType::GraphQL ||
+                    kafka);   // WS/GraphQL/Kafka: no method/proto popup
     _methodPopup.frame = NSMakeRect(x, ty, wMethod, btnH);
     _protoPopup.frame = NSMakeRect(x, ty, wProto, btnH);
     _methodPopup.hidden = grpc || noPopup;   // only HTTP shows the method popup
     _protoPopup.hidden = !grpc;
-    // WS/GraphQL have no leading popup; HTTP advances by method width, gRPC by proto width.
+    // WS/GraphQL/Kafka have no leading popup; HTTP advances by method width, gRPC by proto width.
     x += (grpc ? wProto : (noPopup ? 0 : wMethod)) + 6;
+
+    // Kafka client-kind selector (SPEC_kafka §2.0): ONLY visible when type=Kafka, sits right before the
+    // brokers/URL field (i.e. right where the method/proto popup would otherwise be).
+    _kafkaModeToggle.hidden = !kafka;
+    if (kafka) {
+        BOOL isConsumer = ([self kafkaClientKind] == core::domain::KafkaClientKind::Consumer);
+        _kafkaModeToggle.on = isConsumer;
+        _kafkaModeToggle.label = isConsumer ? StrKafkaConsumer : StrKafkaProducer;
+        CGFloat wToggle = [_kafkaModeToggle preferredWidth];
+        _kafkaModeToggle.frame = NSMakeRect(x, ty, wToggle, btnH);
+        x += wToggle + 6;
+    }
 
     // (gRPC TLS toggle removed — TLS is set in the per-request Config tab.)
 
@@ -497,8 +515,98 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     case core::domain::RequestType::Grpc: return core::RequestType::Grpc;
     case core::domain::RequestType::WebSocket: return core::RequestType::WebSocket;
     case core::domain::RequestType::GraphQl: return core::RequestType::GraphQL;
+    case core::domain::RequestType::Kafka: return core::RequestType::Kafka;
     default: return core::RequestType::Http;
     }
+}
+
+// The Kafka payload's client-kind (Producer/Consumer) — nil-safe (Http/... -> Producer, harmless default).
+- (core::domain::KafkaClientKind)kafkaClientKind {
+    if (!_model || _model->type() != core::domain::RequestType::Kafka) return core::domain::KafkaClientKind::Producer;
+    return std::get<core::domain::KafkaRequest>(_model->payload()).kind();
+}
+
+// Toolbar Producer/Consumer toggle flipped (SPEC_kafka §2.0). BUG FIX: this used to always rebuild a FRESH
+// default spec of the other kind, discarding whatever the user had typed in Message/Config — now it archives
+// the OUTGOING kind's kafka-specific buffers + last response into _kafka{Producer,Consumer}{Req,Resp}Buffers
+// (mirrors the existing _bodyDrafts pattern for HTTP body modes) and restores the INCOMING kind's archive if
+// one exists, else falls back to a fresh default. RequestType stays Kafka throughout — "thuần UI" (spec §2.0.3).
+- (void)kafkaModeToggled:(id)sender {
+    if (!_model || _model->type() != core::domain::RequestType::Kafka) return;
+    using namespace core::domain;
+    const auto &k = std::get<KafkaRequest>(_model->payload());
+    bool wasProducer = (k.kind() == KafkaClientKind::Producer);
+
+    // 1) Archive the OUTGOING kind's state. The trailing buffer is the SHARED per-request Config
+    //    (timeout_ms/tls) tab — not per-kind — so it's carried over separately, never archived here.
+    [self stashActiveReqBuffer];
+    NSString *sharedConfigBuf = _reqBuffers.count ? _reqBuffers.lastObject : @"{}";
+    NSArray<NSString *> *outgoingKafkaBufs =
+        (_reqBuffers.count > 1) ? [_reqBuffers subarrayWithRange:NSMakeRange(0, _reqBuffers.count - 1)] : @[];
+    if (wasProducer) {
+        _kafkaProducerReqBuffers = outgoingKafkaBufs;
+        _kafkaProducerRespBuffers = [_respBuffers copy];
+        _kafkaProducerHasResp = _hasResp;
+        _kafkaProducerLastResp = _lastResp;
+    } else {
+        _kafkaConsumerReqBuffers = outgoingKafkaBufs;
+        _kafkaConsumerRespBuffers = [_respBuffers copy];
+        _kafkaConsumerHasResp = _hasResp;
+        _kafkaConsumerLastResp = _lastResp;
+    }
+
+    // 2) Resolve the INCOMING kind's kafka-specific buffers: its archive if we have one, else a fresh
+    //    default — serialized to JSON text so both paths feed the SAME parse step in (3).
+    bool toConsumer = wasProducer;
+    NSArray<NSString *> *incomingKafkaBufs = toConsumer ? _kafkaConsumerReqBuffers : _kafkaProducerReqBuffers;
+    bool haveDraft = toConsumer ? (incomingKafkaBufs.count >= 1) : (incomingKafkaBufs.count >= 2);
+    if (!haveDraft) {
+        if (toConsumer) {
+            KafkaConsumeConfig cfg{{KafkaTopic::create("demo-topic").take()}, std::nullopt,
+                                  ConsumerGroup::create("").take()};
+            incomingKafkaBufs = @[ N(core::serial::kafkaConsumeConfigToJson(cfg)) ];
+        } else {
+            KafkaProduceConfig cfg{KafkaTopic::create("demo-topic").take()};
+            KafkaMessage msg;
+            msg.value = MessagePayload{"{}", false};
+            incomingKafkaBufs = @[ N(core::serial::kafkaMessageToJson(msg)), N(core::serial::kafkaProduceConfigToJson(cfg)) ];
+        }
+    }
+
+    // 3) Parse those buffers into a domain Mode (same shapes syncModelFromEditors: parses) + rebuild _model.
+    // KafkaRequest::Mode has no default alternative -> build the Result inline per branch.
+    Result<KafkaRequest::Mode> mode = Result<KafkaRequest::Mode>::fail({ErrorCode::Internal, "", ""});
+    if (toConsumer) {
+        auto cfgR = core::serial::jsonToKafkaConsumeConfig(S(incomingKafkaBufs[0]));
+        if (cfgR) mode = Result<KafkaRequest::Mode>::ok(KafkaRequest::Mode{KafkaConsumeSpec{cfgR.take()}});
+    } else {
+        auto msgR = core::serial::jsonToKafkaMessage(S(incomingKafkaBufs[0]));
+        auto cfgR = core::serial::jsonToKafkaProduceConfig(S(incomingKafkaBufs[1]));
+        if (msgR && cfgR) mode = Result<KafkaRequest::Mode>::ok(KafkaRequest::Mode{KafkaProduceSpec{cfgR.take(), msgR.take()}});
+    }
+    if (!mode.isOk()) return; // archived JSON somehow invalid -> leave the toggle/state untouched
+    auto rebuilt = KafkaRequest::create(k.brokers(), k.security(), mode.take());
+    if (!rebuilt) return;
+    _model = _model->withPayload(RequestModel::Payload(rebuilt.take()));
+
+    // 4) Recompute tab titles/buttons for the new kind, then populate buffers directly — NOT via
+    //    populateEditorsFromModel, which would wipe the drafts just archived in step (1).
+    [self setRequestType:RequestType::Kafka];
+    NSMutableArray<NSString *> *newReqBufs = [incomingKafkaBufs mutableCopy];
+    [newReqBufs addObject:sharedConfigBuf];
+    _reqBuffers = newReqBufs;
+    NSInteger li = [self tabIndexForKey:_leftPaneActiveTabKey inTitles:_reqTabTitles];
+    if (li >= (NSInteger)_reqBuffers.count) li = 0;
+    _activeReqTab = li;
+    _reqText.string = _reqBuffers.count ? _reqBuffers[li] : @"";
+    [self highlightActiveTab:_reqTabButtons active:li];
+
+    // Response pane: restore the incoming kind's cached result (or empty if it was never sent).
+    _hasResp = toConsumer ? _kafkaConsumerHasResp : _kafkaProducerHasResp;
+    _lastResp = toConsumer ? _kafkaConsumerLastResp : _kafkaProducerLastResp;
+    [self applyResponseBuffers:(toConsumer ? _kafkaConsumerRespBuffers : _kafkaProducerRespBuffers) ?: @[]];
+    [self updateStatus:@""];
+    [self relayout];
 }
 
 - (void)mutateGrpc:(void (^)(core::domain::GrpcRequest::Parts &))fn {
@@ -530,6 +638,16 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
         GraphQlOperation op;
         op.query = "query {\n  \n}"; // domain requires a non-empty query
         return GraphQlRequest::create({Url::create("").take(), op, {}, Auth::none(), GqlSubTransport::Http, ""})
+            .take();
+    }
+    case RequestType::Kafka: {
+        // BrokerList/KafkaTopic reject empty (SPEC_kafka §3) -> placeholder, same convention as GraphQL's
+        // non-empty-query default above (not an "always-empty-ok" draft like Http/WebSocket's Url).
+        KafkaProduceConfig cfg{KafkaTopic::create("demo-topic").take()};
+        KafkaMessage msg;
+        msg.value = MessagePayload{"{}", false};
+        return KafkaRequest::create(BrokerList::parse("localhost:9092").take(), KafkaSecurity::plaintext(),
+                                    KafkaRequest::Mode{KafkaProduceSpec{std::move(cfg), std::move(msg)}})
             .take();
     }
     default:
@@ -571,6 +689,17 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
         // GraphQL: Query document + Variables (JSON) + Headers + Auth. query/mutation -> normal response pane.
         _reqTabTitles = @[ StrTabGqlQuery, StrTabVariables, StrTabHeaders, StrTabAuth, StrTabConfig ];
         _respTabTitles = @[ StrTabResponse, StrTabRequest ];
+    } else if (t == core::domain::RequestType::Kafka) {
+        // Producer: Message (key/value/headers/tombstone) + Kafka (topic/ack/compression/...). Consumer:
+        // ONE Kafka tab (topics/group/offset-reset/...) — no Message tab (nothing to compose, SPEC_kafka §2.2).
+        // StrTabConfig (timeout_ms/tls) is still appended LAST for every type, same as every other type.
+        if ([self kafkaClientKind] == core::domain::KafkaClientKind::Consumer) {
+            _reqTabTitles = @[ StrTabKafkaConfig, StrTabConfig ];
+            _respTabTitles = @[ StrTabMessage ]; // reuses the streaming array render (like WS); no Request tab
+        } else {
+            _reqTabTitles = @[ StrTabMessage, StrTabKafkaConfig, StrTabConfig ];
+            _respTabTitles = @[ StrTabResponse ]; // one delivery-report result (like HTTP/GraphQL); no Request tab
+        }
     } else {
         _reqTabTitles = @[ StrTabMessage, StrTabMetadata, StrTabAuth, StrTabConfig ];
         _respTabTitles = @[ StrTabMessage, StrTabRequest ];

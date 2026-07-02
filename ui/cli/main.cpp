@@ -12,6 +12,7 @@
 #include "core/app/core_api_client.hpp"
 #include "core/domain/request/request_model.hpp" // build domain models directly for gql/sse/ws
 #include "core/infra/import/importer.hpp"
+#include "core/infra/serialization/field_json.hpp" // core::serial::kafkaRecordToDisplayJson
 
 using core::app::CoreApiClient;
 namespace d = core::domain;
@@ -34,6 +35,11 @@ public:
     } else if (const auto *msg = ev.get<d::EvMessage>()) {
       if (!streamOpen_) { std::cout << "--- STREAM ---\n["; streamOpen_ = true; }
       std::cout << (frames_++ == 0 ? "\n  " : ",\n  ") << msg->payload;
+      std::cout.flush();
+      ++inbound_;
+    } else if (const auto *rec = ev.get<d::EvKafkaRecord>()) {
+      if (!streamOpen_) { std::cout << "--- STREAM ---\n["; streamOpen_ = true; }
+      std::cout << (frames_++ == 0 ? "\n  " : ",\n  ") << core::serial::kafkaRecordToDisplayJson(rec->record);
       std::cout.flush();
       ++inbound_;
     } else if (const auto *cl = ev.get<d::EvClosed>()) {
@@ -119,6 +125,7 @@ const char *typeLabel(d::RequestType t) {
   case d::RequestType::Grpc: return "grpc";
   case d::RequestType::GraphQl: return "graphql";
   case d::RequestType::WebSocket: return "ws";
+  case d::RequestType::Kafka: return "kafka";
   }
   return "http";
 }

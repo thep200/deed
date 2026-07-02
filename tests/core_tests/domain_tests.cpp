@@ -14,6 +14,7 @@
 #include "core/domain/grpc/grpc_metadata.hpp"
 #include "core/domain/grpc/grpc_request.hpp"
 #include "core/domain/http/http_request.hpp"
+#include "core/domain/kafka/kafka_request.hpp"
 #include "core/domain/values/header.hpp"
 #include "core/domain/values/http_method.hpp"
 #include "core/domain/values/json_text.hpp"
@@ -158,6 +159,90 @@ static void test_grpc_graphql_ws_http() {
   CHECK(http.isOk() && http.value().method() == HttpMethod::Post, "http request assembled");
 }
 
+static void test_kafka() {
+  std::printf("[kafka]\n");
+  // BrokerList
+  CHECK(!BrokerList::parse("").isOk(), "brokers empty rejected");
+  CHECK(!BrokerList::parse("localhost").isOk(), "brokers missing port rejected");
+  auto bl = BrokerList::parse("h1:9092, h2:9093");
+  CHECK(bl.isOk() && bl.value().brokers().size() == 2, "brokers parse 2 entries (whitespace trimmed)");
+  CHECK(bl.value().toBootstrapServers() == "h1:9092,h2:9093", "brokers toBootstrapServers");
+
+  // KafkaTopic
+  CHECK(!KafkaTopic::create("").isOk(), "topic empty rejected");
+  auto topic = KafkaTopic::create("demo-topic");
+  CHECK(topic.isOk(), "topic ok");
+
+  auto brokers = BrokerList::parse("localhost:9092").take();
+  auto security = KafkaSecurity::plaintext();
+
+  // Producer: partition -1(auto) OK / -2 rejected.
+  {
+    KafkaProduceConfig cfg{topic.value()};
+    cfg.partition = KafkaPartition{-1};
+    KafkaMessage msg;
+    msg.value = MessagePayload{"{}", false};
+    auto r = KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaProduceSpec{cfg, msg}});
+    CHECK(r.isOk(), "producer partition -1 (auto) ok");
+    CHECK(r.value().kind() == KafkaClientKind::Producer, "kind() == Producer");
+
+    cfg.partition = KafkaPartition{-2};
+    auto bad = KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaProduceSpec{cfg, msg}});
+    CHECK(!bad.isOk(), "producer partition -2 rejected");
+  }
+
+  // ConsumerGroup: empty -> auto "deed-tail-*"; non-empty kept as-is.
+  {
+    auto g1 = ConsumerGroup::create("");
+    CHECK(g1.isOk() && g1.value().value().rfind("deed-tail-", 0) == 0, "empty group -> auto deed-tail-*");
+    auto g2 = ConsumerGroup::create("my-group");
+    CHECK(g2.isOk() && g2.value().value() == "my-group", "explicit group kept");
+  }
+
+  // Consumer invariants: topics non-empty; partition -1/nullopt/>=0 ok, -2 rejected; maxMessages>0;
+  // pollTimeout>0.
+  {
+    KafkaConsumeConfig cfg{{topic.value()}, std::nullopt, ConsumerGroup::create("").take()};
+    auto ok = KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaConsumeSpec{cfg}});
+    CHECK(ok.isOk(), "consumer subscribe (partition nullopt) ok");
+    CHECK(ok.value().kind() == KafkaClientKind::Consumer, "kind() == Consumer");
+
+    KafkaConsumeConfig noTopics{{}, std::nullopt, ConsumerGroup::create("").take()};
+    CHECK(!KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaConsumeSpec{noTopics}}).isOk(),
+          "consumer empty topics rejected");
+
+    KafkaConsumeConfig assign{{topic.value()}, KafkaPartition{0}, ConsumerGroup::create("").take()};
+    CHECK(KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaConsumeSpec{assign}}).isOk(),
+          "consumer assign partition >=0 ok");
+
+    KafkaConsumeConfig badPartition{{topic.value()}, KafkaPartition{-2}, ConsumerGroup::create("").take()};
+    CHECK(!KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaConsumeSpec{badPartition}}).isOk(),
+          "consumer partition -2 rejected");
+
+    KafkaConsumeConfig badMax = cfg;
+    badMax.maxMessages = 0;
+    CHECK(!KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaConsumeSpec{badMax}}).isOk(),
+          "consumer maxMessages=0 rejected");
+
+    KafkaConsumeConfig badPoll = cfg;
+    badPoll.pollTimeout = std::chrono::milliseconds(0);
+    CHECK(!KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaConsumeSpec{badPoll}}).isOk(),
+          "consumer pollTimeout<=0 rejected");
+  }
+
+  // match() dispatches the correct alternative.
+  {
+    KafkaConsumeConfig cfg{{topic.value()}, std::nullopt, ConsumerGroup::create("").take()};
+    auto req = KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaConsumeSpec{cfg}}).take();
+    std::string which = req.match([](auto &&spec) -> std::string {
+      using T = std::decay_t<decltype(spec)>;
+      if constexpr (std::is_same_v<T, KafkaProduceSpec>) return "producer";
+      else return "consumer";
+    });
+    CHECK(which == "consumer", "match() dispatches the held alternative");
+  }
+}
+
 int main() {
   std::printf("== domain_tests ==\n");
   test_result_and_common();
@@ -165,6 +250,7 @@ int main() {
   test_auth();
   test_body();
   test_grpc_graphql_ws_http();
+  test_kafka();
   std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
   return g_fail == 0 ? 0 : 1;
 }

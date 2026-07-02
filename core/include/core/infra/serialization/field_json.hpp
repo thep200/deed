@@ -14,6 +14,8 @@
 #include "core/domain/body/body.hpp"
 #include "core/domain/common/result.hpp"
 #include "core/domain/grpc/grpc_metadata.hpp"
+#include "core/domain/kafka/kafka_consume.hpp"
+#include "core/domain/kafka/kafka_produce.hpp"
 #include "core/domain/request/request_config.hpp"
 #include "core/domain/response/api_response.hpp"
 #include "core/domain/values/header.hpp"
@@ -51,12 +53,33 @@ domain::Result<domain::Body> bodyFromEditor(const std::string &mode, const std::
 std::string configToJson(const domain::RequestConfig &);
 domain::Result<domain::RequestConfig> jsonToConfig(const std::string &);
 
+// Config (Kafka only) — JSON {timeout_ms} <-> RequestConfig; NO "tls" key. Kafka has no TLS toggle yet
+// (KafkaSecurity is Plaintext-only, SPEC_kafka §8) and KafkaSender never reads tlsEnabledDefault, so the
+// shared per-request Config tab drops it here instead of showing an inert field. tlsEnabledDefault is
+// pinned to false on parse.
+std::string kafkaRequestConfigToJson(const domain::RequestConfig &);
+domain::Result<domain::RequestConfig> jsonToKafkaRequestConfig(const std::string &);
+
 // gRPC metadata — JSON array [{key,value,enabled}] <-> GrpcMetadata.
 std::string metadataToJson(const domain::GrpcMetadata &);
 domain::Result<domain::GrpcMetadata> jsonToMetadata(const std::string &);
 
 // Response headers — domain ResponseHeader list -> JSON array [{key,value}] (display only; read-only).
 std::string responseHeadersToJson(const std::vector<domain::ResponseHeader> &);
+
+// Kafka consumer record -> JSON (display only; read-only, SPEC_kafka §2.2/§6 — UI pretty-print, the domain
+// KafkaRecord.value bytes are never touched by this). `value` is embedded as parsed JSON when it parses,
+// else as a raw string (same "try JSON, else raw" idiom ws_sender.cpp uses for its frame log).
+std::string kafkaRecordToDisplayJson(const domain::KafkaRecord &);
+
+// Kafka editor tabs (SPEC_kafka §2/§4) — map 1:1 to the toolbar's Message/Config tabs; the on-disk mapper
+// (request_json_mapper.cpp) embeds these same shapes under kafka.producer.{config,message}/consumer.config.
+std::string kafkaMessageToJson(const domain::KafkaMessage &);
+domain::Result<domain::KafkaMessage> jsonToKafkaMessage(const std::string &);
+std::string kafkaProduceConfigToJson(const domain::KafkaProduceConfig &);
+domain::Result<domain::KafkaProduceConfig> jsonToKafkaProduceConfig(const std::string &);
+std::string kafkaConsumeConfigToJson(const domain::KafkaConsumeConfig &);
+domain::Result<domain::KafkaConsumeConfig> jsonToKafkaConsumeConfig(const std::string &);
 
 // Generic JSON text helpers (no domain types): pretty/compact reformat; encode/decode a JSON string literal.
 std::string formatJson(const std::string &text, bool pretty); // unparseable -> returned verbatim

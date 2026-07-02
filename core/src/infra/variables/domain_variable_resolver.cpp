@@ -122,13 +122,44 @@ d::RequestModel::Payload resolvePayload(const d::RequestModel &m, const VarMap &
       for (auto &msg : wp.onOpenSend) msg.payload = rs(msg.payload, v);
       auto r = d::WebSocketRequest::create(std::move(wp));
       return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
-    } else { // GraphQlRequest
+    } else if constexpr (std::is_same_v<T, d::GraphQlRequest>) {
       d::GraphQlOperation op = p.op();
       op.query = rs(op.query, v);
       op.variables = d::JsonText::of(rs(op.variables.text(), v));
       d::GraphQlRequest::Parts gp{resolveUrl(p.url(), v), std::move(op), resolveHeaders(p.headers(), v),
                                   resolveAuth(p.auth(), v), p.subTransport(), p.wsProtocol()};
       auto r = d::GraphQlRequest::create(std::move(gp));
+      return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
+    } else { // KafkaRequest — brokers/topic(s)/group/key/value/headers templated (SPEC_kafka §9)
+      auto brokers = d::BrokerList::parse(rs(p.brokers().toBootstrapServers(), v));
+      d::BrokerList newBrokers = brokers ? brokers.take() : p.brokers();
+      auto mode = p.match([&](auto &&spec) -> d::KafkaRequest::Mode {
+        using S = std::decay_t<decltype(spec)>;
+        if constexpr (std::is_same_v<S, d::KafkaProduceSpec>) {
+          d::KafkaProduceSpec out = spec;
+          auto t = d::KafkaTopic::create(rs(spec.config.topic.value(), v));
+          if (t) out.config.topic = t.take();
+          if (out.message.key) out.message.key = d::MessageKey{rs(spec.message.key->value, v)};
+          out.message.value.value = rs(spec.message.value.value, v);
+          std::vector<d::KafkaHeader> hs;
+          for (const auto &h : spec.message.headers)
+            hs.push_back({h.key, h.enabled ? rs(h.value, v) : h.value, h.enabled});
+          out.message.headers = std::move(hs);
+          return out;
+        } else {
+          d::KafkaConsumeSpec out = spec;
+          std::vector<d::KafkaTopic> topics;
+          for (const auto &t : spec.config.topics) {
+            auto rt = d::KafkaTopic::create(rs(t.value(), v));
+            topics.push_back(rt ? rt.take() : t);
+          }
+          out.config.topics = std::move(topics);
+          auto g = d::ConsumerGroup::create(rs(spec.config.group.value(), v));
+          out.config.group = g ? g.take() : spec.config.group;
+          return out;
+        }
+      });
+      auto r = d::KafkaRequest::create(newBrokers, p.security(), std::move(mode));
       return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
     }
   });

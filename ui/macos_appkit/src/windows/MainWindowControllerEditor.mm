@@ -138,6 +138,13 @@ static NSArray<NSString *> *BodyAllModes(void);
     // overlays from the domain model (authoritative).
     _bodyDrafts = [NSMutableDictionary dictionary];
     for (auto &kv : _loadedBodyDrafts) _bodyDrafts[N(kv.first)] = N(kv.second);
+    // Fresh request context -> drop any Kafka Producer/Consumer drafts from whatever was open before
+    // (kafkaModeToggled: is the only other writer of these, and it never calls populateEditorsFromModel).
+    _kafkaProducerReqBuffers = nil; _kafkaConsumerReqBuffers = nil;
+    _kafkaProducerRespBuffers = nil; _kafkaConsumerRespBuffers = nil;
+    _kafkaProducerHasResp = NO; _kafkaConsumerHasResp = NO;
+    _kafkaProducerLastResp = core::domain::ApiResponse{};
+    _kafkaConsumerLastResp = core::domain::ApiResponse{};
     namespace d = core::domain;
     if (!_model) { _reqText.string = @""; return; }
     const d::RequestModel &m = *_model;
@@ -171,6 +178,18 @@ static NSArray<NSString *> *BodyAllModes(void);
         [_reqBuffers addObject:N(core::serial::headersToJson(g.headers()))];   // 2 = Headers
         [_reqBuffers addObject:N(core::serial::authToJson(g.auth()))];         // 3 = Auth
         _urlField.stringValue = N(g.url().raw()); _urlPrevLen = _urlField.stringValue.length;
+    } else if (m.type() == d::RequestType::Kafka) {
+        const auto &k = std::get<d::KafkaRequest>(m.payload());
+        // Producer: Message + Config tabs. Consumer: ONE Config tab (SPEC_kafka §2.2 — nothing to compose).
+        if (k.kind() == d::KafkaClientKind::Producer) {
+            const auto &p = std::get<d::KafkaProduceSpec>(k.mode());
+            [_reqBuffers addObject:N(core::serial::kafkaMessageToJson(p.message))];      // 0 = Message
+            [_reqBuffers addObject:N(core::serial::kafkaProduceConfigToJson(p.config))]; // 1 = Config
+        } else {
+            const auto &c = std::get<d::KafkaConsumeSpec>(k.mode());
+            [_reqBuffers addObject:N(core::serial::kafkaConsumeConfigToJson(c.config))]; // 0 = Config
+        }
+        _urlField.stringValue = N(k.brokers().toBootstrapServers()); _urlPrevLen = _urlField.stringValue.length;
     } else {
         const auto &g = std::get<d::GrpcRequest>(m.payload());
         std::string msg = g.message().text();
@@ -187,8 +206,10 @@ static NSArray<NSString *> *BodyAllModes(void);
         [_protoPopup setNeedsDisplay:YES];
         [self showSavedGrpcMethodLabel];   // show the saved RPC (do NOT fetch; fetch on dropdown click)
     }
-    // Config tab (last for every type) = per-request timeout_ms + tls.
-    [_reqBuffers addObject:N(core::serial::configToJson(m.config()))];
+    // Config tab (last for every type) = per-request timeout_ms + tls; Kafka drops "tls" (no toggle yet).
+    [_reqBuffers addObject:N(m.type() == d::RequestType::Kafka
+                                 ? core::serial::kafkaRequestConfigToJson(m.config())
+                                 : core::serial::configToJson(m.config()))];
     // Re-apply the left pane's remembered tab (if the key exists for the current request type); else first tab.
     NSInteger li = [self tabIndexForKey:_leftPaneActiveTabKey inTitles:_reqTabTitles];
     if (li >= (NSInteger)_reqBuffers.count) li = 0;
@@ -271,6 +292,29 @@ static NSArray<NSString *> *BodyAllModes(void);
         p.auth = ar.take();
         auto gr = d::GraphQlRequest::create(std::move(p)); if (!gr.isOk()) return fail(0, gr.error().message);
         payload = gr.take();
+    } else if (cur.type() == d::RequestType::Kafka) {
+        const auto &curK = std::get<d::KafkaRequest>(cur.payload());
+        auto br = d::BrokerList::parse(url);
+        if (!br.isOk()) return fail(-1, br.error().message); // -1: no per-tab buffer -> reported on the URL field
+        // KafkaRequest::Mode has no default alternative (KafkaProduceSpec holds a non-default-constructible
+        // KafkaTopic) -> build the Result inline per branch instead of default-constructing a Mode first.
+        if (curK.kind() == d::KafkaClientKind::Producer) {
+            auto msgR = core::serial::jsonToKafkaMessage(S(_reqBuffers[0]));
+            if (!msgR.isOk()) return fail(0, msgR.error().message);
+            auto cfgR = core::serial::jsonToKafkaProduceConfig(S(_reqBuffers[1]));
+            if (!cfgR.isOk()) return fail(1, cfgR.error().message);
+            auto kr = d::KafkaRequest::create(br.take(), curK.security(),
+                                              d::KafkaRequest::Mode{d::KafkaProduceSpec{cfgR.take(), msgR.take()}});
+            if (!kr.isOk()) return fail(0, kr.error().message);
+            payload = kr.take();
+        } else {
+            auto cfgR = core::serial::jsonToKafkaConsumeConfig(S(_reqBuffers[0]));
+            if (!cfgR.isOk()) return fail(0, cfgR.error().message);
+            auto kr = d::KafkaRequest::create(br.take(), curK.security(),
+                                              d::KafkaRequest::Mode{d::KafkaConsumeSpec{cfgR.take()}});
+            if (!kr.isOk()) return fail(0, kr.error().message);
+            payload = kr.take();
+        }
     } else {
         const auto &curG = std::get<d::GrpcRequest>(cur.payload());
         d::GrpcRequest::Parts p;
@@ -286,9 +330,11 @@ static NSArray<NSString *> *BodyAllModes(void);
         auto gr = d::GrpcRequest::create(std::move(p)); if (!gr.isOk()) return fail(0, gr.error().message);
         payload = gr.take();
     }
-    // Config tab (last buffer for every type) -> per-request timeout_ms + tls.
+    // Config tab (last buffer for every type) -> per-request timeout_ms + tls; Kafka has no "tls" key.
     NSInteger ci = (NSInteger)_reqBuffers.count - 1;
-    auto cfgRes = core::serial::jsonToConfig(ci >= 0 ? S(_reqBuffers[ci]) : std::string("{}"));
+    std::string ciText = ci >= 0 ? S(_reqBuffers[ci]) : std::string("{}");
+    auto cfgRes = cur.type() == d::RequestType::Kafka ? core::serial::jsonToKafkaRequestConfig(ciText)
+                                                      : core::serial::jsonToConfig(ciText);
     if (!cfgRes.isOk()) return fail(ci, cfgRes.error().message);
     auto built = d::RequestModel::create(cur.id(), cur.name(), cur.seq(), cfgRes.take(), std::move(payload));
     if (!built.isOk()) return fail(0, built.error().message);
@@ -721,6 +767,7 @@ static NSString *GqlImportLabel(NSInteger kind) {
     _model->match([&](auto &&p) {
         using T = std::decay_t<decltype(p)>;
         if constexpr (std::is_same_v<T, core::domain::GrpcRequest>) url = p.target();
+        else if constexpr (std::is_same_v<T, core::domain::KafkaRequest>) url = p.brokers().toBootstrapServers();
         else url = p.url().raw(); // Http / WebSocket / GraphQl all expose url()
     });
     NSString *u = N(url);

@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include "core/domain/kafka/kafka_consume.hpp"
 #include "core/domain/response/api_error.hpp"
 #include "core/domain/response/api_response.hpp"
 #include "core/domain/ws/ws_message.hpp"
@@ -54,11 +55,18 @@ struct EvClosed {
   std::string reason; // WS close
   bool operator==(const EvClosed &o) const { return code == o.code && reason == o.reason; }
 };
+// One Kafka consumer record — OUTPUT THUẦN (SPEC_kafka §3/§6): the record travels byte-for-byte, no
+// EvMessage string-encoding detour (KafkaRecord has too much shape — topic/partition/offset/headers/ts —
+// to flatten into EvMessage's {kind,payload,index} without processing the bytes).
+struct EvKafkaRecord {
+  KafkaRecord record;
+  bool operator==(const EvKafkaRecord &o) const { return record == o.record; }
+};
 
 class ResponseEvent {
 public:
   using Variant = std::variant<EvStarted, EvMetadata, EvMessage, EvProgress, EvTrailers, EvCompleted,
-                               EvFailed, EvClosed>;
+                               EvFailed, EvClosed, EvKafkaRecord>;
 
   ResponseEvent(Variant v) : data_(std::move(v)) {} // implicit: emit(EvCompleted{...}) reads naturally
 

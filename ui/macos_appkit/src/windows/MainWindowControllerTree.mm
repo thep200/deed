@@ -469,6 +469,7 @@
         [items addObject:[OS9MenuEntry entry:StrMenuNewGrpc    action:^{ [ws newGrpc:nil]; }]];
         [items addObject:[OS9MenuEntry entry:StrMenuNewWs      action:^{ [ws newWs:nil]; }]];
         [items addObject:[OS9MenuEntry entry:StrMenuNewGraphQl action:^{ [ws newGraphQl:nil]; }]];
+        [items addObject:[OS9MenuEntry entry:StrMenuNewKafka   action:^{ [ws newKafka:nil]; }]];
         [items addObject:[OS9MenuEntry entry:StrNewFolder      action:^{ [ws newFolder:nil]; }]];
         if (t != nil) { // folder also allows rename/dup/delete
             [items addObject:[OS9MenuEntry separator]];
@@ -561,6 +562,7 @@
 - (void)newGrpc:(id)s { [self createRequest:core::RequestType::Grpc name:StrDefaultRpcName]; }
 - (void)newWs:(id)s { [self createRequest:core::RequestType::WebSocket name:StrDefaultWsName]; }
 - (void)newGraphQl:(id)s { [self createRequest:core::RequestType::GraphQL name:StrDefaultGqlName]; }
+- (void)newKafka:(id)s { [self createRequest:core::RequestType::Kafka name:StrDefaultKafkaName]; }
 // Default name, NO popup. Rename later via inline-rename in the tree. loadRequestAtRel
 // autosaves the open request before switching.
 - (void)createRequest:(core::RequestType)t name:(NSString *)name {

@@ -12,18 +12,19 @@
 #include "core/domain/graphql/graphql_request.hpp"
 #include "core/domain/grpc/grpc_request.hpp"
 #include "core/domain/http/http_request.hpp"
+#include "core/domain/kafka/kafka_request.hpp"
 #include "core/domain/request/request_config.hpp"
 #include "core/domain/request/request_id.hpp"
 #include "core/domain/ws/websocket_request.hpp"
 
 namespace core::domain {
 
-enum class RequestType { Http, Grpc, GraphQl, WebSocket };
+enum class RequestType { Http, Grpc, GraphQl, WebSocket, Kafka };
 
 class RequestModel {
 public:
   // Order MUST match RequestType so type() == variant index.
-  using Payload = std::variant<HttpRequest, GrpcRequest, GraphQlRequest, WebSocketRequest>;
+  using Payload = std::variant<HttpRequest, GrpcRequest, GraphQlRequest, WebSocketRequest, KafkaRequest>;
 
   // id may be empty: an imported/draft request has no identity until it is persisted (the store assigns
   // one on save), exactly like a draft Url. Identity is a persistence concern, not a construction invariant.

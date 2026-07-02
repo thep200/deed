@@ -11,6 +11,7 @@ d::RequestType toDomainType(core::RequestType t) {
   case core::RequestType::Grpc: return d::RequestType::Grpc;
   case core::RequestType::WebSocket: return d::RequestType::WebSocket;
   case core::RequestType::GraphQL: return d::RequestType::GraphQl;
+  case core::RequestType::Kafka: return d::RequestType::Kafka;
   default: return d::RequestType::Http;
   }
 }

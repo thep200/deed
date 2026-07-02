@@ -38,6 +38,7 @@ find_package(CURL REQUIRED)                 # WebSocket transport (curl_ws_* —
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(protobuf CONFIG REQUIRED)
+find_package(RdKafka CONFIG REQUIRED)       # Kafka producer+consumer (SPEC_kafka §1) — PLAINTEXT only, ssl/sasl off
 
 # --- Real targets (README §3) ---
 add_subdirectory(core)              # -> static lib "core" (pure C++)

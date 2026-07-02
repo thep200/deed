@@ -156,6 +156,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     OS9PopupButton *_protoPopup;     // gRPC: pick proto source (Reflection | .proto)
     OS9PopupButton *_servicePopup;   // gRPC: pick service/RPC (before the Send button)
     OS9PopupButton *_methodPopup;
+    OS9Toggle *_kafkaModeToggle;     // Kafka only: Producer(off)/Consumer(on) client-kind (SPEC_kafka §2.0)
     OS9SerratedInset *_urlInset; // retro serrated input frame wrapping the URL field
     NSTextField *_urlField;
 
@@ -189,6 +190,20 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     // dict mirrors that so toggling Body mode (e.g. Form<->JSON) keeps each mode's content. Rebuilt fresh
     // from the OPEN request's Body on every (re)load -> never carries content across requests.
     NSMutableDictionary<NSString *, NSString *> *_bodyDrafts;
+
+    // Kafka Producer/Consumer drafts (bug fix): the client-kind toggle used to always rebuild a FRESH
+    // default spec on flip, discarding whatever the user had typed. Mirrors _bodyDrafts' approach — keep
+    // BOTH kinds' editor buffers (kafka-specific tabs only; the trailing shared Config/timeout-tls buffer is
+    // NOT duplicated here since it isn't per-kind) and BOTH kinds' last response, restored on toggle-back.
+    // Reset (nil'd) on every populateEditorsFromModel — never carries content across a different request.
+    NSArray<NSString *> *_kafkaProducerReqBuffers; // [message, kafkaConfig] JSON
+    NSArray<NSString *> *_kafkaConsumerReqBuffers; // [kafkaConfig] JSON
+    NSArray<NSString *> *_kafkaProducerRespBuffers;
+    NSArray<NSString *> *_kafkaConsumerRespBuffers;
+    core::domain::ApiResponse _kafkaProducerLastResp;
+    BOOL _kafkaProducerHasResp;
+    core::domain::ApiResponse _kafkaConsumerLastResp;
+    BOOL _kafkaConsumerHasResp;
 }
 @end
 
@@ -215,6 +230,8 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)layoutTabButtons:(NSArray<OS9BevelButton *> *)buttons atX:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)h extra:(CGFloat)extra;
 - (void)layoutConfig;
 - (core::RequestType)requestType; // current request's protocol view-enum (reads domain _model; no bridge)
+- (core::domain::KafkaClientKind)kafkaClientKind; // Kafka payload's Producer/Consumer mode (SPEC_kafka §2.0)
+- (void)kafkaModeToggled:(id)sender; // toolbar toggle flipped -> rebuild _model with the other Mode alternative
 // Rebuild the current gRPC payload's immutable VO via Parts + write back to _model (no-op unless gRPC).
 - (void)mutateGrpc:(void (^)(core::domain::GrpcRequest::Parts &))fn;
 - (void)setRequestType:(core::domain::RequestType)t;
@@ -346,6 +363,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)newGrpc:(id)s;
 - (void)newWs:(id)s;
 - (void)newGraphQl:(id)s;
+- (void)newKafka:(id)s;
 - (void)wsSendOrConnect;
 - (void)createRequest:(core::RequestType)t name:(NSString *)name;
 - (void)newFolder:(id)s;

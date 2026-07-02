@@ -9,6 +9,7 @@
 #include "infra/transport/graphql/native_graphql_sender.hpp"
 #include "infra/transport/grpc/native_grpc_sender.hpp"
 #include "infra/transport/http/native_http_sender.hpp"
+#include "infra/transport/kafka/kafka_sender.hpp"
 #include "infra/transport/ws/ws_sender.hpp"
 #include "app/cache_config.hpp"     // detail::buildCacheConfig (native response cache)
 #include "core/infra/variables/variable_resolver.hpp" // valueToAlias/prefixToAlias (native aliasify)
@@ -279,6 +280,7 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
   c->senders_.push_back(std::make_unique<infra::NativeGrpcSender>());
   c->senders_.push_back(std::make_unique<infra::NativeGraphQlSender>());
   c->senders_.push_back(std::make_unique<infra::WsSenderAdapter>(buildWsConfig(cfg)));
+  c->senders_.push_back(std::make_unique<infra::KafkaSender>());
 
   std::vector<d::IRequestSender *> ptrs;
   for (auto &s : c->senders_) ptrs.push_back(s.get());
@@ -391,6 +393,40 @@ core::domain::RequestModel CoreApiClient::aliasifyModel(const core::domain::Requ
                                     aliasAuth(p.auth()), p.onOpenSend(), p.defaultSendKind()};
       auto r = d::WebSocketRequest::create(std::move(wp));
       return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
+    } else if constexpr (std::is_same_v<T, d::KafkaRequest>) {
+      // Alias brokers (prefix, like url/target) + topic/group (whole); message VALUE is body-like -> untouched.
+      auto aliasTopic = [&](const d::KafkaTopic &t) {
+        auto r = d::KafkaTopic::create(whole(t.value()));
+        return r ? r.take() : t;
+      };
+      auto aliasKafkaHeaders = [&](const std::vector<d::KafkaHeader> &hs) {
+        std::vector<d::KafkaHeader> out;
+        out.reserve(hs.size());
+        for (const auto &h : hs) out.push_back({h.key, h.enabled ? whole(h.value) : h.value, h.enabled});
+        return out;
+      };
+      auto brokers = d::BrokerList::parse(prefix(p.brokers().toBootstrapServers()));
+      d::BrokerList newBrokers = brokers ? brokers.take() : p.brokers();
+      auto mode = p.match([&](auto &&spec) -> d::KafkaRequest::Mode {
+        using S = std::decay_t<decltype(spec)>;
+        if constexpr (std::is_same_v<S, d::KafkaProduceSpec>) {
+          d::KafkaProduceSpec out = spec;
+          out.config.topic = aliasTopic(spec.config.topic);
+          if (out.message.key) out.message.key = d::MessageKey{whole(spec.message.key->value)};
+          out.message.headers = aliasKafkaHeaders(spec.message.headers);
+          return out;
+        } else {
+          d::KafkaConsumeSpec out = spec;
+          std::vector<d::KafkaTopic> topics;
+          for (const auto &t : spec.config.topics) topics.push_back(aliasTopic(t));
+          out.config.topics = std::move(topics);
+          auto g = d::ConsumerGroup::create(whole(spec.config.group.value()));
+          out.config.group = g ? g.take() : spec.config.group;
+          return out;
+        }
+      });
+      auto r = d::KafkaRequest::create(newBrokers, p.security(), std::move(mode));
+      return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
     } else { // GraphQlRequest — alias url + headers + auth only (query/variables untouched)
       d::GraphQlRequest::Parts gp{aliasUrl(p.url()), p.op(), aliasHeaders(p.headers()), aliasAuth(p.auth()),
                                   p.subTransport(), p.wsProtocol()};
@@ -442,6 +478,13 @@ core::InteractionKind CoreApiClient::interactionOf(const core::domain::RequestMo
     case d::GrpcMethodType::BidiStreaming: return core::InteractionKind::BiDi;
     default: return core::InteractionKind::Unary;
     }
+  }
+  case d::RequestType::Kafka: {
+    // Producer = unary (one delivery report); Consumer = server-stream (inbound-only records, no push —
+    // unlike WS's Duplex, cancel()/Stop is the only client->server signal, same shape as gRPC ServerStream).
+    const auto &k = std::get<d::KafkaRequest>(m.payload());
+    return k.kind() == d::KafkaClientKind::Consumer ? core::InteractionKind::ServerStream
+                                                     : core::InteractionKind::Unary;
   }
   }
   return core::InteractionKind::Unary;

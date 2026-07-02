@@ -55,6 +55,7 @@ RequestType toViewType(core::domain::RequestType t) {
   case core::domain::RequestType::Grpc: return RequestType::Grpc;
   case core::domain::RequestType::WebSocket: return RequestType::WebSocket;
   case core::domain::RequestType::GraphQl: return RequestType::GraphQL;
+  case core::domain::RequestType::Kafka: return RequestType::Kafka;
   default: return RequestType::Http;
   }
 }
@@ -63,6 +64,7 @@ core::domain::RequestType toDomainType(RequestType t) {
   case RequestType::Grpc: return core::domain::RequestType::Grpc;
   case RequestType::WebSocket: return core::domain::RequestType::WebSocket;
   case RequestType::GraphQL: return core::domain::RequestType::GraphQl;
+  case RequestType::Kafka: return core::domain::RequestType::Kafka;
   default: return core::domain::RequestType::Http;
   }
 }
@@ -98,6 +100,17 @@ core::domain::RequestModel::Payload defaultPayloadForCreate(core::domain::Reques
     cd::GrpcRequest::Parts gp; // reflection + unary + empty target are the Parts defaults
     gp.message = cd::JsonText::of("{}");
     return cd::GrpcRequest::create(std::move(gp)).take();
+  }
+  case cd::RequestType::Kafka: {
+    // BrokerList/KafkaTopic reject empty (SPEC_kafka §3 invariants) -> seed a placeholder, same convention
+    // GraphQL uses for its non-empty-query invariant (not an "always-empty-ok" draft like url/target).
+    cd::KafkaProduceConfig cfg{cd::KafkaTopic::create("demo-topic").take()};
+    cd::KafkaMessage msg;
+    msg.value = cd::MessagePayload{"{}", false};
+    auto mode = cd::KafkaRequest::Mode{cd::KafkaProduceSpec{std::move(cfg), std::move(msg)}};
+    return cd::KafkaRequest::create(cd::BrokerList::parse("localhost:9092").take(),
+                                    cd::KafkaSecurity::plaintext(), std::move(mode))
+        .take();
   }
   default: {
     // HTTP: GET + the common default headers as OFF-by-default hints (User-Agent on), no body.

@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "core/domain/kafka/kafka_request.hpp"
 #include "core/domain/request/request_model.hpp"
 #include "infra/serialization/request_json_mapper.hpp"
 
@@ -87,6 +88,106 @@ static void test_graphql() {
   roundtrip(m.value(), "graphql roundtrip");
 }
 
+static void test_kafka_producer() {
+  auto brokers = BrokerList::parse("localhost:9092").take();
+  KafkaProduceConfig pcfg{KafkaTopic::create("demo-topic").take()};
+  pcfg.acks = Acks::All;
+  pcfg.compression = Compression::None;
+  KafkaMessage msg;
+  msg.value = MessagePayload{"{\n  \"hello\": \"world\"\n}", false};
+  auto req =
+      KafkaRequest::create(brokers, KafkaSecurity::plaintext(), KafkaRequest::Mode{KafkaProduceSpec{pcfg, msg}})
+          .take();
+  auto m = RequestModel::create(RequestId("req_kafka_p1"), "Produce", 5, cfg(), req);
+  roundtrip(m.value(), "kafka producer roundtrip");
+}
+
+static void test_kafka_consumer() {
+  auto brokers = BrokerList::parse("localhost:9092").take();
+  KafkaConsumeConfig ccfg{{KafkaTopic::create("demo-topic").take()}, std::nullopt,
+                          ConsumerGroup::create("deed-tail-local").take()};
+  auto req = KafkaRequest::create(brokers, KafkaSecurity::plaintext(), KafkaRequest::Mode{KafkaConsumeSpec{ccfg}})
+                 .take();
+  auto m = RequestModel::create(RequestId("req_kafka_c1"), "Consume", 6, cfg(), req);
+  roundtrip(m.value(), "kafka consumer roundtrip");
+}
+
+// SPEC_kafka.md §4's exact sample JSON (timeout_ms adjusted: 0 is invalid per Timeout::fromMillis, see
+// the implementation plan's documented deviation — the consumer sample uses a normal positive default).
+static void test_parse_kafka_samples() {
+  RequestJsonMapper mapper;
+  const std::string producer = R"({
+    "config": { "timeout_ms": 1800000, "tls": false },
+    "id": "k1example0001",
+    "kafka": {
+      "brokers": "localhost:9092",
+      "clientKind": "producer",
+      "consumer": null,
+      "producer": {
+        "config": {
+          "acks": "all", "clientId": "deed", "compression": "none", "extra": [],
+          "idempotence": false, "lingerMs": 0, "messageTimeoutMs": 30000,
+          "partition": -1, "retries": 3, "topic": "demo-topic"
+        },
+        "message": {
+          "headers": [], "key": "", "tombstone": false,
+          "value": "{\n  \"hello\": \"world\"\n}"
+        }
+      },
+      "security": { "type": "plaintext" }
+    },
+    "name": "Produce - local",
+    "schemaVersion": 1, "seq": 0, "type": "kafka"
+  })";
+  auto rp = mapper.fromJson(producer);
+  RT_CHECK(rp.isOk(), "kafka producer sample parses");
+  if (rp.isOk()) {
+    const auto &k = std::get<KafkaRequest>(rp.value().payload());
+    RT_CHECK(rp.value().type() == RequestType::Kafka, "sample type == Kafka");
+    RT_CHECK(k.kind() == KafkaClientKind::Producer, "sample clientKind producer");
+    RT_CHECK(k.brokers().toBootstrapServers() == "localhost:9092", "sample brokers");
+    const auto &p = std::get<KafkaProduceSpec>(k.mode());
+    RT_CHECK(p.config.topic.value() == "demo-topic", "sample topic");
+    RT_CHECK(p.config.partition.value == KafkaPartition::kAuto, "sample partition auto");
+    RT_CHECK(p.message.value.value == "{\n  \"hello\": \"world\"\n}", "sample value (always JSON, no format field)");
+  }
+
+  const std::string consumer = R"({
+    "config": { "timeout_ms": 1800000, "tls": false },
+    "id": "kc1example001",
+    "kafka": {
+      "brokers": "localhost:9092",
+      "clientKind": "consumer",
+      "consumer": {
+        "config": {
+          "autoCommit": true, "clientId": "deed", "extra": [], "group": "deed-tail-local",
+          "maxMessages": null, "offsetReset": "latest", "partition": -1,
+          "pollTimeoutMs": 500, "topics": ["demo-topic"]
+        }
+      },
+      "producer": null,
+      "security": { "type": "plaintext" }
+    },
+    "name": "Consume - local",
+    "schemaVersion": 1, "seq": 0, "type": "kafka"
+  })";
+  auto rc = mapper.fromJson(consumer);
+  RT_CHECK(rc.isOk(), "kafka consumer sample parses");
+  if (rc.isOk()) {
+    const auto &k = std::get<KafkaRequest>(rc.value().payload());
+    RT_CHECK(k.kind() == KafkaClientKind::Consumer, "sample clientKind consumer");
+    const auto &c = std::get<KafkaConsumeSpec>(k.mode());
+    RT_CHECK(c.config.topics.size() == 1 && c.config.topics[0].value() == "demo-topic", "sample topics");
+    RT_CHECK(!c.config.partition.has_value(), "sample partition -1 -> nullopt (subscribe)");
+    RT_CHECK(!c.config.maxMessages.has_value(), "sample maxMessages null -> nullopt");
+    RT_CHECK(c.config.group.value() == "deed-tail-local", "sample group");
+  }
+
+  // round-trip stability: toJson(fromJson(x)) parsed again == same domain value (spec §4 acceptance gate).
+  if (rp.isOk()) roundtrip(rp.value(), "kafka producer sample re-roundtrip");
+  if (rc.isOk()) roundtrip(rc.value(), "kafka consumer sample re-roundtrip");
+}
+
 static void test_parse_real_schema() {
   // The exact on-disk schema (envelope + http block). fromJson must yield the expected domain value.
   const std::string doc = R"({
@@ -144,6 +245,9 @@ int run_mapper_roundtrip_tests() {
   test_grpc();
   test_ws();
   test_graphql();
+  test_kafka_producer();
+  test_kafka_consumer();
+  test_parse_kafka_samples();
   test_parse_real_schema();
   test_parse_legacy_ws_gql();
   std::printf("  mapper: %d passed, %d failed\n", rt_pass, rt_fail);

@@ -9,6 +9,7 @@
 
 #include "core/app/request_orchestrator.hpp"
 #include "core/app/send_request_saga.hpp"
+#include "core/domain/kafka/kafka_request.hpp"
 #include "core/domain/ports/driven/i_clock.hpp"
 #include "core/domain/ports/driven/i_json_validator.hpp"
 #include "core/domain/ports/driven/i_request_observer.hpp"
@@ -80,6 +81,37 @@ ResponseEvent completed() {
   r.statusCode = 200;
   r.body = "ok";
   return ResponseEvent(EvCompleted{r});
+}
+
+RequestModel makeKafkaProducer() {
+  auto brokers = BrokerList::parse("localhost:9092").take();
+  KafkaProduceConfig cfg{KafkaTopic::create("demo-topic").take()};
+  KafkaMessage msg;
+  msg.value = MessagePayload{"{}", false};
+  auto req = KafkaRequest::create(brokers, KafkaSecurity::plaintext(),
+                                  KafkaRequest::Mode{KafkaProduceSpec{cfg, msg}})
+                 .take();
+  RequestConfig cfg2{Timeout::fromMillis(1800000).take(), false};
+  return RequestModel::create(RequestId("req_kafka_p"), "P", 0, cfg2, req).take();
+}
+
+RequestModel makeKafkaConsumer() {
+  auto brokers = BrokerList::parse("localhost:9092").take();
+  KafkaConsumeConfig cfg{{KafkaTopic::create("demo-topic").take()}, std::nullopt,
+                        ConsumerGroup::create("deed-tail-test").take()};
+  auto req =
+      KafkaRequest::create(brokers, KafkaSecurity::plaintext(), KafkaRequest::Mode{KafkaConsumeSpec{cfg}}).take();
+  RequestConfig cfg2{Timeout::fromMillis(1800000).take(), false};
+  return RequestModel::create(RequestId("req_kafka_c"), "C", 0, cfg2, req).take();
+}
+
+ResponseEvent kafkaRecord(int offset) {
+  KafkaRecord r;
+  r.topic = "demo-topic";
+  r.partition = 0;
+  r.offset = offset;
+  r.value = "{}";
+  return ResponseEvent(EvKafkaRecord{r});
 }
 
 template <class T> bool isAt(const std::vector<ResponseEvent> &v, size_t i) {
@@ -193,6 +225,65 @@ static void test_orchestrator_inline() {
   SG_CHECK(!orch.cancel(exec.value()).isOk(), "orch: finished exec no longer cancellable");
 }
 
+// SPEC_kafka §5/§11: producer is unary-like (EvStarted -> EvCompleted); the fakes below cover the saga's
+// generic state-machine behavior end to end (real _PARTITION_EOF-not-an-error / cancel-mid-poll are
+// KafkaSender-internal, exercised only by the integration test against a real broker, per spec §11's own
+// split between the saga+fakes layer and the integration layer).
+static void test_kafka_producer_happy() {
+  FakeClock clock; FakeCache cache;
+  FakeSender sender; sender.type = RequestType::Kafka;
+  sender.script = {completed()};
+  SendRequestSaga saga(RequestExecutionId("k1"), makeKafkaProducer(), {{&sender}, &clock, nullptr, &cache});
+  FakeObserver obs;
+  saga.run(obs);
+  SG_CHECK(isAt<EvStarted>(obs.events, 0), "kafka producer: EvStarted first");
+  SG_CHECK(isAt<EvCompleted>(obs.events, 1), "kafka producer: EvCompleted last");
+  SG_CHECK(saga.state() == SagaState::Completed, "kafka producer: state Completed");
+  // Deviation from SPEC_kafka §5 ("cả 2 chế độ không ghi cache"): the saga's cache-write is a GENERIC
+  // rule keyed on the event type (any EvCompleted is cached), not on RequestType — carving out "except
+  // Kafka" would be the first type-specific branch in an otherwise protocol-agnostic saga. A cached
+  // delivery-report summary is harmless and consistent with how every other unary type (HTTP/gRPC/GraphQL
+  // query) already behaves, so producer IS cached; only the streaming consumer never caches (it emits
+  // EvKafkaRecord/EvClosed, never EvCompleted — the same mechanism that already keeps WS/SSE cache-free).
+  SG_CHECK(cache.puts == 1, "kafka producer: cached like any other unary EvCompleted (see comment above)");
+}
+
+// Consumer streaming: EvStarted -> EvKafkaRecord*N -> EvClosed. state()==Streaming while records flow;
+// EvClosed (whether from Stop or maxMessages reached — both look the same to the saga) -> Completed.
+static void test_kafka_consumer_streaming() {
+  FakeClock clock; FakeCache cache;
+  FakeSender sender; sender.type = RequestType::Kafka;
+  sender.script = {kafkaRecord(0), kafkaRecord(1), kafkaRecord(2),
+                   ResponseEvent(EvClosed{std::nullopt, "stopped"})};
+  SendRequestSaga saga(RequestExecutionId("k2"), makeKafkaConsumer(), {{&sender}, &clock, nullptr, &cache});
+  FakeObserver obs;
+  saga.run(obs);
+  SG_CHECK(obs.events.size() == 5, "kafka consumer: EvStarted + 3 records + EvClosed");
+  SG_CHECK(isAt<EvStarted>(obs.events, 0), "kafka consumer: EvStarted first");
+  SG_CHECK(isAt<EvKafkaRecord>(obs.events, 1) && isAt<EvKafkaRecord>(obs.events, 2) &&
+               isAt<EvKafkaRecord>(obs.events, 3),
+           "kafka consumer: 3 EvKafkaRecord in order");
+  SG_CHECK(isAt<EvClosed>(obs.events, 4), "kafka consumer: EvClosed last");
+  SG_CHECK(saga.state() == SagaState::Completed, "kafka consumer: EvClosed -> state Completed");
+  SG_CHECK(cache.puts == 0, "kafka consumer: no cache write (stream, spec §5)");
+}
+
+// Cancel BEFORE run() short-circuits before the sender is ever invoked (same generic guarantee HTTP/WS get;
+// mid-poll cancellation is KafkaSender-internal cooperative-poll behavior, covered by the integration test).
+static void test_kafka_consumer_cancel_before_run() {
+  FakeClock clock;
+  FakeSender sender; sender.type = RequestType::Kafka;
+  sender.script = {kafkaRecord(0), ResponseEvent(EvClosed{std::nullopt, "stopped"})};
+  SendRequestSaga saga(RequestExecutionId("k3"), makeKafkaConsumer(), {{&sender}, &clock, nullptr, nullptr});
+  saga.cancel();
+  FakeObserver obs;
+  saga.run(obs);
+  SG_CHECK(!sender.executed, "kafka consumer cancel: sender not invoked");
+  SG_CHECK(saga.state() == SagaState::Cancelled, "kafka consumer cancel: state Cancelled");
+  const auto *f = obs.events.back().get<EvFailed>();
+  SG_CHECK(f && f->error.kind == ErrorKind::Cancelled, "kafka consumer cancel: EvFailed{Cancelled}");
+}
+
 int run_saga_tests() {
   std::printf("[saga]\n");
   test_unary_happy();
@@ -203,6 +294,9 @@ int run_saga_tests() {
   test_unsupported_type();
   test_cancel_before_run();
   test_orchestrator_inline();
+  test_kafka_producer_happy();
+  test_kafka_consumer_streaming();
+  test_kafka_consumer_cancel_before_run();
   std::printf("  saga: %d passed, %d failed\n", sg_pass, sg_fail);
   return sg_fail;
 }

@@ -45,6 +45,7 @@ add_library(core STATIC
   src/infra/persistence/app_config_store.cpp
   src/infra/transport/grpc/grpc_descriptors.cpp
   src/infra/transport/ws/ws_sender.cpp
+  src/infra/transport/kafka/kafka_sender.cpp
   src/infra/transport/shared/sse_parser.cpp
   src/infra/transport/graphql/gql_operation.cpp
   src/infra/transport/graphql/gql_ws_protocol.cpp
@@ -73,6 +74,7 @@ target_link_libraries(core
     gRPC::grpc++                   # gRPC C++
     protobuf::libprotobuf          # descriptor / dynamic_message / json_util
     protobuf::libprotoc            # compiler::Importer / DiskSourceTree (load .proto at runtime)
+    RdKafka::rdkafka++             # Kafka producer+consumer (SPEC_kafka §6) — confined to src/infra/transport/kafka
 )
 
 target_compile_features(core PUBLIC cxx_std_17)

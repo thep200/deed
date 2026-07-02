@@ -15,6 +15,7 @@
 #include "bridge/CoreBridge.h" // CoreResponseSink + legacy DTOs + StreamStatus
 #include "core/domain/ports/driven/i_request_observer.hpp"
 #include "core/domain/response/response_event.hpp"
+#include "core/infra/serialization/field_json.hpp" // core::serial::kafkaRecordToDisplayJson (UI-only pretty-print)
 
 class UiObserver final : public core::domain::IRequestObserver {
 public:
@@ -43,6 +44,13 @@ public:
       bool first = (count_ == 0);
       ++count_;
       std::string chunk = (first ? std::string("\n  ") : std::string(",\n  ")) + m->payload;
+      deliverChunk(chunk, count_);
+    } else if (const auto *r = ev.get<EvKafkaRecord>()) {
+      if (!opened_) openStream();
+      bool first = (count_ == 0);
+      ++count_;
+      std::string chunk =
+          (first ? std::string("\n  ") : std::string(",\n  ")) + core::serial::kafkaRecordToDisplayJson(r->record);
       deliverChunk(chunk, count_);
     } else if (const auto *c = ev.get<EvCompleted>()) {
       if (!opened_) openStream();

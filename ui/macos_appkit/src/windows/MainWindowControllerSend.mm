@@ -386,9 +386,10 @@
             [ck appendFormat:@"%s=%s  (domain=%s path=%s expires=%s)\n", c.name.c_str(), c.value.c_str(),
                              c.domain.c_str(), c.path.c_str(), c.expires.c_str()];
         [bufs addObject:(ck.length ? ck : StrNoSetCookie)];
-    } else {
+    } else if (type != RequestType::Kafka) {
         [bufs addObject:@""];   // Request tab (resolved request) — see note above
     }
+    // Kafka has no Request tab (removed per product decision) -> body buffer only, no trailing empty slot.
     return bufs;
 }
 

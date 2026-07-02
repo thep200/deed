@@ -97,6 +97,14 @@ extern NSString *const StrTabVariables;
 extern NSString *const StrTabMetadata;
 extern NSString *const StrTabConfig;
 
+#pragma mark - Kafka client-kind toggle (SPEC_kafka §2.0)
+extern NSString *const StrKafkaProducer;
+extern NSString *const StrKafkaConsumer;
+// Kafka-specific settings tab (topic/ack/compression.../topics/group/...) — DISTINCT from the shared
+// per-request StrTabConfig (timeout_ms/tls) that every request type also gets, appended last (§ see
+// populateEditorsFromModel / syncModelFromEditors's "last buffer = shared RequestConfig" invariant).
+extern NSString *const StrTabKafkaConfig;
+
 #pragma mark - Body mode (dropdown)
 extern NSString *const StrBodyJson;
 extern NSString *const StrBodyFile;
@@ -113,6 +121,7 @@ extern NSString *const StrMenuNewHttp;
 extern NSString *const StrMenuNewGrpc;
 extern NSString *const StrMenuNewWs;
 extern NSString *const StrMenuNewGraphQl;
+extern NSString *const StrMenuNewKafka;
 extern NSString *const StrNewFolder;     // menu + default folder name
 extern NSString *const StrMenuCopyCurl;  // right-click: copy request as cURL/grpcurl
 extern NSString *const StrFmtDeleteItems;
@@ -122,6 +131,7 @@ extern NSString *const StrDefaultRequestName;
 extern NSString *const StrDefaultRpcName;
 extern NSString *const StrDefaultWsName;
 extern NSString *const StrDefaultGqlName;
+extern NSString *const StrDefaultKafkaName;
 extern NSString *const StrDefaultImportName;   // fallback when a name cannot be inferred
 extern NSString *const StrImportedGrpc;
 
