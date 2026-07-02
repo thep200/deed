@@ -7,6 +7,7 @@
 // core::GrpcRequest struct (via the request bridge) so the proven descriptor/marshal code is reused.
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
 
@@ -18,8 +19,18 @@ class CancelToken;
 
 namespace core::infra {
 
+// gRPC streaming ceilings (SPEC §9). Defaults here; the composition root overrides them from .env
+// (STREAM_MAX_EVENTS / STREAM_MAX_BYTES_MB) via CoreApiClient::Config — Core never reads .env itself.
+struct GrpcStreamLimits {
+  std::uint64_t maxEvents = 100000;             // truncate the stream after this many events
+  std::uint64_t maxBytes = 64ull * 1024 * 1024; // truncate after this many accumulated payload bytes
+};
+
 class NativeGrpcSender final : public domain::IRequestSender {
 public:
+  NativeGrpcSender() = default;
+  explicit NativeGrpcSender(GrpcStreamLimits limits) : limits_(limits) {}
+
   bool supports(domain::RequestType t) const override { return t == domain::RequestType::Grpc; }
 
   domain::Status execute(const domain::RequestModel &resolved, domain::IResponseSink &sink,
@@ -29,6 +40,7 @@ public:
   domain::Status close(int code, std::string reason) override;
 
 private:
+  GrpcStreamLimits limits_;                  // stream ceilings (.env via composition root; default above)
   std::mutex mu_;
   std::shared_ptr<core::CancelToken> token_; // active call's cancel token (one in-flight per sender)
 };

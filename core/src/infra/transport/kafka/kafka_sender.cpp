@@ -174,6 +174,7 @@ void produce(const std::string &bootstrap, const d::KafkaSecurity &security, con
   const auto effectiveTimeout = std::min(spec.config.messageTimeout, requestTimeout);
   const auto deadline = std::chrono::steady_clock::now() + effectiveTimeout;
   constexpr int kFlushSliceMs = 100;
+  constexpr int kPurgeDrainMs = 1000; // post-purge flush: drain the purge-completion delivery report
   bool cancelled = false;
   bool timedOut = false;
   while (true) {
@@ -186,7 +187,7 @@ void produce(const std::string &bootstrap, const d::KafkaSecurity &security, con
     // Abort queued + in-flight messages so flush() below returns promptly instead of waiting out
     // whatever's left of message.timeout.ms.
     producer->purge(RdKafka::Producer::PURGE_QUEUE | RdKafka::Producer::PURGE_INFLIGHT);
-    producer->flush(1000); // drain the purge-completion delivery report
+    producer->flush(kPurgeDrainMs);
     sink.emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Cancelled, "Cancelled", {}}}));
     return;
   }
@@ -196,7 +197,7 @@ void produce(const std::string &bootstrap, const d::KafkaSecurity &security, con
     // what the user experiences as "it timed out" (the purge is just how we unblock the wait, not the cause).
     if (!drCb.got) {
       producer->purge(RdKafka::Producer::PURGE_QUEUE | RdKafka::Producer::PURGE_INFLIGHT);
-      producer->flush(1000);
+      producer->flush(kPurgeDrainMs);
     }
     sink.emit(d::ResponseEvent(
         d::EvFailed{{d::ErrorKind::Timeout, "Delivery timed out — is the broker running?", {}}}));

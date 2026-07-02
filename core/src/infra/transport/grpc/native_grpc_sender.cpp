@@ -34,6 +34,12 @@ using core::CancelToken;
 using grpcdesc::DescriptorContext;
 using grpcdesc::makeCreds;
 
+// Fallback call deadline when the per-request timeout is unset/invalid (per-request timeout normally
+// arrives via RequestConfig, seeded from .env DEFAULT_TIMEOUT_MS).
+constexpr int kFallbackDeadlineMs = 30000;
+// Hard channel-memory quota for streaming calls (not a user tunable — protects the app, not the request).
+constexpr std::uint64_t kStreamChannelQuotaBytes = 512ull * 1024 * 1024;
+
 // ---- domain ResponseEvent helpers (mirror LegacySenderAdapter's translation) ----
 
 d::ErrorKind unaryErrKind(grpc::StatusCode code) {
@@ -68,7 +74,7 @@ void emitUnaryOk(d::IResponseSink &sink, const std::string &jsonOut, long elapse
 grpc::ChannelArguments streamChannelArgs() {
   grpc::ChannelArguments args;
   grpc::ResourceQuota quota("deed-grpc");
-  quota.Resize(512ull * 1024 * 1024);
+  quota.Resize(kStreamChannelQuotaBytes);
   args.SetResourceQuota(quota);
   return args;
 }
@@ -145,7 +151,7 @@ const gp::MethodDescriptor *resolveMethod(const d::GrpcRequest &g, DescriptorCon
 }
 
 void applyCallContext(grpc::ClientContext &ctx, const d::GrpcRequest &g, int deadlineMs) {
-  if (deadlineMs <= 0) deadlineMs = 30000;
+  if (deadlineMs <= 0) deadlineMs = kFallbackDeadlineMs;
   ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::milliseconds(deadlineMs));
   for (const auto &md : g.metadata().entries())
     if (md.enabled && !md.key.empty()) ctx.AddMetadata(md.key, md.value);
@@ -445,9 +451,8 @@ void runUnaryShaped(const d::GrpcRequest &g, const gp::MethodDescriptor *mth, co
 
 // ---- server-stream / bidi (EvMessage* then terminal) ----
 void runStreaming(const d::GrpcRequest &g, const gp::MethodDescriptor *mth, const gp::DescriptorPool *pool,
-                  bool isBidi, int deadlineMs, d::IResponseSink &sink, const std::shared_ptr<CancelToken> &cancel) {
-  const std::uint64_t kMaxEvents = 100000;
-  const std::uint64_t kMaxBytes = 64ull * 1024 * 1024;
+                  bool isBidi, int deadlineMs, const GrpcStreamLimits &limits, d::IResponseSink &sink,
+                  const std::shared_ptr<CancelToken> &cancel) {
   const auto t0 = std::chrono::steady_clock::now();
   auto offsetMs = [&] {
     return static_cast<long long>(
@@ -468,7 +473,7 @@ void runStreaming(const d::GrpcRequest &g, const gp::MethodDescriptor *mth, cons
   std::unique_ptr<GenericRW> rw = stub.PrepareCall(&ctx, methodPath, &cq);
 
   std::unique_ptr<gp::Message> outMsg(factory.GetPrototype(mth->output_type())->New());
-  DomainStreamEmitter emitter{sink, ctx, *outMsg, kMaxEvents, kMaxBytes};
+  DomainStreamEmitter emitter{sink, ctx, *outMsg, limits.maxEvents, limits.maxBytes};
   auto emit = [&](const grpc::ByteBuffer &m) { return emitter.emit(m); };
 
   GrpcCall call{*rw, cq, ctx, cancel};
@@ -502,7 +507,7 @@ d::Status NativeGrpcSender::execute(const d::RequestModel &resolved, d::IRespons
   if (mth) {
     const bool srv = mth->server_streaming();
     const bool cli = mth->client_streaming();
-    if (srv) runStreaming(g, mth, ctx.activePool, /*isBidi*/ cli, deadlineMs, sink, token); // server-stream or bidi
+    if (srv) runStreaming(g, mth, ctx.activePool, /*isBidi*/ cli, deadlineMs, limits_, sink, token); // server-stream or bidi
     else runUnaryShaped(g, mth, ctx.activePool, /*clientStream*/ cli, deadlineMs, sink, token); // unary or client-stream
   } else {
     emitFailed(sink, d::ErrorKind::Parse, err);

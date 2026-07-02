@@ -13,6 +13,13 @@ namespace core::domain {
 enum class Acks { None, Leader, All };               // "0" / "1" / "all"
 enum class Compression { None, Gzip, Snappy, Lz4, Zstd };
 
+// New-request producer defaults (SPEC_kafka §3). Pure domain — these seed a freshly created request's
+// Config tab; the user edits them per request in the UI (they are not app-global .env tunables).
+inline constexpr std::chrono::milliseconds kDefaultMessageTimeout{30000};
+inline constexpr std::chrono::milliseconds kDefaultLinger{0};
+inline constexpr int kDefaultProduceRetries = 3;
+inline constexpr const char *kDefaultKafkaClientId = "deed";
+
 // Invariant (partition -1(auto) or >=0) is checked by KafkaRequest::create (kafka_request.hpp), which sees
 // the whole Mode variant at once — this struct itself is a plain aggregate, like the spec's pseudocode.
 struct KafkaProduceConfig {
@@ -20,11 +27,11 @@ struct KafkaProduceConfig {
   KafkaPartition partition{KafkaPartition::kAuto};
   Acks acks = Acks::All;
   Compression compression = Compression::None;
-  std::chrono::milliseconds messageTimeout{30000};
-  std::chrono::milliseconds linger{0};
-  int retries = 3;
+  std::chrono::milliseconds messageTimeout{kDefaultMessageTimeout};
+  std::chrono::milliseconds linger{kDefaultLinger};
+  int retries = kDefaultProduceRetries;
   bool idempotence = false;
-  std::string clientId = "deed";
+  std::string clientId = kDefaultKafkaClientId;
   std::vector<KafkaExtra> extra;
 
   bool operator==(const KafkaProduceConfig &o) const {

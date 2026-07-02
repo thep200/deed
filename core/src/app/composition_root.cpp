@@ -222,17 +222,24 @@ private:
   core::CollectionStore &s_;
 };
 
-// .env -> WsConfig / CacheLimits builders (value-returning; keep create() under the size threshold).
+// .env -> WsConfig / GrpcStreamLimits / CacheLimits builders (value-returning; keep create() under the size threshold).
 core::WsConfig buildWsConfig(const CoreApiClient::Config &cfg) {
   core::WsConfig ws; // 0 -> ws_sender default
   if (cfg.wsPingIntervalMs > 0) ws.pingIntervalMs = cfg.wsPingIntervalMs;
   if (cfg.wsIdleTimeoutMs > 0) ws.idleTimeoutMs = cfg.wsIdleTimeoutMs;
   if (cfg.wsCloseTimeoutMs > 0) ws.closeTimeoutMs = cfg.wsCloseTimeoutMs;
+  if (cfg.wsConnectTimeoutMs > 0) ws.connectTimeoutMs = cfg.wsConnectTimeoutMs;
   if (cfg.wsMaxFrameMb > 0) ws.maxFrameBytes = static_cast<std::uint64_t>(cfg.wsMaxFrameMb) * 1024 * 1024;
   if (cfg.wsSendQueueMaxFrames > 0) ws.sendQueueMaxFrames = static_cast<std::size_t>(cfg.wsSendQueueMaxFrames);
   if (cfg.wsSendQueueMaxMb > 0)
     ws.sendQueueMaxBytes = static_cast<std::uint64_t>(cfg.wsSendQueueMaxMb) * 1024 * 1024;
   return ws;
+}
+infra::GrpcStreamLimits buildGrpcStreamLimits(const CoreApiClient::Config &cfg) {
+  infra::GrpcStreamLimits lim; // 0 -> grpc_sender default
+  if (cfg.streamMaxEvents > 0) lim.maxEvents = static_cast<std::uint64_t>(cfg.streamMaxEvents);
+  if (cfg.streamMaxBytesMb > 0) lim.maxBytes = static_cast<std::uint64_t>(cfg.streamMaxBytesMb) * 1024 * 1024;
+  return lim;
 }
 core::CacheLimits buildCacheLimits(const CoreApiClient::Config &cfg) {
   core::CacheLimits limits;
@@ -278,7 +285,7 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
   }
 
   c->senders_.push_back(std::make_unique<infra::NativeHttpSender>());
-  c->senders_.push_back(std::make_unique<infra::NativeGrpcSender>());
+  c->senders_.push_back(std::make_unique<infra::NativeGrpcSender>(buildGrpcStreamLimits(cfg)));
   c->senders_.push_back(std::make_unique<infra::NativeGraphQlSender>());
   c->senders_.push_back(std::make_unique<infra::WsSenderAdapter>(buildWsConfig(cfg)));
   c->senders_.push_back(std::make_unique<infra::KafkaSender>());

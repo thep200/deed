@@ -50,6 +50,11 @@ private:
 
 enum class OffsetReset { Earliest, Latest }; // -> auto.offset.reset
 
+// New-request consumer defaults (SPEC_kafka §3). Pure domain — seed a fresh request's Config tab;
+// per-request, user-edited in the UI (not app-global .env tunables).
+inline constexpr std::chrono::milliseconds kDefaultPollTimeout{500};
+inline constexpr const char *kDefaultConsumerClientId = "deed";
+
 // Invariants (topics non-empty, partition -1/nullopt/>=0, maxMessages>0 if set, pollTimeout>0) are checked
 // by KafkaRequest::create (kafka_request.hpp) — this struct is a plain aggregate, per the spec's pseudocode.
 struct KafkaConsumeConfig {
@@ -59,8 +64,8 @@ struct KafkaConsumeConfig {
   OffsetReset offsetReset = OffsetReset::Latest;
   bool autoCommit = true;
   std::optional<int> maxMessages; // nullopt = unbounded; >0 = stop after N
-  std::chrono::milliseconds pollTimeout{500};
-  std::string clientId = "deed";
+  std::chrono::milliseconds pollTimeout{kDefaultPollTimeout};
+  std::string clientId = kDefaultConsumerClientId;
   std::vector<KafkaExtra> extra;
 
   bool operator==(const KafkaConsumeConfig &o) const {

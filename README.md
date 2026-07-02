@@ -1,7 +1,7 @@
 ![Deed main](assets/images/main.png)
 
 <h1 align="center">Deed ✨</h1>
-<p align="center"> A lightweight, native macOS API client in retro Mac OS 9 style that speaks REST/HTTP, SSE, gRPC, WebSocket, and GraphQL from a single <=50 MB binary. </p>
+<p align="center"> A lightweight, native macOS API client in retro Mac OS 9 style that speaks REST/HTTP, SSE, gRPC, WebSocket, GraphQL, and Kafka from a single <=50 MB binary. </p>
 
 ![Author](https://img.shields.io/static/v1?label=author&message=Thep200&color=0284c7)
 ![License](https://img.shields.io/static/v1?label=init-date&message=01-05-2026&color=7e22ce)
@@ -16,6 +16,7 @@
   - [Global config](#global-config)
   - [Environments](#environments)
 - [Request type](#request-type)
+  - [How a send works](#how-a-send-works)
   - [Config](#config)
   - [RESTFUL HTTP](#restful-http)
     - [Request Body](#request-body)
@@ -29,6 +30,9 @@
   - [gRPC](#grpc)
   - [Websocket](#websocket)
   - [GraphQL](#graphql)
+  - [Kafka](#kafka)
+    - [Producer](#producer)
+    - [Consumer](#consumer)
 - [Releases](#releases)
 
 # Overview
@@ -37,9 +41,10 @@ Supports:
 
 - RESTFUL / HTTP
 - SSE
-- gRPC
+- gRPC (unary, server-streaming, client-streaming, bidi)
 - WebSocket
-- GraphQL
+- GraphQL (query, mutation, subscription)
+- Kafka (producer & consumer)
 
 # Installation
 
@@ -57,6 +62,7 @@ Currently, I'm still shipping deed files as `.app`. Please download the latest v
 - gRPC
 - WebSocket
 - GraphQL
+- Kafka
 - Lazy load collection tree
 - Request editor (JSON)
 - Response viewer (JSON)
@@ -129,6 +135,22 @@ Each request has editing tabs on the **left** and a read-only response on the **
 
 > Files don't support comments. To turn a single line in **Headers**, **Query**, or **Metadata** on or off, set its `enabled` to `0` instead of deleting it.
 
+## How a send works
+
+Every request type follows the same path when you press **Send**:
+
+1. Deed reads the URL field and the left-hand tabs (bad JSON in a tab shows a toast and jumps you to the offending tab — nothing is sent).
+2. Every `{{key}}` is replaced with its value from the active environment.
+3. Auth is applied and disabled lines are dropped.
+4. The request goes out on a background worker, so the UI never freezes and you can keep browsing the collection.
+
+What comes back depends on the request's shape:
+
+- **One-shot requests** (HTTP, GraphQL query/mutation, gRPC unary & client-streaming, Kafka producer) show a single response on the right, plus status, elapsed time, and size in the status bar.
+- **Streaming requests** (SSE, gRPC server-streaming/bidi, WebSocket, GraphQL subscription, Kafka consumer) open a live session: each incoming message is appended to the right pane as it arrives, with running counters for elapsed / events / size. The session stays open until the server ends it or you press **Cancel** (for WebSocket that's a polite disconnect).
+
+Responses are also cached (RAM + disk, see [Global config](#global-config)), so reopening a request shows its last response instantly — even after an app restart.
+
 ## Config
 
 The **Config** tab (the last left-hand tab, on every request type) holds two settings shared by all types:
@@ -140,8 +162,10 @@ The **Config** tab (the last left-hand tab, on every request type) holds two set
 }
 ```
 
-- `timeout_ms` — how long to wait before giving up. For HTTP/GraphQL it's the request timeout, for gRPC the deadline, for WebSocket the idle timeout.
-- `tls` — verify the server's TLS certificate (for gRPC, connect over a secure channel).
+- `timeout_ms` — how long to wait before giving up. For HTTP/GraphQL it's the request timeout, for gRPC the deadline, for WebSocket the idle timeout. For a Kafka producer the effective delivery timeout is the **smaller** of this and the Kafka tab's `messageTimeoutMs`.
+- `tls` — verify the server's TLS certificate (for gRPC, connect over a secure channel). The Kafka Config tab only has `timeout_ms` (no TLS toggle yet).
+
+New requests start with the defaults from `.env` (`DEFAULT_TIMEOUT_MS`, `VERIFY_TLS`) — 30 minutes and TLS verification on, out of the box.
 
 > The **Pretty** button has four modes — **Pretty / Raw / Encode / Decode**. Click into the pane you want it to act on first, then press it.
 
@@ -151,21 +175,17 @@ Paste a `curl` command straight into the URL field and Deed turns it into a new 
 
 ### Request Body
 
-The **Body** tab uses one mode at a time. Pick the mode that matches what you're sending.
+The **Body** tab button is a dropdown — click it to pick one of five modes: **JSON**, **Text**, **XML**, **File**, or **Form**. One mode is active at a time, and switching modes keeps what you typed in each as a draft, so you can flip back and forth without losing anything.
 
-No body:
-
-```json
-{}
-```
-
-JSON:
+JSON (default; `{}` = no body):
 
 ```json
 {
   "name": "deed"
 }
 ```
+
+Text / XML — sent verbatim, exactly as typed.
 
 Form (URL-encoded):
 
@@ -284,25 +304,133 @@ The right-hand **Request** tab (read-only) shows the exact request that was sent
 
 ## SSE
 
-Server-Sent Events is simply an HTTP request that streams. You add `Accept: text/event-stream` header into http request and deed do the rest.
+Server-Sent Events is simply an HTTP request that streams. Add an `Accept: text/event-stream` header (enabled) to a plain HTTP request and Deed does the rest: instead of waiting for one response, the right pane turns into a live event log and each `data:` payload is appended as it arrives. Press **Cancel** to stop listening.
 
 ![SSE](assets/images/sse.png)
 
 ## gRPC
 
-Deed auto reflect schema to get rpc if server enable
+**URL field** — the target as `host:port` (no scheme), e.g. `localhost:8765`. Whether the channel is plaintext or TLS follows the `tls` flag in the **Config** tab.
+
+**Picking the RPC** — Deed needs the schema to encode your message. Two sources, chosen with the proto dropdown next to the URL:
+
+- **Reflection** (default) — the server must have gRPC reflection enabled. Click the method dropdown and Deed queries the server and lists every `service/method` it exposes; pick one.
+- **.proto** — no reflection? Choose `.proto` and a file picker opens; point it at your local `.proto` file and Deed parses the services out of it instead.
+
+**Tabs:**
+
+- **Message** — the request message as JSON (field names as in the `.proto`). For **client-streaming / bidi** methods, put a JSON **array** here — each element is sent as one message, e.g. `[{"n": 1}, {"n": 2}, {"n": 3}]`.
+- **Metadata** — key/value lines sent as gRPC metadata, same format as HTTP headers (`enabled: 0` to skip a line).
+- **Config** — `timeout_ms` is the gRPC deadline; `tls` picks secure vs plaintext channel.
+
+**Responses** — unary and client-streaming show one JSON response. Server-streaming and bidi stream into the right pane message by message; press **Cancel** to hang up. Very long streams are truncated for safety after 100k events or 64 MB (tunable in `.env`: `STREAM_MAX_EVENTS`, `STREAM_MAX_BYTES_MB`).
+
+You can also paste a `grpcurl` command into the URL field and Deed imports it as a new request.
 
 ![gRPC](assets/images/grpc.png)
 
 ## Websocket
 
+**URL field** — a `ws://` or `wss://` endpoint.
+
+**Tabs:**
+
+- **Message** — the frame to send. If it's non-empty it is sent automatically right after connecting; after that, edit it and press **Send** again to push the current text as a new frame through the open session — as many times as you like.
+- **Headers** — extra handshake headers (the HTTP upgrade request).
+- **Auth** — applied to the handshake, same four types as HTTP.
+
+**Session** — pressing **Send** connects. The right pane logs every frame in and out, live. **Cancel** performs a graceful disconnect (close code 1000). Deed keeps the connection healthy with automatic keepalive pings and closes it if the server goes silent too long (tunable in `.env`: `WS_PING_INTERVAL_MS`, `WS_IDLE_TIMEOUT_MS`, …).
+
 ![Websocket](assets/images/ws.png)
 
 ## GraphQL
 
+**URL field** — the HTTP endpoint (e.g. `https://api.example.com/graphql`).
+
+**Tabs:**
+
+- **Query** — the GraphQL document (`query { … }`, `mutation { … }`, or `subscription { … }`).
+- **Variables** — the variables object as JSON, e.g. `{"id": 42}`.
+- **Headers / Auth** — same as HTTP.
+
+Queries and mutations are sent over HTTP and show one response. A **subscription** runs over WebSocket using the `graphql-transport-ws` protocol (the legacy `subscriptions-transport-ws` is also supported) and streams events into the right pane until you press **Cancel** — set `"subTransport": "ws"` in the saved request file to switch the transport over.
+
 Deed haven't supported instrospect yet.
 
 ![GraphQL](assets/images/graphql.png)
+
+## Kafka
+
+**URL field** — the bootstrap servers, comma-separated `host:port` pairs, e.g. `localhost:9092` or `broker1:9092,broker2:9092`.
+
+A **Prod / Cons** toggle next to the URL switches the request between producer and consumer — each side keeps its own tabs.
+
+### Producer
+
+- **Message** tab:
+
+  ```json
+  {
+    "key": "user-42",
+    "value": { "name": "deed" },
+    "tombstone": false,
+    "headers": []
+  }
+  ```
+
+  - `key` — optional message key (empty = no key; Kafka then picks the partition round-robin).
+  - `value` — the payload, written as real JSON right in the editor.
+  - `tombstone` — set to `true` to send a **null value** (key + headers only). On a log-compacted topic this deletes the key. Needs a `key` to make sense.
+  - `headers` — key/value lines, same format as HTTP headers.
+
+- **Kafka** tab — the producer settings:
+
+  ```json
+  {
+    "topic": "events",
+    "partition": -1,
+    "acks": "all",
+    "compression": "none",
+    "messageTimeoutMs": 30000,
+    "lingerMs": 0,
+    "retries": 3,
+    "idempotence": false,
+    "clientId": "deed",
+    "extra": []
+  }
+  ```
+
+- `partition: -1` lets Kafka choose.
+- `acks` is `"0"` / `"1"` / `"all"`. 
+- `compression` is `none/gzip/snappy/lz4/zstd`.
+- `extra` passes any raw librdkafka property as key/value lines.
+
+**Send** produces one message and shows a single delivery report (topic / partition / offset / latency). **Cancel** aborts a delivery that's stuck on an unreachable broker.
+
+### Consumer
+
+One **Kafka** tab:
+
+```json
+{
+  "topics": ["events"],
+  "group": "",
+  "offsetReset": "latest",
+  "partition": -1,
+  "autoCommit": true,
+  "maxMessages": null,
+  "pollTimeoutMs": 500,
+  "clientId": "deed",
+  "extra": []
+}
+```
+
+- `group` — consumer group id. **Leave it empty** and Deed generates a fresh `deed-tail-…` group per run, so `offsetReset` always applies.
+- `offsetReset` — `"latest"` (default) tails only new messages; `"earliest"` reads the topic **from the beginning**. Note Kafka semantics: this only applies when the group has no committed offsets — another reason to leave `group` empty.
+- `partition` — `-1` subscribes to all partitions; a number ≥ 0 pins to that one partition.
+- `maxMessages` — `null` tails forever; a number stops after N records.
+
+**Send** starts tailing: records stream into the right pane live (topic, partition, offset, key, value, headers, timestamp). Press **Cancel** to stop.
 
 # Releases
 

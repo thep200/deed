@@ -23,15 +23,22 @@ struct Environment {
 };
 
 // ---- App-global config (README §12.1) ----
+// Built-in AppConfig defaults. The domain stays pure (never reads .env); the UI reads .env (FONT_SIZE,
+// RAM_CACHE_SIZE, DISK_CACHE_SIZE) and passes overrides in via CoreApiClient::Config::appDefaults —
+// these constants are the fallback when no .env value arrives.
+inline constexpr int kDefaultFontSize = 11;
+inline constexpr int kDefaultRamCacheSizeMb = 64;
+inline constexpr int kDefaultDiskCacheSizeMb = 256;
+
 // (timeout/TLS are now per-request — see RequestConfig — not app-global.)
 struct AppConfig {
   std::string lastCollectionRoot; // most recently opened collection dir (reopened at startup)
   std::string fontName;           // display font (empty = default); from Settings
-  int fontSize = 11;
+  int fontSize = kDefaultFontSize;
 
   // --- Response cache (USER layer — edited in Settings; clamped ≤ ENV max). RESPONSE_CACHE.md §1 ---
-  int ramCacheSizeMb = 64;    // operating RAM cache level
-  int diskCacheSizeMb = 256;  // operating disk cache level
+  int ramCacheSizeMb = kDefaultRamCacheSizeMb;    // operating RAM cache level
+  int diskCacheSizeMb = kDefaultDiskCacheSizeMb;  // operating disk cache level
   bool cacheResponses = true; // enable/disable response cache
   bool cachePersist = true;   // keep cache across restart (off -> RAM only, no disk attached)
 };

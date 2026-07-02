@@ -46,8 +46,11 @@ public:
     // Response-cache ceilings/floor from .env (0 -> default):
     int ramCacheMaxMb = 0, ramCacheMinMb = 0, diskCacheMaxMb = 0, diskCacheMinMb = 0, ramCacheThresholdKb = 0;
     // WebSocket tunables from .env (0 -> default):
-    int wsPingIntervalMs = 0, wsIdleTimeoutMs = 0, wsCloseTimeoutMs = 0, wsMaxFrameMb = 0,
-        wsSendQueueMaxFrames = 0, wsSendQueueMaxMb = 0;
+    int wsPingIntervalMs = 0, wsIdleTimeoutMs = 0, wsCloseTimeoutMs = 0, wsConnectTimeoutMs = 0,
+        wsMaxFrameMb = 0, wsSendQueueMaxFrames = 0, wsSendQueueMaxMb = 0;
+    // gRPC streaming ceilings from .env (0 -> default):
+    long long streamMaxEvents = 0; // STREAM_MAX_EVENTS
+    int streamMaxBytesMb = 0;      // STREAM_MAX_BYTES_MB
   };
 
   // Composition root: build the full self-owned stack (senders + clock + validator + orchestrator + the

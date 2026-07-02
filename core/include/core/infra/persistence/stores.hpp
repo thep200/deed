@@ -18,6 +18,11 @@
 
 namespace core {
 
+// New-request per-request defaults. Fallback when the .env value (DEFAULT_TIMEOUT_MS / VERIFY_TLS,
+// passed in via CollectionStore::setRequestDefaults) is absent or 0.
+inline constexpr long long kNewRequestTimeoutMsDefault = 30LL * 60 * 1000; // 30 min
+inline constexpr bool kNewRequestVerifyTlsDefault = true;
+
 // CollectionStore — load/save requests, scan the tree (README §6.2).
 // Real on-disk path = folder tree; filename = slug; display name in the name field.
 class CollectionStore {
@@ -79,8 +84,8 @@ public:
 
 private:
     std::string root_;
-    long long defaultTimeoutMs_ = 1800000; // new-request default timeout (.env DEFAULT_TIMEOUT_MS; 30 min)
-    bool defaultVerifyTls_ = true;         // new-request default TLS verify (.env VERIFY_TLS)
+    long long defaultTimeoutMs_ = kNewRequestTimeoutMsDefault; // new-request default timeout (.env DEFAULT_TIMEOUT_MS)
+    bool defaultVerifyTls_ = kNewRequestVerifyTlsDefault;      // new-request default TLS verify (.env VERIFY_TLS)
 
     // id->relPath index built LAZILY from filenames (zero-read after migrate) -> findRelPathById O(1)
     // instead of scanning the WHOLE tree each call (resyncCurrentRelById runs before every save/switch).

@@ -669,8 +669,8 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
         core::domain::RequestConfig cfg = [&]() -> core::domain::RequestConfig {
             if (_model) return _model->config();
             DeedConfig *dc = [DeedConfig shared];
-            long long toMs = (long long)[dc intFor:@"DEFAULT_TIMEOUT_MS" def:1800000];
-            if (toMs <= 0) toMs = 1800000;
+            long long toMs = (long long)[dc intFor:@"DEFAULT_TIMEOUT_MS" def:core::kNewRequestTimeoutMsDefault];
+            if (toMs <= 0) toMs = core::kNewRequestTimeoutMsDefault;
             return core::domain::RequestConfig{core::domain::Timeout::fromMillis(toMs).take(),
                                                (bool)[dc boolFor:@"VERIFY_TLS" def:YES]};
         }();

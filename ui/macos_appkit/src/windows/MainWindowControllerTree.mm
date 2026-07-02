@@ -17,9 +17,9 @@
     DeedConfig *dc = [DeedConfig shared];
     core::AppConfig d;
     d.fontName = S([dc stringFor:@"FONT_NAME" def:@""]);
-    d.fontSize = (int)[dc intFor:@"FONT_SIZE" def:11];
-    d.ramCacheSizeMb = (int)[dc intFor:@"RAM_CACHE_SIZE" def:64];
-    d.diskCacheSizeMb = (int)[dc intFor:@"DISK_CACHE_SIZE" def:256];
+    d.fontSize = (int)[dc intFor:@"FONT_SIZE" def:core::kDefaultFontSize];
+    d.ramCacheSizeMb = (int)[dc intFor:@"RAM_CACHE_SIZE" def:core::kDefaultRamCacheSizeMb];
+    d.diskCacheSizeMb = (int)[dc intFor:@"DISK_CACHE_SIZE" def:core::kDefaultDiskCacheSizeMb];
     return d;
 }
 
@@ -41,9 +41,13 @@
     cfg.wsPingIntervalMs = (int)[dc intFor:@"WS_PING_INTERVAL_MS" def:0];
     cfg.wsIdleTimeoutMs = (int)[dc intFor:@"WS_IDLE_TIMEOUT_MS" def:0];
     cfg.wsCloseTimeoutMs = (int)[dc intFor:@"WS_CLOSE_TIMEOUT_MS" def:0];
+    cfg.wsConnectTimeoutMs = (int)[dc intFor:@"WS_CONNECT_TIMEOUT_MS" def:0];
     cfg.wsMaxFrameMb = (int)[dc intFor:@"WS_MAX_FRAME_MB" def:0];
     cfg.wsSendQueueMaxFrames = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_FRAMES" def:0];
     cfg.wsSendQueueMaxMb = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_MB" def:0];
+    // gRPC streaming ceilings from .env (SPEC gRPC §9; 0 -> GrpcSender default).
+    cfg.streamMaxEvents = (long long)[dc intFor:@"STREAM_MAX_EVENTS" def:0];
+    cfg.streamMaxBytesMb = (int)[dc intFor:@"STREAM_MAX_BYTES_MB" def:0];
     // New-request per-request defaults from .env (Core never reads .env; 0 -> Core built-in 30-min timeout).
     cfg.defaultTimeoutMs = (long long)[dc intFor:@"DEFAULT_TIMEOUT_MS" def:0];
     cfg.defaultVerifyTls = [dc boolFor:@"VERIFY_TLS" def:YES];

@@ -12,6 +12,14 @@
 
 namespace core::detail {
 
+// Cache ceiling/floor fallbacks — used only when neither .env (CacheLimits) nor the DEED_* process env
+// provides a value (RESPONSE_CACHE §1).
+inline constexpr std::uint64_t kRamCacheMaxMbDefault = 256;
+inline constexpr std::uint64_t kRamCacheMinMbDefault = 0;
+inline constexpr std::uint64_t kDiskCacheMaxMbDefault = 1024;
+inline constexpr std::uint64_t kDiskCacheMinMbDefault = 0;
+inline constexpr std::uint64_t kRamCacheThresholdKbDefault = 256;
+
 // Read a numeric env var (>0) or fall back to default. ENV layer = hard ceiling (RESPONSE_CACHE §1).
 inline std::uint64_t envU64(const char* key, std::uint64_t def) {
     const char* v = std::getenv(key);
@@ -28,11 +36,11 @@ inline std::uint64_t limitOr(int fromEnvFile, const char* envKey, std::uint64_t 
 
 // effective = clamp(user, min, max); user outside [min,max] -> clamp + warning log (RESPONSE_CACHE §1.2).
 inline CacheConfig buildCacheConfig(const AppConfig& app, const CacheLimits& lim) {
-    std::uint64_t ramMaxMb = limitOr(lim.ramMaxMb, "DEED_RAM_CACHE_SIZE_MAX", 256);
-    std::uint64_t ramMinMb = limitOr(lim.ramMinMb, "DEED_RAM_CACHE_SIZE_MIN", 0);
-    std::uint64_t diskMaxMb = limitOr(lim.diskMaxMb, "DEED_DISK_CACHE_SIZE_MAX", 1024);
-    std::uint64_t diskMinMb = limitOr(lim.diskMinMb, "DEED_DISK_CACHE_SIZE_MIN", 0);
-    std::uint64_t thrKb = limitOr(lim.thresholdKb, "DEED_RAM_CACHE_THRESHOLD_KB", 256);
+    std::uint64_t ramMaxMb = limitOr(lim.ramMaxMb, "DEED_RAM_CACHE_SIZE_MAX", kRamCacheMaxMbDefault);
+    std::uint64_t ramMinMb = limitOr(lim.ramMinMb, "DEED_RAM_CACHE_SIZE_MIN", kRamCacheMinMbDefault);
+    std::uint64_t diskMaxMb = limitOr(lim.diskMaxMb, "DEED_DISK_CACHE_SIZE_MAX", kDiskCacheMaxMbDefault);
+    std::uint64_t diskMinMb = limitOr(lim.diskMinMb, "DEED_DISK_CACHE_SIZE_MIN", kDiskCacheMinMbDefault);
+    std::uint64_t thrKb = limitOr(lim.thresholdKb, "DEED_RAM_CACHE_THRESHOLD_KB", kRamCacheThresholdKbDefault);
 
     // clamp(user, min, max) + log when clamped. min > max (misconfig) -> prefer max as ceiling.
     auto clampMb = [](const char* what, std::uint64_t user, std::uint64_t mn, std::uint64_t mx) {
