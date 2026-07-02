@@ -240,6 +240,23 @@ EditorBody bodyToEditor(const d::Body &body) {
   });
   return eb;
 }
+// Binary mode's editor content is either {"filePath"|"path": "..."} / a bare JSON string / or a plain path
+// typed as-is — extracted out of bodyFromEditor (Step 3 flatten: was a 3rd nesting level inside it, try ->
+// if/else-if, for a single mode branch) so the dispatcher below stays a flat sequence of guard clauses.
+static std::string binaryFilePathFromEditor(const std::string &content) {
+  try {
+    auto j = json::parse(content);
+    if (j.is_object()) return j.contains("filePath") ? gs(j, "filePath") : gs(j, "path");
+    if (j.is_string()) return j.get<std::string>();
+    return {};
+  } catch (...) {
+    // not JSON -> treat the whole text as a path (trimmed)
+    auto a = content.find_first_not_of(" \t\r\n");
+    auto b = content.find_last_not_of(" \t\r\n");
+    return (a == std::string::npos) ? std::string() : content.substr(a, b - a + 1);
+  }
+}
+
 d::Result<d::Body> bodyFromEditor(const std::string &mode, const std::string &content) {
   try {
     if (mode == w::kBodyJson) return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Json, content));
@@ -254,18 +271,7 @@ d::Result<d::Body> bodyFromEditor(const std::string &mode, const std::string &co
       return d::Result<d::Body>::ok(d::Body::formUrlEncoded(std::move(fields)));
     }
     if (mode == w::kBodyBinary) {
-      std::string fp;
-      auto t = content;
-      try {
-        auto j = json::parse(content);
-        if (j.is_object()) fp = j.contains("filePath") ? gs(j, "filePath") : gs(j, "path");
-        else if (j.is_string()) fp = j.get<std::string>();
-      } catch (...) {
-        // not JSON -> treat the whole text as a path (trimmed)
-        auto a = t.find_first_not_of(" \t\r\n");
-        auto b = t.find_last_not_of(" \t\r\n");
-        fp = (a == std::string::npos) ? "" : t.substr(a, b - a + 1);
-      }
+      std::string fp = binaryFilePathFromEditor(content);
       if (fp.empty()) return d::Result<d::Body>::ok(d::Body::none());
       return d::Body::binary(fp);
     }

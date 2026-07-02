@@ -16,6 +16,7 @@
 #include "core/infra/export/exporter.hpp" // core::toCurl (domain copy-as-cURL export)
 #include "infra/transport/graphql/graphql.hpp"      // gql::effectiveOperation (native interactionOf)
 #include "infra/platform/fs_util.hpp"        // fsutil::join (.session dir for the cache)
+#include "infra/platform/stream_pool.hpp"
 #include "infra/platform/thread_pool.hpp"
 #include "infra/variables/domain_variable_resolver.hpp"
 #include "infra/transport/grpc/grpc_descriptors.hpp" // native gRPC reflection (buildDescriptors/listMethods)
@@ -284,14 +285,25 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
 
   std::vector<d::IRequestSender *> ptrs;
   for (auto &s : c->senders_) ptrs.push_back(s.get());
+  // Two pools (tech-debt fix): a long-lived stream (WS/gRPC-stream/Kafka-consumer) used to share this SAME
+  // bounded pool with unary sends — enough concurrent streams could occupy every worker indefinitely and
+  // starve new unary requests behind them. RequestOrchestrator now classifies each send and routes
+  // accordingly; `pool` stays small/bounded (unary only), `streamPool` gives every stream its own thread.
   c->pool_ = std::make_unique<core::ThreadPool>();
+  c->streamPool_ = std::make_unique<core::StreamPool>();
   core::ThreadPool *pool = c->pool_.get();
+  core::StreamPool *streamPool = c->streamPool_.get();
   SendRequestSaga::Deps deps{ptrs, c->clock_.get(), c->validator_.get(), nullptr};
-  c->orchestrator_ = std::make_unique<RequestOrchestrator>(deps, [pool](std::function<void()> job) {
-    // submit() takes the task BY VALUE -> pass a copy so `job` stays valid for the inline fallback
-    // when the pool rejects it (full/stopped). Moving here would leave `job` empty -> bad_function_call.
-    if (!pool->submit(job)) job();
-  });
+  c->orchestrator_ = std::make_unique<RequestOrchestrator>(
+      deps,
+      [pool](std::function<void()> job) {
+        // submit() takes the task BY VALUE -> pass a copy so `job` stays valid for the inline fallback
+        // when the pool rejects it (full/stopped). Moving here would leave `job` empty -> bad_function_call.
+        if (!pool->submit(job)) job();
+      },
+      [streamPool](std::function<void()> job) {
+        if (!streamPool->submit(job)) job();
+      });
   return c;
 }
 

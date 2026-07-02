@@ -225,6 +225,70 @@ static void test_orchestrator_inline() {
   SG_CHECK(!orch.cancel(exec.value()).isOk(), "orch: finished exec no longer cancellable");
 }
 
+// Tech-debt fix: RequestOrchestrator used to run EVERY send through the SAME executor, so a long-lived
+// stream (WS/gRPC server-stream+bidi/Kafka consumer) sharing a small bounded pool with unary sends could
+// occupy a worker indefinitely and starve queued unary requests behind it. Verifies the ROUTING decision
+// deterministically (which executor gets invoked per request shape) rather than with real timing/threads,
+// which would be flaky. See composition_root.cpp for the real wiring (ThreadPool vs StreamPool).
+static void test_orchestrator_routes_unary_vs_stream_executor() {
+  FakeClock clock;
+  FakeSender http, ws, grpc, gql, kafka;
+  ws.type = RequestType::WebSocket;
+  ws.script = {completed()};
+  grpc.type = RequestType::Grpc;
+  grpc.script = {completed()};
+  gql.type = RequestType::GraphQl;
+  gql.script = {completed()};
+  kafka.type = RequestType::Kafka;
+  kafka.script = {completed()};
+  http.script = {completed()};
+
+  int unaryCalls = 0, streamCalls = 0;
+  RequestOrchestrator orch(
+      {{&http, &ws, &grpc, &gql, &kafka}, &clock, nullptr, nullptr},
+      [&](std::function<void()> job) { ++unaryCalls; job(); },
+      [&](std::function<void()> job) { ++streamCalls; job(); });
+  auto obs = std::make_shared<FakeObserver>();
+
+  auto route = [&](RequestModel m) {
+    unaryCalls = streamCalls = 0;
+    orch.send(m, obs);
+    return streamCalls > 0 ? "stream" : (unaryCalls > 0 ? "unary" : "neither");
+  };
+
+  SG_CHECK(std::string(route(makeHttp())) == "unary", "route: HTTP -> unary executor");
+  SG_CHECK(std::string(route(makeKafkaProducer())) == "unary", "route: Kafka producer -> unary executor");
+
+  auto mkGrpc = [](GrpcMethodType mt) {
+    GrpcRequest::Parts p; p.target = "h:1"; p.methodType = mt;
+    RequestConfig cfg{Timeout::fromMillis(1000).take(), true};
+    return RequestModel::create(RequestId("g"), "G", 0, cfg, GrpcRequest::create(std::move(p)).take()).take();
+  };
+  SG_CHECK(std::string(route(mkGrpc(GrpcMethodType::Unary))) == "unary", "route: gRPC unary -> unary executor");
+  SG_CHECK(std::string(route(mkGrpc(GrpcMethodType::ClientStreaming))) == "unary",
+           "route: gRPC client-streaming -> unary executor (bounded, not indefinite)");
+  SG_CHECK(std::string(route(mkGrpc(GrpcMethodType::ServerStreaming))) == "stream",
+           "route: gRPC server-streaming -> stream executor");
+  SG_CHECK(std::string(route(mkGrpc(GrpcMethodType::BidiStreaming))) == "stream",
+           "route: gRPC bidi -> stream executor");
+
+  RequestConfig cfg{Timeout::fromMillis(1000).take(), true};
+  WebSocketRequest::Parts wp{Url::create("wss://h/s").take()};
+  auto wsModel = RequestModel::create(RequestId("w"), "W", 0, cfg, WebSocketRequest::create(std::move(wp)).take()).take();
+  SG_CHECK(std::string(route(wsModel)) == "stream", "route: WebSocket -> stream executor (duplex, indefinite)");
+
+  GraphQlRequest::Parts gp{Url::create("https://h/gql").take(), {}, {}, Auth::none(), GqlSubTransport::Http, ""};
+  gp.op.query = "query { x }";
+  auto gqlHttpModel = RequestModel::create(RequestId("q1"), "Q", 0, cfg, GraphQlRequest::create(gp).take()).take();
+  SG_CHECK(std::string(route(gqlHttpModel)) == "unary", "route: GraphQL over HTTP -> unary executor");
+  gp.subTransport = GqlSubTransport::Ws;
+  gp.wsProtocol = "graphql-transport-ws";
+  auto gqlWsModel = RequestModel::create(RequestId("q2"), "Q", 0, cfg, GraphQlRequest::create(gp).take()).take();
+  SG_CHECK(std::string(route(gqlWsModel)) == "stream", "route: GraphQL over WS -> stream executor");
+
+  SG_CHECK(std::string(route(makeKafkaConsumer())) == "stream", "route: Kafka consumer -> stream executor");
+}
+
 // SPEC_kafka §5/§11: producer is unary-like (EvStarted -> EvCompleted); the fakes below cover the saga's
 // generic state-machine behavior end to end (real _PARTITION_EOF-not-an-error / cancel-mid-poll are
 // KafkaSender-internal, exercised only by the integration test against a real broker, per spec §11's own
@@ -294,6 +358,7 @@ int run_saga_tests() {
   test_unsupported_type();
   test_cancel_before_run();
   test_orchestrator_inline();
+  test_orchestrator_routes_unary_vs_stream_executor();
   test_kafka_producer_happy();
   test_kafka_consumer_streaming();
   test_kafka_consumer_cancel_before_run();

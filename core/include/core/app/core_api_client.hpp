@@ -22,6 +22,7 @@
 
 namespace core {
 class ThreadPool;
+class StreamPool;
 class CollectionStore;
 class EnvironmentStore;
 class SessionStore;
@@ -123,9 +124,14 @@ private:
   std::unique_ptr<IResponseCacheRepository> cacheRepo_;
   domain::VariableScope scope_; // active env bindings ({{var}} resolution happens at send())
   std::unique_ptr<RequestOrchestrator> orchestrator_;
-  // Declared LAST -> destroyed FIRST: joins in-flight send tasks (which reference the orchestrator/senders
-  // above) before those are torn down.
+  // Declared LAST -> destroyed FIRST: joins/drains in-flight send tasks (which reference the
+  // orchestrator/senders above) before those are torn down. Two pools (tech-debt fix, §Step1 bottleneck):
+  // `pool_` = small bounded pool for unary sends; `streamPool_` = one dedicated thread per long-lived
+  // streaming session (WS/gRPC-stream/Kafka-consumer), so an indefinite stream never blocks queued unary
+  // sends behind it. Relative order between the two doesn't matter (neither depends on the other), only
+  // that both destroy before senders_/orchestrator_ above.
   std::unique_ptr<core::ThreadPool> pool_;
+  std::unique_ptr<core::StreamPool> streamPool_;
 };
 
 } // namespace core::app

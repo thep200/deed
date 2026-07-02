@@ -6,9 +6,61 @@
 namespace core::app {
 namespace d = core::domain;
 
-RequestOrchestrator::RequestOrchestrator(SendRequestSaga::Deps deps, Executor exec)
-    : deps_(std::move(deps)), executor_(std::move(exec)) {
-  if (!executor_) executor_ = [](std::function<void()> job) { job(); }; // default: inline
+namespace {
+
+// Case-insensitive "Accept: text/event-stream" check — same signal native_http_sender.cpp's requestIsSse()
+// and CoreApiClient::interactionOf() use to force the SSE path. Duplicated intentionally (small, stable,
+// domain-only): this classifier answers a narrower question than interactionOf ("does this need a
+// dedicated thread", not the full Unary/ServerStream/ClientStream/BiDi/Duplex breakdown UI cares about) and
+// must stay app/domain-pure — interactionOf's GraphQL branch reaches into infra (gql::effectiveOperation)
+// which this layer doesn't depend on.
+bool httpRequestsSse(const d::HttpRequest &h) {
+  for (const auto &hd : h.headers().items()) {
+    if (!hd.enabled()) continue;
+    std::string n = hd.name(), v = hd.value();
+    for (auto &c : n) c = (char)std::tolower((unsigned char)c);
+    for (auto &c : v) c = (char)std::tolower((unsigned char)c);
+    if (n == "accept" && v.find("text/event-stream") != std::string::npos) return true;
+  }
+  return false;
+}
+
+// Long-lived == the sender's execute() blocks indefinitely (until the user stops it / the peer closes),
+// as opposed to a bounded call that returns once its own data is exhausted. Used ONLY to pick an executor
+// (StreamPool vs the small unary ThreadPool) — NOT a general interaction classifier (see CoreApiClient::
+// interactionOf for that). Erring towards "true" here is safe (just uses the bigger/unbounded pool for a
+// request that happens to finish quickly); erring towards "false" is NOT (recreates the starvation bug).
+bool isLongLivedSend(const d::RequestModel &request) {
+  switch (request.type()) {
+  case d::RequestType::WebSocket:
+    return true; // duplex session, open until the user disconnects
+  case d::RequestType::Grpc: {
+    auto mt = std::get<d::GrpcRequest>(request.payload()).methodType();
+    // Client-streaming sends a pre-built list of messages then awaits ONE response (bounded, like unary) —
+    // only server-stream/bidi keep the call open waiting on the PEER indefinitely.
+    return mt == d::GrpcMethodType::ServerStreaming || mt == d::GrpcMethodType::BidiStreaming;
+  }
+  case d::RequestType::GraphQl:
+    // Only a ws-subTransport subscription is actually long-lived (native_graphql_sender.cpp's
+    // runSubscription); a plain HTTP query/mutation is bounded. Approximated by subTransport alone (no
+    // infra dependency to check the operation kind) — a ws-transport query/mutation would be slightly
+    // over-classified as "streaming", which is the safe direction per the note above.
+    return std::get<d::GraphQlRequest>(request.payload()).subTransport() == d::GqlSubTransport::Ws;
+  case d::RequestType::Http:
+    return httpRequestsSse(std::get<d::HttpRequest>(request.payload()));
+  case d::RequestType::Kafka:
+    return std::get<d::KafkaRequest>(request.payload()).kind() == d::KafkaClientKind::Consumer;
+  }
+  return false;
+}
+
+} // namespace
+
+RequestOrchestrator::RequestOrchestrator(SendRequestSaga::Deps deps, Executor unaryExec, Executor streamExec)
+    : deps_(std::move(deps)), unaryExecutor_(std::move(unaryExec)), streamExecutor_(std::move(streamExec)) {
+  auto inlineExec = [](std::function<void()> job) { job(); };
+  if (!unaryExecutor_) unaryExecutor_ = inlineExec;   // default: inline (synchronous), same as before the split
+  if (!streamExecutor_) streamExecutor_ = inlineExec;
 }
 
 std::shared_ptr<SendRequestSaga> RequestOrchestrator::find(const d::RequestExecutionId &exec) {
@@ -32,7 +84,7 @@ RequestOrchestrator::send(const d::RequestModel &request,
     sagas_[exec] = saga;
   }
 
-  Executor exe = executor_;
+  Executor exe = isLongLivedSend(request) ? streamExecutor_ : unaryExecutor_;
   exe([this, saga, observer, exec]() {
     saga->run(*observer);
     std::lock_guard<std::mutex> lk(mu_); // drop terminal saga (lifecycle done)
@@ -64,13 +116,6 @@ d::Status RequestOrchestrator::closeStream(d::RequestExecutionId exec, int code,
 d::Status RequestOrchestrator::validateJson(const d::JsonText &text) {
   if (deps_.jsonValidator) return deps_.jsonValidator->validate(text);
   return d::ok();
-}
-
-d::Result<std::vector<d::GrpcMethodDescriptor>>
-RequestOrchestrator::listGrpcMethods(const d::GrpcRequest &) {
-  // Requires a gRPC reflection/descriptor infra adapter (REFACTOR_SPEC P5). Not wired yet.
-  return d::Result<std::vector<d::GrpcMethodDescriptor>>::fail(
-      {d::ErrorCode::Unsupported, "listGrpcMethods not wired (P5)"});
 }
 
 } // namespace core::app

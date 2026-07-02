@@ -61,18 +61,18 @@ struct MappedErr {
 MappedErr mapProduceErr(RdKafka::ErrorCode err) {
   switch (err) {
   case RdKafka::ERR__MSG_TIMED_OUT:
-    return {d::ErrorKind::Timeout, "Hết thời gian chờ delivery — broker có chạy không?"};
+    return {d::ErrorKind::Timeout, "Delivery timed out — is the broker running?"};
   case RdKafka::ERR__TRANSPORT:
   case RdKafka::ERR__ALL_BROKERS_DOWN:
   case RdKafka::ERR__RESOLVE:
-    return {d::ErrorKind::Network, "Không nối được broker — kiểm tra host:port và Kafka đã start chưa."};
+    return {d::ErrorKind::Network, "Could not connect to the broker — check host:port and whether Kafka has started."};
   case RdKafka::ERR_UNKNOWN_TOPIC_OR_PART:
-    return {d::ErrorKind::Protocol, "Topic chưa tồn tại và auto-create tắt — tạo trước."};
+    return {d::ErrorKind::Protocol, "Topic does not exist and auto-create is off — create it first."};
   case RdKafka::ERR_LEADER_NOT_AVAILABLE:
   case RdKafka::ERR_NOT_LEADER_FOR_PARTITION:
-    return {d::ErrorKind::Protocol, "Partition leader chưa sẵn sàng — thử lại sau."};
+    return {d::ErrorKind::Protocol, "Partition leader is not ready yet — try again shortly."};
   case RdKafka::ERR_MSG_SIZE_TOO_LARGE:
-    return {d::ErrorKind::Protocol, "Message vượt message.max.bytes của broker/topic."};
+    return {d::ErrorKind::Protocol, "Message exceeds the broker/topic's message.max.bytes."};
   default: return {d::ErrorKind::Protocol, RdKafka::err2str(err)};
   }
 }
@@ -81,15 +81,15 @@ MappedErr mapConsumeErr(RdKafka::ErrorCode err) {
   case RdKafka::ERR__TRANSPORT:
   case RdKafka::ERR__ALL_BROKERS_DOWN:
   case RdKafka::ERR__RESOLVE:
-    return {d::ErrorKind::Network, "Không nối được broker — kiểm tra host:port và Kafka đã start chưa."};
+    return {d::ErrorKind::Network, "Could not connect to the broker — check host:port and whether Kafka has started."};
   case RdKafka::ERR_UNKNOWN_TOPIC_OR_PART:
-    return {d::ErrorKind::Protocol, "Topic chưa tồn tại — tạo trước hoặc bật auto-create."};
+    return {d::ErrorKind::Protocol, "Topic does not exist — create it first or enable auto-create."};
   case RdKafka::ERR_GROUP_AUTHORIZATION_FAILED:
   case RdKafka::ERR_TOPIC_AUTHORIZATION_FAILED:
     return {d::ErrorKind::Protocol,
-            "Không đủ quyền group/topic — kiểm tra ACL (hoặc để trống group để tail ẩn danh)."};
+            "Insufficient group/topic permissions — check ACLs (or leave the group blank to tail anonymously)."};
   case RdKafka::ERR__FATAL:
-    return {d::ErrorKind::Internal, "Consumer gặp lỗi fatal — xem log; thử Start lại."};
+    return {d::ErrorKind::Internal, "Consumer hit a fatal error — check the logs and try Start again."};
   default: return {d::ErrorKind::Protocol, RdKafka::err2str(err)};
   }
 }
@@ -114,7 +114,7 @@ public:
 };
 
 void produce(const std::string &bootstrap, const d::KafkaSecurity &security, const d::KafkaProduceSpec &spec,
-            d::IResponseSink &sink) {
+            d::IResponseSink &sink, const d::ICancellationToken &cancel, std::chrono::milliseconds requestTimeout) {
   std::unique_ptr<RdKafka::Conf> conf(RdKafka::Conf::create(RdKafka::Conf::CONF_GLOBAL));
   setConf(conf.get(), "bootstrap.servers", bootstrap);
   applySecurity(conf.get(), security);
@@ -164,11 +164,48 @@ void produce(const std::string &bootstrap, const d::KafkaSecurity &security, con
     return;
   }
 
-  producer->flush(static_cast<int>(spec.config.messageTimeout.count()));
+  // BUG FIX: producer->flush(bigTimeout) as ONE blocking call had no way to be interrupted — a bad/fake
+  // broker meant Cancel did nothing (KafkaSender never overrides close(), so SendRequestSaga::cancel()'s
+  // only mechanism was a no-op) and the shared per-request Config-tab timeout (resolved.config().timeout,
+  // what every other sender honors) was silently ignored — only the Kafka tab's own messageTimeoutMs
+  // (default 30s) applied. Flush in short slices instead, checking cancellation and an outer deadline —
+  // the smaller of messageTimeoutMs and the shared Config timeout — between slices (SPEC_kafka §5:
+  // "Cancel: token -> rd_kafka_purge(...) -> kết thúc", previously unimplemented).
+  const auto effectiveTimeout = std::min(spec.config.messageTimeout, requestTimeout);
+  const auto deadline = std::chrono::steady_clock::now() + effectiveTimeout;
+  constexpr int kFlushSliceMs = 100;
+  bool cancelled = false;
+  bool timedOut = false;
+  while (true) {
+    RdKafka::ErrorCode ferr = producer->flush(kFlushSliceMs);
+    if (ferr != RdKafka::ERR__TIMED_OUT) break; // flushed (drCb fired) or a real error — stop slicing
+    if (cancel.cancelled()) { cancelled = true; break; }
+    if (std::chrono::steady_clock::now() >= deadline) { timedOut = true; break; }
+  }
+  if (cancelled) {
+    // Abort queued + in-flight messages so flush() below returns promptly instead of waiting out
+    // whatever's left of message.timeout.ms.
+    producer->purge(RdKafka::Producer::PURGE_QUEUE | RdKafka::Producer::PURGE_INFLIGHT);
+    producer->flush(1000); // drain the purge-completion delivery report
+    sink.emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Cancelled, "Cancelled", {}}}));
+    return;
+  }
+  if (timedOut) {
+    // Drain whatever's left so the producer can be destroyed cleanly, but report this as a plain Timeout
+    // regardless of what drCb ends up capturing — "Local: Purged in queue" would be a confusing message for
+    // what the user experiences as "it timed out" (the purge is just how we unblock the wait, not the cause).
+    if (!drCb.got) {
+      producer->purge(RdKafka::Producer::PURGE_QUEUE | RdKafka::Producer::PURGE_INFLIGHT);
+      producer->flush(1000);
+    }
+    sink.emit(d::ResponseEvent(
+        d::EvFailed{{d::ErrorKind::Timeout, "Delivery timed out — is the broker running?", {}}}));
+    return;
+  }
 
   if (!drCb.got) {
     sink.emit(d::ResponseEvent(
-        d::EvFailed{{d::ErrorKind::Timeout, "Hết thời gian chờ delivery — broker có chạy không?", {}}}));
+        d::EvFailed{{d::ErrorKind::Timeout, "Delivery timed out — is the broker running?", {}}}));
     return;
   }
   if (drCb.err != RdKafka::ERR_NO_ERROR) {
@@ -275,8 +312,9 @@ d::Status KafkaSender::execute(const d::RequestModel &resolved, d::IResponseSink
   }
   const d::KafkaRequest &k = std::get<d::KafkaRequest>(resolved.payload());
   const std::string bootstrap = k.brokers().toBootstrapServers();
+  const auto requestTimeout = resolved.config().timeout.value();
   k.match(overloaded{
-      [&](const d::KafkaProduceSpec &p) { produce(bootstrap, k.security(), p, sink); },
+      [&](const d::KafkaProduceSpec &p) { produce(bootstrap, k.security(), p, sink, cancel, requestTimeout); },
       [&](const d::KafkaConsumeSpec &c) { consume(bootstrap, k.security(), c, sink, cancel); },
   });
   return d::ok();
