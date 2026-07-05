@@ -1,7 +1,8 @@
 // ws_sender.hpp — WebSocket transport over libcurl (SPEC_websocket §3). INTERNAL (core/src): may leak
 // libcurl; never include from core/include. One I/O thread OWNS the easy handle (curl is not thread-safe):
 // it runs the recv/send pump, reassembles frames, sends keepalive PINGs, and performs graceful close.
-// The UI-facing send side is a WsChannel (IStreamChannel) that only enqueues frames + wakes the I/O thread.
+// The UI-facing send side is a WsChannel (IStreamChannel) that only enqueues frames; the I/O thread
+// picks them up on its next tick.
 #pragma once
 
 #include <cstdint>
@@ -43,7 +44,8 @@ std::shared_ptr<IStreamChannel> wsMakeChannel(const std::shared_ptr<WsSession>& 
 void wsRun(const core::domain::WebSocketRequest& req, IStreamSink& sink,
            const std::shared_ptr<WsSession>& session, const std::string& sessionId);
 
-// Request a graceful close from another thread (UI/Engine). Idempotent; wakes the I/O thread.
+// Request a graceful close from another thread (UI/Engine). Idempotent; the I/O thread honors it on its
+// next tick.
 void wsRequestClose(const std::shared_ptr<WsSession>& session, int code, const std::string& reason);
 
 // Frame-level hooks for a protocol that interprets the WS frames itself (e.g. graphql-transport-ws)

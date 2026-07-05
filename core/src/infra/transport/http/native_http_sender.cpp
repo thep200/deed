@@ -1,6 +1,8 @@
 #include "infra/transport/http/native_http_sender.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -20,17 +22,6 @@ namespace {
 
 const d::HttpRequest &httpOf(const d::RequestModel &m) {
   return *std::get_if<d::HttpRequest>(&m.payload());
-}
-
-bool requestIsSse(const d::HttpRequest &h) {
-  for (const auto &hd : h.headers().items()) {
-    if (!hd.enabled()) continue;
-    std::string k = hd.name(), v = hd.value();
-    for (auto &c : k) c = (char)::tolower((unsigned char)c);
-    for (auto &c : v) c = (char)::tolower((unsigned char)c);
-    if (k == "accept" && v.find("text/event-stream") != std::string::npos) return true;
-  }
-  return false;
 }
 
 std::string applyPathVariables(std::string url, const d::PathVariableList &vars) {
@@ -135,7 +126,7 @@ void applyBody(cpr::Session &session, const d::Body &body, const core::CancelTok
       }
       session.SetMultipart(mp);
     } else if constexpr (std::is_same_v<T, d::BodyBinary>) {
-      if (!b.filePath.empty()) { std::string data; if (readBinaryFile(b.filePath, cancel, data)) session.SetBody(cpr::Body{data}); }
+      if (!b.filePath.empty()) { std::string data; if (readBinaryFile(b.filePath, cancel, data)) session.SetBody(cpr::Body{std::move(data)}); }
     }
   });
 }
@@ -249,7 +240,7 @@ private:
     sink_.emit(d::ResponseEvent(d::EvMessage{d::WsSendKind::Text, payload, static_cast<size_t>(seq_)}));
     ++seq_;
     bytes_ += payload.size();
-    if (!e.id.empty()) lastEventId_ = e.id;
+    lastEventId_ = e.id; // unconditional: an empty `id:` is a valid reset (WHATWG — omit Last-Event-ID then)
   }
 
   void onHeaderLine(Conn &conn, std::string_view line) {
@@ -273,13 +264,17 @@ private:
     if (truncated_) return false;
     if (!conn.decided) { conn.decided = true; emitMetaOnce(conn.leading); }
     parser.feed(data.data(), data.size(), onEvent);
-    if (seq_ >= kMaxEvents_ || bytes_ >= kMaxTotalBytes_) { truncated_ = true; return false; }
+    if (seq_ >= kMaxEvents || bytes_ >= kMaxTotalBytes) { truncated_ = true; return false; }
     return true;
   }
 
   Retry tryReconnect(int attempt) {
     if (attempt >= kMaxRetries) return Retry::CapReached;
-    std::this_thread::sleep_for(std::chrono::milliseconds(retryMs_));
+    // Sleep in short slices so a cancel is observed promptly (retryMs_ may be up to 60s).
+    for (long waited = 0; waited < retryMs_; waited += 50) {
+      if (token_ && token_->cancelled()) { endStatus_ = End::Cancelled; return Retry::Cancelled; }
+      std::this_thread::sleep_for(std::chrono::milliseconds(std::min<long>(50, retryMs_ - waited)));
+    }
     if (token_ && token_->cancelled()) { endStatus_ = End::Cancelled; return Retry::Cancelled; }
     return Retry::DoReconnect;
   }
@@ -327,7 +322,8 @@ private:
 
     Conn conn;
     SseParser parser;
-    parser.setMaxEventBytes(static_cast<std::size_t>(kMaxEventBytes_));
+    parser.setLastEventId(lastEventId_); // lastEventId persists across reconnects (per spec)
+    parser.setMaxEventBytes(static_cast<std::size_t>(kMaxEventBytes));
     SseParser::Emit onEvent = [this](const SseEvent &e) { emitEvent(e); };
     session.SetHeaderCallback(cpr::HeaderCallback{
         [this, &conn](std::string_view line, intptr_t) -> bool { onHeaderLine(conn, line); return true; }});
@@ -345,6 +341,9 @@ private:
 
   static constexpr int kRetryDefaultMs = 3000;
   static constexpr int kMaxRetries = 10;
+  static constexpr std::uint64_t kMaxEventBytes = 8ull * 1024 * 1024;
+  static constexpr std::uint64_t kMaxEvents = 100000;
+  static constexpr std::uint64_t kMaxTotalBytes = 64ull * 1024 * 1024;
 
   const d::HttpRequest &h_;
   const d::RequestModel &model_;
@@ -352,9 +351,6 @@ private:
   std::shared_ptr<core::CancelToken> token_;
   std::chrono::steady_clock::time_point t0_;
 
-  std::uint64_t kMaxEventBytes_ = 8ull * 1024 * 1024;
-  std::uint64_t kMaxEvents_ = 100000;
-  std::uint64_t kMaxTotalBytes_ = 64ull * 1024 * 1024;
   bool opened_ = false;
   bool truncated_ = false;
   std::uint64_t seq_ = 0;
@@ -377,7 +373,7 @@ d::Status NativeHttpSender::execute(const d::RequestModel &model, d::IResponseSi
   { std::lock_guard<std::mutex> lk(mu_); token_ = token; }
 
   // SSE: stream the response natively (no legacy HttpSender).
-  if (requestIsSse(h)) {
+  if (d::acceptsEventStream(h)) {
     SseStreamer(h, model, sink, token).run();
     { std::lock_guard<std::mutex> lk(mu_); token_.reset(); }
     return d::ok();

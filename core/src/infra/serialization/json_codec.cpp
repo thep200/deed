@@ -32,23 +32,6 @@ json parseGuarded(const std::string& text, int maxDepth) {
 
 namespace {
 
-// ---- safe helpers (missing key -> default) ----
-std::string getStr(const json& j, const char* k, const std::string& def = "") {
-    auto it = j.find(k);
-    return (it != j.end() && it->is_string()) ? it->get<std::string>() : def;
-}
-int getInt(const json& j, const char* k, int def = 0) {
-    auto it = j.find(k);
-    return (it != j.end() && it->is_number_integer()) ? it->get<int>() : def;
-}
-bool getBool(const json& j, const char* k, bool def = false) {
-    auto it = j.find(k);
-    if (it == j.end()) return def;
-    if (it->is_boolean()) return it->get<bool>();
-    if (it->is_number()) return it->get<double>() != 0;   // accept 0/1 (new format)
-    return def;
-}
-
 // Read int by snake_case key, fall back to the old camelCase key (compat with old config.json).
 int getIntCompat(const json& j, const char* snake, const char* camel, int def) {
     if (j.find(snake) != j.end()) return getInt(j, snake, def);

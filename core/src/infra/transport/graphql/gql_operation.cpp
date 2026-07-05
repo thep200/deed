@@ -1,4 +1,5 @@
-// gql_operation.cpp — operation detection + GraphQL->HTTP packaging (SPEC_graphql §2/§4). DOMAIN-native.
+// gql_operation.cpp — GraphQL->HTTP packaging + shared operation payload (SPEC_graphql §4). DOMAIN-native.
+// (Operation detection moved to the domain: core/domain/graphql/gql_operation.hpp.)
 #include "infra/transport/graphql/graphql.hpp"
 
 #include <cctype>
@@ -6,31 +7,21 @@
 
 #include <nlohmann/json.hpp>
 
+#include "infra/transport/graphql/gql_payload.hpp"
+
 namespace core::gql {
 namespace d = core::domain;
 
-d::GqlOperationType effectiveOperation(const d::GraphQlRequest& g) {
-    if (g.op().operation != d::GqlOperationType::Auto) return g.op().operation;
-
-    // Scan to the first significant token, skipping whitespace, BOM, and `# line comments`.
-    const std::string& q = g.op().query;
-    std::size_t i = 0;
-    if (q.size() >= 3 && (unsigned char)q[0] == 0xEF && (unsigned char)q[1] == 0xBB && (unsigned char)q[2] == 0xBF)
-        i = 3;
-    while (i < q.size()) {
-        char c = q[i];
-        if (std::isspace((unsigned char)c) || c == ',') { ++i; continue; }
-        if (c == '#') { while (i < q.size() && q[i] != '\n') ++i; continue; }   // comment to EOL
-        break;
-    }
-    if (i >= q.size()) return d::GqlOperationType::Query;          // empty -> treat as query
-    if (q[i] == '{') return d::GqlOperationType::Query;            // shorthand `{ … }` is a query
-
-    std::string word;
-    while (i < q.size() && (std::isalpha((unsigned char)q[i]))) word += q[i++];
-    if (word == "mutation") return d::GqlOperationType::Mutation;
-    if (word == "subscription") return d::GqlOperationType::Subscription;
-    return d::GqlOperationType::Query;                             // "query" or anything else -> query
+nlohmann::json operationPayload(const d::GraphQlOperation& op) {
+    nlohmann::json vars;
+    const std::string& vtxt = op.variables.text();
+    try { vars = nlohmann::json::parse(vtxt.empty() ? "{}" : vtxt); }
+    catch (...) { vars = nlohmann::json::object(); }
+    nlohmann::json payload;
+    payload["query"] = op.query;
+    payload["variables"] = std::move(vars);
+    if (!op.operationName.empty()) payload["operationName"] = op.operationName;
+    return payload;
 }
 
 d::RequestModel buildHttpModel(const d::RequestModel& model) {
@@ -53,14 +44,7 @@ d::RequestModel buildHttpModel(const d::RequestModel& model) {
         hdrs.push_back(d::Header::create("Content-Type", "application/json").take());
 
     // POST body {query, variables, operationName}. (The domain model has no GET-for-query flag.)
-    nlohmann::json vars;
-    const std::string& vtxt = g.op().variables.text();
-    try { vars = nlohmann::json::parse(vtxt.empty() ? "{}" : vtxt); }
-    catch (...) { vars = nlohmann::json::object(); }
-    nlohmann::json body;
-    body["query"] = g.op().query;
-    body["variables"] = vars;
-    if (!g.op().operationName.empty()) body["operationName"] = g.op().operationName;
+    nlohmann::json body = operationPayload(g.op());
 
     // Parts holds a Url (no default ctor) -> brace-init in member order:
     // method, url, pathVariables, params, headers, body, auth.

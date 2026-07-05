@@ -100,6 +100,9 @@ void test_subscribe_error() {
                                   [&](const std::string& s) { sent.push_back(s); });
     proto.onOpen();
     proto.onFrame(R"({"type":"connection_ack"})");
+    // an error for a different id is ignored (id-scoped like next/complete)
+    proto.onFrame(R"({"type":"error","id":"99","payload":[{"message":"other"}]})");
+    GCHECK(sink.closes == 0, "error for other id ignored");
     proto.onFrame(R"({"type":"error","id":"1","payload":[{"message":"boom"}]})");
     GCHECK(sink.closes == 1 && sink.lastEnd.status == core::StreamStatus::Error, "error -> close(Error)");
     GCHECK(sink.lastEnd.statusMessage.find("boom") != std::string::npos, "error detail carried");

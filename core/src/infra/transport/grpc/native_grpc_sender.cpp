@@ -101,6 +101,13 @@ int pumpCq(grpc::CompletionQueue &cq, const std::shared_ptr<CancelToken> &cancel
   }
 }
 
+void shutdownAndDrain(grpc::CompletionQueue &cq) {
+  cq.Shutdown();
+  void *t = nullptr;
+  bool o = false;
+  while (cq.Next(&t, &o)) {}
+}
+
 bool splitMessages(const std::string &message, std::vector<std::string> &out, std::string &err) {
   if (message.find_first_not_of(" \t\r\n") == std::string::npos) return true; // empty -> 0 messages
   nlohmann::json parsed;
@@ -190,18 +197,8 @@ bool buildRequestBytes(gp::DynamicMessageFactory &factory, const gp::MethodDescr
 
 void awaitUnaryFinish(grpc::CompletionQueue &cq, grpc::ClientContext &ctx,
                       const std::shared_ptr<CancelToken> &cancel) {
-  bool done = false;
-  while (!done) {
-    void *tag = nullptr;
-    bool ok = false;
-    auto deadline = std::chrono::system_clock::now() + std::chrono::milliseconds(100);
-    auto next = cq.AsyncNext(&tag, &ok, deadline);
-    if (next == grpc::CompletionQueue::GOT_EVENT) done = true;
-    else if (next == grpc::CompletionQueue::SHUTDOWN) break;
-    else if (cancel && cancel->isCancelled()) ctx.TryCancel();
-  }
-  cq.Shutdown();
-  { void *t; bool o; while (cq.Next(&t, &o)) {} }
+  pumpCq(cq, cancel, ctx);
+  shutdownAndDrain(cq);
 }
 
 using GenericRW = grpc::ClientAsyncReaderWriter<grpc::ByteBuffer, grpc::ByteBuffer>;
@@ -231,8 +228,7 @@ void runClientStreamCall(GrpcCall &call, const std::vector<std::string> &wire, g
   if (!failed) { call.rw.Read(&respBuf, tag); gotResp = (pumpCq(call.cq, call.cancel, call.ctx) == 1); }
   call.rw.Finish(&status, tag);
   pumpCq(call.cq, call.cancel, call.ctx);
-  call.cq.Shutdown();
-  { void *t; bool o; while (call.cq.Next(&t, &o)) {} }
+  shutdownAndDrain(call.cq);
 }
 
 void runServerStreamReads(GrpcCall &call, const std::string &reqWire, const EmitFn &emit) {
@@ -364,8 +360,7 @@ void finishStreamCall(GrpcCall &call, grpc::Status &status) {
   void *kFinishTag = reinterpret_cast<void *>(11);
   call.rw.Finish(&status, kFinishTag);
   pumpCq(call.cq, call.cancel, call.ctx);
-  call.cq.Shutdown();
-  { void *t; bool o; while (call.cq.Next(&t, &o)) {} }
+  shutdownAndDrain(call.cq);
 }
 
 void closeStreamDomain(d::IResponseSink &sink, grpc::ClientContext &ctx, const grpc::Status &status,

@@ -5,18 +5,6 @@
 namespace core::infra {
 namespace d = core::domain;
 
-namespace {
-d::RequestType toDomainType(core::RequestType t) {
-  switch (t) {
-  case core::RequestType::Grpc: return d::RequestType::Grpc;
-  case core::RequestType::WebSocket: return d::RequestType::WebSocket;
-  case core::RequestType::GraphQL: return d::RequestType::GraphQl;
-  case core::RequestType::Kafka: return d::RequestType::Kafka;
-  default: return d::RequestType::Http;
-  }
-}
-} // namespace
-
 d::Result<d::RequestModel> CollectionRepository::load(const std::string &relPath) const {
   try {
     return d::Result<d::RequestModel>::ok(store_->loadRequest(relPath)); // store speaks domain now
@@ -43,7 +31,7 @@ std::vector<d::CollectionNode> CollectionRepository::listLevel(const std::string
     node.name = n.name;
     if (!n.isFolder) {
       node.id = d::RequestId(n.id);
-      node.type = toDomainType(n.requestType);
+      node.type = n.requestType;
     }
     out.push_back(std::move(node));
   }

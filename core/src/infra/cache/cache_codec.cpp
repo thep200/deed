@@ -2,27 +2,17 @@
 
 #include <nlohmann/json.hpp>
 
+#include "infra/serialization/json_codec.hpp" // core::codec::parseGuarded (H5 depth guard) + safe getters
+
 namespace core::cachecodec {
 
 namespace {
 using json = nlohmann::json;
 namespace d = core::domain;
 
-std::string getStr(const json& j, const char* k, const std::string& def = "") {
-    auto it = j.find(k);
-    return (it != j.end() && it->is_string()) ? it->get<std::string>() : def;
-}
-int getInt(const json& j, const char* k, int def = 0) {
-    auto it = j.find(k);
-    return (it != j.end() && it->is_number_integer()) ? it->get<int>() : def;
-}
-bool getBool(const json& j, const char* k, bool def = false) {
-    auto it = j.find(k);
-    if (it == j.end()) return def;
-    if (it->is_boolean()) return it->get<bool>();
-    if (it->is_number()) return it->get<double>() != 0;
-    return def;
-}
+using core::codec::getBool;
+using core::codec::getInt;
+using core::codec::getStr;
 
 json headersToJson(const std::vector<d::ResponseHeader>& v) {
     json a = json::array();
@@ -92,7 +82,7 @@ std::string toJson(const ResponseRecord& rec) {
 }
 
 ResponseRecord fromJson(const std::string& text) {
-    json j = json::parse(text);
+    json j = core::codec::parseGuarded(text); // H5: depth-guarded — cache files are on-disk/tamperable
     ResponseRecord rec;
     if (!j.is_object()) return rec;
     rec.isError = getBool(j, "isError", false);

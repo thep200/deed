@@ -2,6 +2,7 @@
 // include <rdkafkacpp.h> (layering_gate enforces this — confined to src/infra/transport/kafka).
 #include "infra/transport/kafka/kafka_sender.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -52,7 +53,15 @@ const char *compressionProp(d::Compression c) {
   return "none";
 }
 
+// Cancel-latency ceiling: no librdkafka wait (connect probe / poll) may block longer than this between
+// checks of the cancellation token — the Cancel button is the highest-priority signal (SPEC_kafka §5).
+constexpr int kCancelSliceMs = 200;
+
 // ---- Error mapping (SPEC_kafka §7) ----
+constexpr const char *kDeliveryTimedOutMsg = "Delivery timed out — is the broker running?";
+constexpr const char *kBrokerUnreachableMsg =
+    "Could not connect to the broker — check host:port and whether Kafka has started.";
+
 struct MappedErr {
   d::ErrorKind kind;
   std::string message;
@@ -61,11 +70,11 @@ struct MappedErr {
 MappedErr mapProduceErr(RdKafka::ErrorCode err) {
   switch (err) {
   case RdKafka::ERR__MSG_TIMED_OUT:
-    return {d::ErrorKind::Timeout, "Delivery timed out — is the broker running?"};
+    return {d::ErrorKind::Timeout, kDeliveryTimedOutMsg};
   case RdKafka::ERR__TRANSPORT:
   case RdKafka::ERR__ALL_BROKERS_DOWN:
   case RdKafka::ERR__RESOLVE:
-    return {d::ErrorKind::Network, "Could not connect to the broker — check host:port and whether Kafka has started."};
+    return {d::ErrorKind::Network, kBrokerUnreachableMsg};
   case RdKafka::ERR_UNKNOWN_TOPIC_OR_PART:
     return {d::ErrorKind::Protocol, "Topic does not exist and auto-create is off — create it first."};
   case RdKafka::ERR_LEADER_NOT_AVAILABLE:
@@ -81,7 +90,7 @@ MappedErr mapConsumeErr(RdKafka::ErrorCode err) {
   case RdKafka::ERR__TRANSPORT:
   case RdKafka::ERR__ALL_BROKERS_DOWN:
   case RdKafka::ERR__RESOLVE:
-    return {d::ErrorKind::Network, "Could not connect to the broker — check host:port and whether Kafka has started."};
+    return {d::ErrorKind::Network, kBrokerUnreachableMsg};
   case RdKafka::ERR_UNKNOWN_TOPIC_OR_PART:
     return {d::ErrorKind::Protocol, "Topic does not exist — create it first or enable auto-create."};
   case RdKafka::ERR_GROUP_AUTHORIZATION_FAILED:
@@ -198,14 +207,12 @@ void produce(const std::string &bootstrap, const d::KafkaSecurity &security, con
       producer->purge(RdKafka::Producer::PURGE_QUEUE | RdKafka::Producer::PURGE_INFLIGHT);
       producer->flush(kPurgeDrainMs);
     }
-    sink.emit(d::ResponseEvent(
-        d::EvFailed{{d::ErrorKind::Timeout, "Delivery timed out — is the broker running?", {}}}));
+    sink.emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Timeout, kDeliveryTimedOutMsg, {}}}));
     return;
   }
 
   if (!drCb.got) {
-    sink.emit(d::ResponseEvent(
-        d::EvFailed{{d::ErrorKind::Timeout, "Delivery timed out — is the broker running?", {}}}));
+    sink.emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Timeout, kDeliveryTimedOutMsg, {}}}));
     return;
   }
   if (drCb.err != RdKafka::ERR_NO_ERROR) {
@@ -251,19 +258,53 @@ void consume(const std::string &bootstrap, const d::KafkaSecurity &security, con
   // up-front with a bounded metadata() call — the shared per-request Config-tab timeout, same value the
   // producer's delivery deadline honors — so a bad broker URL fails fast and the consumer closes cleanly
   // (SPEC_kafka §7 "Network: không kết nối được broker").
+  //
+  // BUG FIX (Cancel priority): metadata() as ONE blocking call held this thread for the whole Config-tab
+  // timeout with no way to be interrupted — pressing Cancel while "connecting" did nothing until the
+  // timeout expired (same shape as the producer's old un-sliced flush()). Slice the wait instead, checking
+  // the token between slices, so Cancel wins within kCancelSliceMs no matter how long the timeout is.
+  //
+  // ONE deadline bounds the whole session (connect + consume): timeout_ms is the Config-tab request
+  // timeout, so the outcome contract is phase-based — no broker within the deadline = FAILURE (Network),
+  // Cancel while still connecting = FAILURE (Cancelled: the user never got a live consumer), while
+  // deadline/Cancel AFTER the consumer is live = SUCCESS (EvClosed: a bounded tail that ends is the
+  // feature, not an error).
+  const auto deadline = std::chrono::steady_clock::now() + requestTimeout;
   {
-    RdKafka::Metadata *rawMd = nullptr;
-    RdKafka::ErrorCode cerr =
-        consumer->metadata(true, nullptr, &rawMd, static_cast<int>(requestTimeout.count()));
-    std::unique_ptr<RdKafka::Metadata> md(rawMd); // owns the reply; librdkafka hands us a heap Metadata
+    // "Still connecting" errors — one metadata slice against a down/unreachable/starting broker returns
+    // TRANSPORT (refused / blackhole) or RESOLVE, NOT TIMED_OUT; librdkafka keeps reconnecting underneath,
+    // so these are retryable until the deadline (a broker that is still starting up comes right up), not
+    // instant failures. Anything else (auth, fatal) is a real error and ends the connect phase at once.
+    const auto stillConnecting = [](RdKafka::ErrorCode e) {
+      return e == RdKafka::ERR__TIMED_OUT || e == RdKafka::ERR__TRANSPORT ||
+             e == RdKafka::ERR__ALL_BROKERS_DOWN || e == RdKafka::ERR__RESOLVE;
+    };
+    RdKafka::ErrorCode cerr;
+    while (true) {
+      if (cancel.cancelled()) {
+        // Settle the stream FIRST — close() against an unreachable broker can itself block, and the user
+        // already asked to stop; they must not wait on tear-down. Cancelled before the consumer ever went
+        // live -> the session FAILED (EvFailed, not a graceful EvClosed).
+        sink.emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Cancelled, "Cancelled", {}}}));
+        consumer->close();
+        return;
+      }
+      const long long leftMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   deadline - std::chrono::steady_clock::now())
+                                   .count();
+      if (leftMs <= 0) { cerr = RdKafka::ERR__TIMED_OUT; break; }
+      RdKafka::Metadata *rawMd = nullptr;
+      cerr = consumer->metadata(true, nullptr, &rawMd,
+                                static_cast<int>(std::min<long long>(leftMs, kCancelSliceMs)));
+      std::unique_ptr<RdKafka::Metadata> md(rawMd); // owns the reply; librdkafka hands us a heap Metadata
+      if (!stillConnecting(cerr)) break; // reached a broker (or a real, non-connectivity error)
+    }
     if (cerr != RdKafka::ERR_NO_ERROR) {
-      // A metadata timeout here means we never reached any broker — report it as Network (a plain
-      // "Local: Timed out" would read as an unhelpful protocol error) rather than mapConsumeErr's default.
-      MappedErr m = cerr == RdKafka::ERR__TIMED_OUT
-                        ? MappedErr{d::ErrorKind::Network,
-                                    "Could not connect to the broker — check host:port and whether Kafka "
-                                    "has started."}
-                        : mapConsumeErr(cerr);
+      // Deadline expired while still connecting -> we never reached any broker — report it as Network
+      // regardless of which connectivity code the last slice returned (a plain "Local: Timed out" would
+      // read as an unhelpful protocol error).
+      MappedErr m = stillConnecting(cerr) ? MappedErr{d::ErrorKind::Network, kBrokerUnreachableMsg}
+                                          : mapConsumeErr(cerr);
       sink.emit(d::ResponseEvent(d::EvFailed{{m.kind, m.message, {}}}));
       consumer->close();
       return;
@@ -290,9 +331,20 @@ void consume(const std::string &bootstrap, const d::KafkaSecurity &security, con
   }
 
   int count = 0;
+  // BUG FIX (Cancel priority): consume(pollTimeout) blocked the token check for the WHOLE poll timeout —
+  // a large Config-tab pollTimeout made Cancel appear dead. Cap each wait at kCancelSliceMs; observable
+  // behavior is identical (consume() returns as soon as a record arrives, and a TIMED_OUT slice is already
+  // treated as "no data yet"), but the token is re-checked at least every slice.
   const int pollMs = static_cast<int>(spec.config.pollTimeout.count());
+  const int sliceMs = std::min(pollMs, kCancelSliceMs);
+  // BUG FIX: the loop used to run unbounded — timeout_ms only ever bounded the connect probe, so a live
+  // consumer ignored the Config-tab timeout entirely and Cancel was the only way out. The session deadline
+  // (see above) now also bounds the tail: expiring here is the bounded-tail SUCCESS path (EvClosed
+  // "timeout"), unlike expiring during connect which is a Network FAILURE.
+  bool timedOut = false;
   while (!cancel.cancelled()) {
-    std::unique_ptr<RdKafka::Message> msg(consumer->consume(pollMs));
+    if (std::chrono::steady_clock::now() >= deadline) { timedOut = true; break; }
+    std::unique_ptr<RdKafka::Message> msg(consumer->consume(sliceMs));
     RdKafka::ErrorCode merr = msg->err();
     if (merr == RdKafka::ERR_NO_ERROR) {
       d::KafkaRecord rec;
@@ -305,8 +357,17 @@ void consume(const std::string &bootstrap, const d::KafkaSecurity &security, con
       } else {
         rec.valueIsNull = true;
       }
-      if (auto *hdrs = msg->headers())
-        for (const auto &h : hdrs->get_all()) rec.headers.push_back({h.key(), h.value_string(), true});
+      if (auto *hdrs = msg->headers()) {
+        // Header values are arbitrary bytes and may be null — value_string() returns NULL for a null
+        // value (UB in std::string) and truncates at embedded '\0'; copy length-based instead.
+        const auto all = hdrs->get_all();
+        rec.headers.reserve(all.size());
+        for (const auto &h : all)
+          rec.headers.push_back({h.key(),
+                                 h.value() ? std::string(static_cast<const char *>(h.value()), h.value_size())
+                                           : std::string(),
+                                 true});
+      }
       rec.timestampMs = msg->timestamp().timestamp;
       rec.size = msg->len();
       sink.emit(d::ResponseEvent(d::EvKafkaRecord{std::move(rec)}));
@@ -323,8 +384,15 @@ void consume(const std::string &bootstrap, const d::KafkaSecurity &security, con
   }
 
   bool cancelled = cancel.cancelled();
+  // BUG FIX (Cancel priority): EvClosed used to be emitted AFTER close(), and close() (leave group +
+  // final offset commit) can block for seconds — the UI stayed "sending" long after Cancel was pressed.
+  // Settle the stream first; the group tear-down then finishes in the background of this call.
+  // All three exits (Cancel mid-consume, session deadline, maxMessages) are graceful EvClosed — the
+  // consumer WAS live, so ending the tail is success (contrast the connect phase above, where both map
+  // to EvFailed).
+  sink.emit(d::ResponseEvent(
+      d::EvClosed{std::nullopt, cancelled ? "cancelled" : timedOut ? "timeout" : "stopped"}));
   consumer->close(); // commits final offsets if auto-commit is on
-  sink.emit(d::ResponseEvent(d::EvClosed{std::nullopt, cancelled ? "cancelled" : "stopped"}));
 }
 
 } // namespace

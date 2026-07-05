@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "core/domain/common/dto_common.hpp" // KeyValue (neutral; survives types.hpp removal)
+#include "infra/transport/shared/dto_common.hpp" // KeyValue (neutral; survives types.hpp removal)
 
 namespace core::urlutil {
 

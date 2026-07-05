@@ -439,7 +439,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     core::RequestType _t = [self requestType];
     BOOL grpc = (_t == core::RequestType::Grpc);
     BOOL kafka = (_t == core::RequestType::Kafka);
-    BOOL noPopup = (_t == core::RequestType::WebSocket || _t == core::RequestType::GraphQL ||
+    BOOL noPopup = (_t == core::RequestType::WebSocket || _t == core::RequestType::GraphQl ||
                     kafka);   // WS/GraphQL/Kafka: no method/proto popup
     _methodPopup.frame = NSMakeRect(x, ty, wMethod, btnH);
     _protoPopup.frame = NSMakeRect(x, ty, wProto, btnH);
@@ -507,17 +507,10 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
 
 #pragma mark Conditional render by type
 
-// The current request's protocol as the UI view-enum (core::RequestType survives types.hpp). Reads the
+// The current request's protocol (core::RequestType — the same enum the domain model uses). Reads the
 // domain _model directly — no legacy materialization. (Empty -> Http, harmless when no request is open.)
 - (core::RequestType)requestType {
-    if (!_model) return core::RequestType::Http;
-    switch (_model->type()) {
-    case core::domain::RequestType::Grpc: return core::RequestType::Grpc;
-    case core::domain::RequestType::WebSocket: return core::RequestType::WebSocket;
-    case core::domain::RequestType::GraphQl: return core::RequestType::GraphQL;
-    case core::domain::RequestType::Kafka: return core::RequestType::Kafka;
-    default: return core::RequestType::Http;
-    }
+    return _model ? _model->type() : core::RequestType::Http;
 }
 
 // The Kafka payload's client-kind (Producer/Consumer) — nil-safe (Http/... -> Producer, harmless default).

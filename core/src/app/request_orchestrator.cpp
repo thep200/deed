@@ -3,27 +3,12 @@
 #include <string>
 #include <utility>
 
+#include "core/domain/http/http_request.hpp" // acceptsEventStream (SSE classifier)
+
 namespace core::app {
 namespace d = core::domain;
 
 namespace {
-
-// Case-insensitive "Accept: text/event-stream" check — same signal native_http_sender.cpp's requestIsSse()
-// and CoreApiClient::interactionOf() use to force the SSE path. Duplicated intentionally (small, stable,
-// domain-only): this classifier answers a narrower question than interactionOf ("does this need a
-// dedicated thread", not the full Unary/ServerStream/ClientStream/BiDi/Duplex breakdown UI cares about) and
-// must stay app/domain-pure — interactionOf's GraphQL branch reaches into infra (gql::effectiveOperation)
-// which this layer doesn't depend on.
-bool httpRequestsSse(const d::HttpRequest &h) {
-  for (const auto &hd : h.headers().items()) {
-    if (!hd.enabled()) continue;
-    std::string n = hd.name(), v = hd.value();
-    for (auto &c : n) c = (char)std::tolower((unsigned char)c);
-    for (auto &c : v) c = (char)std::tolower((unsigned char)c);
-    if (n == "accept" && v.find("text/event-stream") != std::string::npos) return true;
-  }
-  return false;
-}
 
 // Long-lived == the sender's execute() blocks indefinitely (until the user stops it / the peer closes),
 // as opposed to a bounded call that returns once its own data is exhausted. Used ONLY to pick an executor
@@ -47,7 +32,7 @@ bool isLongLivedSend(const d::RequestModel &request) {
     // over-classified as "streaming", which is the safe direction per the note above.
     return std::get<d::GraphQlRequest>(request.payload()).subTransport() == d::GqlSubTransport::Ws;
   case d::RequestType::Http:
-    return httpRequestsSse(std::get<d::HttpRequest>(request.payload()));
+    return d::acceptsEventStream(std::get<d::HttpRequest>(request.payload()));
   case d::RequestType::Kafka:
     return std::get<d::KafkaRequest>(request.payload()).kind() == d::KafkaClientKind::Consumer;
   }

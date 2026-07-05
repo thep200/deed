@@ -21,6 +21,23 @@ inline constexpr int kMaxJsonDepth = 200;
 // text (imported/pasted requests, cached files, env/collection files).
 json parseGuarded(const std::string& text, int maxDepth = kMaxJsonDepth);
 
+// ---- safe helpers (missing key -> default) ----
+inline std::string getStr(const json& j, const char* k, const std::string& def = "") {
+    auto it = j.find(k);
+    return (it != j.end() && it->is_string()) ? it->get<std::string>() : def;
+}
+inline int getInt(const json& j, const char* k, int def = 0) {
+    auto it = j.find(k);
+    return (it != j.end() && it->is_number_integer()) ? it->get<int>() : def;
+}
+inline bool getBool(const json& j, const char* k, bool def = false) {
+    auto it = j.find(k);
+    if (it == j.end()) return def;
+    if (it->is_boolean()) return it->get<bool>();
+    if (it->is_number()) return it->get<double>() != 0;   // accept 0/1
+    return def;
+}
+
 // Environment (non-secret part only; secrets flagged, value empty)
 json toJson(const Environment&);
 Environment envFromJson(const json&);

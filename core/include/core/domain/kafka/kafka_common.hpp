@@ -45,8 +45,11 @@ public:
           return Result<BrokerList>::fail(
               {ErrorCode::Validation, "invalid broker port \"" + portStr + "\"", "kafka.brokers"});
         port = port * 10 + (c - '0');
+        if (port > 65535)
+          return Result<BrokerList>::fail(
+              {ErrorCode::Validation, "invalid broker port \"" + portStr + "\"", "kafka.brokers"});
       }
-      if (portStr.empty() || port <= 0 || port > 65535)
+      if (port <= 0)
         return Result<BrokerList>::fail(
             {ErrorCode::Validation, "invalid broker port \"" + portStr + "\"", "kafka.brokers"});
       out.push_back(Broker{std::move(host), static_cast<std::uint16_t>(port)});

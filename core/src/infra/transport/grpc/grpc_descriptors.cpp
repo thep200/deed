@@ -9,6 +9,7 @@
 #include <grpcpp/support/sync_stream.h>
 
 #include "infra/platform/fs_util.hpp"
+#include "infra/transport/grpc/grpc_method_listing.hpp"
 
 // Reflection stub generated from third_party/grpc_reflection/reflection.proto (codegen in CMake).
 #include "reflection.grpc.pb.h"
@@ -226,14 +227,6 @@ bool buildDescriptors(const d::GrpcRequest& g, DescriptorContext& ctx) {
     });
 }
 
-std::string methodTypeOf(const gp::MethodDescriptor* m) {
-    bool c = m->client_streaming(), s = m->server_streaming();
-    if (c && s) return "bidi_streaming";
-    if (c) return "client_streaming";
-    if (s) return "server_streaming";
-    return "unary";
-}
-
 namespace {
 d::GrpcMethodType methodTypeEnumOf(const gp::MethodDescriptor* m) {
     bool c = m->client_streaming(), s = m->server_streaming();
@@ -259,6 +252,12 @@ std::vector<d::GrpcMethodDescriptor> listMethods(const DescriptorContext& ctx) {
         }
     }
     return out;
+}
+
+std::vector<d::GrpcMethodDescriptor> listGrpcMethods(const d::GrpcRequest& g, std::string& err) {
+    DescriptorContext ctx;
+    if (!buildDescriptors(g, ctx)) { err = ctx.error; return {}; }
+    return listMethods(ctx);
 }
 
 } // namespace core::grpcdesc

@@ -4,7 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "infra/serialization/json_codec.hpp"  // core::codec::parseGuarded — JSON nesting-depth guard (H5)
+#include "infra/serialization/json_codec.hpp"  // core::codec::parseGuarded (H5 depth guard) + safe getters
 #include "infra/serialization/wire_format.hpp" // core::wire::* on-disk body-mode tokens
 
 namespace core::serial {
@@ -14,20 +14,10 @@ using nlohmann::json;
 
 namespace {
 std::string gs(const json &j, const char *k, const std::string &dflt = "") {
-  auto it = j.find(k);
-  return (it != j.end() && it->is_string()) ? it->get<std::string>() : dflt;
+  return core::codec::getStr(j, k, dflt);
 }
-bool gb(const json &j, const char *k, bool dflt) {
-  auto it = j.find(k);
-  if (it == j.end()) return dflt;
-  if (it->is_boolean()) return it->get<bool>();
-  if (it->is_number()) return it->get<double>() != 0; // accept 0/1
-  return dflt;
-}
-int gi(const json &j, const char *k, int dflt) {
-  auto it = j.find(k);
-  return (it != j.end() && it->is_number_integer()) ? it->get<int>() : dflt;
-}
+bool gb(const json &j, const char *k, bool dflt) { return core::codec::getBool(j, k, dflt); }
+int gi(const json &j, const char *k, int dflt) { return core::codec::getInt(j, k, dflt); }
 json parseGuarded(const std::string &text, const char *fallback) {
   return core::codec::parseGuarded(text.empty() ? fallback : text); // depth-guarded (H5)
 }

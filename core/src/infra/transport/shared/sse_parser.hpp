@@ -5,6 +5,8 @@
 
 #include <functional>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace core {
 
@@ -29,6 +31,7 @@ public:
     void finish(const Emit& emit);
 
     const std::string& lastEventId() const { return lastEventId_; }   // for Last-Event-ID on reconnect
+    void setLastEventId(std::string id) { lastEventId_ = std::move(id); }  // seed on reconnect (persists per spec)
     long retryMs() const { return retryMs_; }                          // server `retry:` (-1 if unset)
 
     // Cap one event's data buffer (SSE_MAX_EVENT_BYTES); 0 = unlimited. Over cap -> truncated flag set.
@@ -36,9 +39,9 @@ public:
     bool truncated() const { return truncated_; }
 
 private:
-    void onLine(const std::string& line, const Emit& emit);
-    void handleDataField(const std::string& value); // accumulate `data:` honoring the byte cap
-    void handleRetryField(const std::string& value); // parse + clamp `retry:`
+    void onLine(std::string_view line, const Emit& emit);
+    void handleDataField(std::string_view value); // accumulate `data:` honoring the byte cap
+    void handleRetryField(std::string_view value); // parse + clamp `retry:`
     void dispatch(const Emit& emit);
 
     std::string buf_;          // bytes not yet forming a complete line

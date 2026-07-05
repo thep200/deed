@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>                                        // _uiBodyDrafts merge/extract (infra-only)
 
 #include "infra/serialization/json_codec.hpp"                       // parseGuarded (depth guard) for lightweight metadata reads
+#include "core/domain/request/request_defaults.hpp"
 #include "core/infra/persistence/request_naming.hpp"
 #include "core/infra/persistence/stores.hpp"
 #include "infra/platform/fs_util.hpp"
@@ -49,25 +50,6 @@ std::string injectBodyDrafts(const std::string &reqJson,
 }
 
 // --- domain helpers for the filename-encoding + immutable-update the store needs ---
-// The survivor view enum used by request-filename encoding.
-RequestType toViewType(core::domain::RequestType t) {
-  switch (t) {
-  case core::domain::RequestType::Grpc: return RequestType::Grpc;
-  case core::domain::RequestType::WebSocket: return RequestType::WebSocket;
-  case core::domain::RequestType::GraphQl: return RequestType::GraphQL;
-  case core::domain::RequestType::Kafka: return RequestType::Kafka;
-  default: return RequestType::Http;
-  }
-}
-core::domain::RequestType toDomainType(RequestType t) {
-  switch (t) {
-  case RequestType::Grpc: return core::domain::RequestType::Grpc;
-  case RequestType::WebSocket: return core::domain::RequestType::WebSocket;
-  case RequestType::GraphQL: return core::domain::RequestType::GraphQl;
-  case RequestType::Kafka: return core::domain::RequestType::Kafka;
-  default: return core::domain::RequestType::Http;
-  }
-}
 // HTTP method string for the filename (empty for non-HTTP — gRPC/WS/GraphQL have no method in the name).
 std::string httpMethodOf(const core::domain::RequestModel &m) {
   if (m.type() != core::domain::RequestType::Http) return {};
@@ -78,53 +60,6 @@ core::domain::RequestModel withIdName(const core::domain::RequestModel &m, std::
   return core::domain::RequestModel::create(core::domain::RequestId(std::move(id)), std::move(name), m.seq(),
                                             m.config(), m.payload())
       .take();
-}
-// Default payload for a freshly created request of `type` (mirrors the legacy createRequest defaults).
-// NB: fully-qualified core::domain:: — a `using namespace core::domain` would clash with the legacy core::
-// types (Auth/WsSendKind/GrpcRequest/...) still reachable here via stores.hpp -> types.hpp.
-core::domain::RequestModel::Payload defaultPayloadForCreate(core::domain::RequestType type) {
-  namespace cd = core::domain;
-  switch (type) {
-  case cd::RequestType::WebSocket:
-    return cd::WebSocketRequest::create(
-               {cd::Url::create("").take(), {}, {}, cd::Auth::none(), {}, cd::WsSendKind::Text})
-        .take();
-  case cd::RequestType::GraphQl: {
-    cd::GraphQlOperation op;
-    op.query = "query {\n  \n}"; // starter document
-    return cd::GraphQlRequest::create(
-               {cd::Url::create("").take(), op, {}, cd::Auth::none(), cd::GqlSubTransport::Http, ""})
-        .take();
-  }
-  case cd::RequestType::Grpc: {
-    cd::GrpcRequest::Parts gp; // reflection + unary + empty target are the Parts defaults
-    gp.message = cd::JsonText::of("{}");
-    return cd::GrpcRequest::create(std::move(gp)).take();
-  }
-  case cd::RequestType::Kafka: {
-    // BrokerList/KafkaTopic reject empty (SPEC_kafka §3 invariants) -> seed a placeholder, same convention
-    // GraphQL uses for its non-empty-query invariant (not an "always-empty-ok" draft like url/target).
-    cd::KafkaProduceConfig cfg{cd::KafkaTopic::create("demo-topic").take()};
-    cd::KafkaMessage msg;
-    msg.value = cd::MessagePayload{"{}"};
-    auto mode = cd::KafkaRequest::Mode{cd::KafkaProduceSpec{std::move(cfg), std::move(msg)}};
-    return cd::KafkaRequest::create(cd::BrokerList::parse("localhost:9092").take(),
-                                    cd::KafkaSecurity::plaintext(), std::move(mode))
-        .take();
-  }
-  default: {
-    // HTTP: GET + the common default headers as OFF-by-default hints (User-Agent on), no body.
-    std::vector<cd::Header> hdrs;
-    hdrs.push_back(cd::Header::create("Content-Type", "application/json", false).take());
-    hdrs.push_back(cd::Header::create("Accept", "*/*", false).take());
-    hdrs.push_back(cd::Header::create("User-Agent", "deed", true).take());
-    hdrs.push_back(cd::Header::create("Accept-Encoding", "gzip, deflate, br", false).take());
-    hdrs.push_back(cd::Header::create("Connection", "keep-alive", false).take());
-    return cd::HttpRequest::create({cd::HttpMethod::Get, cd::Url::create("").take(), {}, {},
-                                    cd::HeaderList(std::move(hdrs)), cd::Body::none(), cd::Auth::none()})
-        .take();
-  }
-  }
 }
 // Special dirs that are NOT shown in the request tree.
 bool isReservedDir(const std::string &name) {
@@ -435,7 +370,7 @@ bool CollectionStore::migrateOneFile(const std::string &childRel) const {
     std::string method = httpMethodOf(m);
     fs::path src = fs::path(fsutil::join(root_, childRel));
     std::string newName =
-        uniqueEncodedName(src.parent_path(), m.id().get(), toViewType(m.type()), method, m.name());
+        uniqueEncodedName(src.parent_path(), m.id().get(), m.type(), method, m.name());
     if (newName == src.filename().string())
       return false;
     std::error_code ec;
@@ -495,10 +430,10 @@ std::string CollectionStore::saveRequest(const std::string &relPath, const core:
   // Write content first (source of truth), then sync the filename = derived
   // cache (§4). UI body drafts ride along under "_uiBodyDrafts" (domain ignores them).
   fsutil::writeFileAtomic(cur.string(), injectBodyDrafts(requestToText(m), bodyDrafts));
-  std::string desired = encodeRequestFilename(m.id().get(), toViewType(m.type()), method, m.name());
+  std::string desired = encodeRequestFilename(m.id().get(), m.type(), method, m.name());
   if (cur.filename().string() == desired)
     return relPath; // name already matches -> done
-  std::string newName = uniqueEncodedName(dir, m.id().get(), toViewType(m.type()), method, m.name());
+  std::string newName = uniqueEncodedName(dir, m.id().get(), m.type(), method, m.name());
   fs::path dst = dir / newName;
   std::error_code ec;
   fs::rename(cur, dst, ec); // git detects rename via unchanged content
@@ -513,7 +448,7 @@ std::string CollectionStore::createRequest(const std::string &folderRel,
   invalidateIdIndex();
   fs::path dir = fs::path(fsutil::join(root_, folderRel));
   fs::create_directories(dir);
-  // Build a fresh domain request of `type` with the store's default payload (HTTP ships the common headers
+  // Build a fresh domain request of `type` with the domain default payload (HTTP ships the common headers
   // OFF-by-default except User-Agent=deed; gRPC reflection/unary; GraphQL starter doc). NEW requests only —
   // existing requests (load/save) and imports are never auto-modified.
   std::string id = genId();
@@ -521,7 +456,7 @@ std::string CollectionStore::createRequest(const std::string &folderRel,
   core::domain::RequestConfig cfg{core::domain::Timeout::fromMillis(defaultTimeoutMs_).take(),
                                   defaultVerifyTls_};
   core::domain::RequestModel m = core::domain::RequestModel::create(
-      core::domain::RequestId(id), name, 0, cfg, defaultPayloadForCreate(toDomainType(type)))
+      core::domain::RequestId(id), name, 0, cfg, core::domain::defaultPayloadFor(type))
       .take();
   std::string method = httpMethodOf(m);
   fs::path full = dir / uniqueEncodedName(dir, id, type, method, name);
@@ -539,7 +474,7 @@ CollectionStore::createRequestFromModel(const std::string &folderRel,
   std::string id = genId(); // new id, independent of the import source
   m = withIdName(m, id, name);
   std::string method = httpMethodOf(m);
-  fs::path full = dir / uniqueEncodedName(dir, id, toViewType(m.type()), method, name);
+  fs::path full = dir / uniqueEncodedName(dir, id, m.type(), method, name);
   fsutil::writeFileAtomic(full.string(), requestToText(m));
   return fs::relative(full, fs::path(root_)).generic_string();
 }
@@ -569,10 +504,16 @@ std::string CollectionStore::rename(const std::string &relPath,
   core::domain::RequestModel m = loadRequest(relPath);
   m = withIdName(m, m.id().get(), newName); // keep id, change name (immutable update)
   std::string method = httpMethodOf(m);
+  std::string text = injectBodyDrafts(requestToText(m), loadBodyDrafts(relPath));
+  std::string desired = encodeRequestFilename(m.id().get(), m.type(), method, newName);
+  if (src.filename().string() == desired) {
+    fsutil::writeFileAtomic(src.string(), text); // name already matches -> no rename
+    return relPath;
+  }
   fs::path newFull =
       src.parent_path() /
-      uniqueEncodedName(src.parent_path(), m.id().get(), toViewType(m.type()), method, newName);
-  fsutil::writeFileAtomic(newFull.string(), requestToText(m));
+      uniqueEncodedName(src.parent_path(), m.id().get(), m.type(), method, newName);
+  fsutil::writeFileAtomic(newFull.string(), text);
   fs::remove(src);
   return fs::relative(newFull, fs::path(root_)).generic_string();
 }
@@ -595,8 +536,8 @@ std::string CollectionStore::duplicate(const std::string &relPath) const {
   std::string method = httpMethodOf(m);
   fs::path newFull =
       src.parent_path() /
-      uniqueEncodedName(src.parent_path(), m.id().get(), toViewType(m.type()), method, m.name());
-  fsutil::writeFileAtomic(newFull.string(), requestToText(m));
+      uniqueEncodedName(src.parent_path(), m.id().get(), m.type(), method, m.name());
+  fsutil::writeFileAtomic(newFull.string(), injectBodyDrafts(requestToText(m), loadBodyDrafts(relPath)));
   return fs::relative(newFull, fs::path(root_)).generic_string();
 }
 

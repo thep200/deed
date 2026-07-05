@@ -26,7 +26,7 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
         // HTTP -> method name (GET/POST...); gRPC -> "gRPC"; WebSocket -> "WS"; GraphQL -> "GQL"; Kafka -> "KAFKA".
         it.mark = it.grpc ? @"gRPC"
                 : (n.requestType == core::RequestType::WebSocket) ? @"WS"
-                : (n.requestType == core::RequestType::GraphQL) ? @"GQL"
+                : (n.requestType == core::RequestType::GraphQl) ? @"GQL"
                 : (n.requestType == core::RequestType::Kafka) ? @"KAFKA"
                 : N(n.methodOrType);
     }

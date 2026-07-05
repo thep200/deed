@@ -5,6 +5,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "infra/transport/graphql/gql_payload.hpp"
+
 namespace core {
 
 using nlohmann::json;
@@ -58,24 +60,17 @@ void GraphQlWsProtocol::sendSubscribe() {
     json sub;
     sub["id"] = id_;
     sub["type"] = tSubscribe();
-    json payload;
-    const auto& op = req_.op();
-    payload["query"] = op.query;
-    const std::string& vtxt = op.variables.text();
-    try { payload["variables"] = json::parse(vtxt.empty() ? "{}" : vtxt); }
-    catch (...) { payload["variables"] = json::object(); }
-    if (!op.operationName.empty()) payload["operationName"] = op.operationName;
-    sub["payload"] = payload;
+    sub["payload"] = gql::operationPayload(req_.op());
     sendRaw_(sub.dump());
 }
 
-void GraphQlWsProtocol::emitDataPayload(const std::string& payloadJson) {
+void GraphQlWsProtocol::emitDataPayload(std::string payloadJson) {
     StreamEvent ev;
     ev.seq = seq_++;
     ev.direction = StreamDirection::Inbound;
     ev.frameType = StreamFrameType::Message;
     ev.kind = StreamPayloadKind::Json;
-    ev.payload = payloadJson;
+    ev.payload = std::move(payloadJson);
     if (sink_) sink_->onStreamEvent(ev);
 }
 
@@ -100,7 +95,8 @@ void GraphQlWsProtocol::onFrame(const std::string& text) {
         // A result for our subscription. payload = ExecutionResult {data,errors}.
         if (msg.value("id", "") == id_) emitDataPayload(payloadDump("null"));
     } else if (type == "error") {              // subscribe-level error: payload = [GraphQLError]
-        closeOnce(StreamStatus::Error, 0, payloadDump(""));
+        // id-scoped like next/complete (L9): only an error carrying OUR id terminates the subscription.
+        if (msg.value("id", "") == id_) closeOnce(StreamStatus::Error, 0, payloadDump(""));
     } else if (type == "complete") {           // server finished this subscription
         // L9: only a complete carrying OUR id closes us. A missing id is malformed per graphql-transport-ws
         // and must NOT terminate the subscription (was a premature Ok close).

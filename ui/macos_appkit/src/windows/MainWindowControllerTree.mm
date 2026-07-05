@@ -565,7 +565,7 @@
 - (void)newHttp:(id)s { [self createRequest:core::RequestType::Http name:StrDefaultRequestName]; }
 - (void)newGrpc:(id)s { [self createRequest:core::RequestType::Grpc name:StrDefaultRpcName]; }
 - (void)newWs:(id)s { [self createRequest:core::RequestType::WebSocket name:StrDefaultWsName]; }
-- (void)newGraphQl:(id)s { [self createRequest:core::RequestType::GraphQL name:StrDefaultGqlName]; }
+- (void)newGraphQl:(id)s { [self createRequest:core::RequestType::GraphQl name:StrDefaultGqlName]; }
 - (void)newKafka:(id)s { [self createRequest:core::RequestType::Kafka name:StrDefaultKafkaName]; }
 // Default name, NO popup. Rename later via inline-rename in the tree. loadRequestAtRel
 // autosaves the open request before switching.

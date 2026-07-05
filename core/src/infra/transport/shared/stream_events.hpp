@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "core/domain/response/interaction.hpp" // StreamStatus (used by StreamEnd)
-#include "core/domain/common/dto_common.hpp"                   // KeyValue (neutral key/value pair)
+#include "infra/transport/shared/dto_common.hpp"               // KeyValue (neutral key/value pair)
 
 namespace core {
 

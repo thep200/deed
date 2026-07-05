@@ -66,10 +66,10 @@ void SendRequestSaga::run(d::IRequestObserver &observer) {
     if (const auto *c = ev.get<d::EvCompleted>()) {
       if (deps_.cache) deps_.cache->put(request_.id(), c->summary);
       state_ = SagaState::Completed;
-    } else if (ev.is<d::EvFailed>()) {
-      state_ = SagaState::Failed;
+    } else if (const auto *f = ev.get<d::EvFailed>()) {
+      state_ = f->error.kind == d::ErrorKind::Cancelled ? SagaState::Cancelled : SagaState::Failed;
     } else if (ev.is<d::EvClosed>()) {
-      state_ = SagaState::Completed;
+      state_ = token_.cancelled() ? SagaState::Cancelled : SagaState::Completed;
     } else if (ev.is<d::EvMessage>() || ev.is<d::EvKafkaRecord>()) {
       state_ = SagaState::Streaming;
     }
@@ -77,9 +77,7 @@ void SendRequestSaga::run(d::IRequestObserver &observer) {
   };
 
   if (token_.cancelled()) {
-    state_ = SagaState::Cancelled;
     emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Cancelled, "cancelled", {}}}));
-    state_ = SagaState::Cancelled; // emit() set Failed; cancel is the precise terminal here
     return;
   }
 
@@ -115,7 +113,6 @@ void SendRequestSaga::run(d::IRequestObserver &observer) {
   emit(d::ResponseEvent(d::EvStarted{std::chrono::milliseconds(atMs)}));
   if (token_.cancelled()) {
     emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Cancelled, "cancelled", {}}}));
-    state_ = SagaState::Cancelled;
     return;
   }
 

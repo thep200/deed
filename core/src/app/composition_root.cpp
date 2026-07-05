@@ -14,12 +14,12 @@
 #include "app/cache_config.hpp"     // detail::buildCacheConfig (native response cache)
 #include "core/infra/variables/variable_resolver.hpp" // valueToAlias/prefixToAlias (native aliasify)
 #include "core/infra/export/exporter.hpp" // core::toCurl (domain copy-as-cURL export)
-#include "infra/transport/graphql/graphql.hpp"      // gql::effectiveOperation (native interactionOf)
+#include "core/domain/graphql/gql_operation.hpp"    // domain effectiveOperation (native interactionOf)
 #include "infra/platform/fs_util.hpp"        // fsutil::join (.session dir for the cache)
 #include "infra/platform/stream_pool.hpp"
 #include "infra/platform/thread_pool.hpp"
 #include "infra/variables/domain_variable_resolver.hpp"
-#include "infra/transport/grpc/grpc_descriptors.hpp" // native gRPC reflection (buildDescriptors/listMethods)
+#include "infra/transport/grpc/grpc_method_listing.hpp" // native gRPC reflection (listGrpcMethods)
 
 #include <chrono>
 #include <functional>
@@ -174,13 +174,6 @@ core::domain::GrpcRequest resolveGrpcTarget(const core::domain::GrpcRequest &g,
   p.protoSource = g.protoSource();
   p.tls = g.tls();
   return core::domain::GrpcRequest::create(std::move(p)).take();
-}
-// Build + list descriptors for an already-resolved domain GrpcRequest (reflection / proto files / FDS).
-std::vector<core::domain::GrpcMethodDescriptor> listDescriptorsResolved(const core::domain::GrpcRequest &g,
-                                                                        std::string &err) {
-  core::grpcdesc::DescriptorContext ctx;
-  if (!core::grpcdesc::buildDescriptors(g, ctx)) { err = ctx.error; return {}; }
-  return core::grpcdesc::listMethods(ctx);
 }
 // Concrete app-layer collection repository over CollectionStore. The store speaks the DOMAIN RequestModel
 // natively now, so load/save/create-from-model forward it directly (no bridge). The rest forward the
@@ -472,24 +465,15 @@ core::InteractionKind CoreApiClient::interactionOf(const core::domain::RequestMo
     return core::InteractionKind::Duplex;
   case d::RequestType::GraphQl: {
     const auto &g = std::get<d::GraphQlRequest>(m.payload());
-    return gql::effectiveOperation(g) == d::GqlOperationType::Subscription
+    return d::effectiveOperation(g) == d::GqlOperationType::Subscription
                ? core::InteractionKind::ServerStream
                : core::InteractionKind::Unary;
   }
-  case d::RequestType::Http: {
-    // SSE = an enabled Accept: text/event-stream header (the domain model has no separate streamMode field;
-    // the native HTTP sender forces SSE on exactly this signal).
-    const auto &h = std::get<d::HttpRequest>(m.payload());
-    for (const auto &hd : h.headers().items()) {
-      if (!hd.enabled()) continue;
-      std::string n = hd.name(), v = hd.value();
-      for (auto &c : n) c = (char)std::tolower((unsigned char)c);
-      for (auto &c : v) c = (char)std::tolower((unsigned char)c);
-      if (n == "accept" && v.find("text/event-stream") != std::string::npos)
-        return core::InteractionKind::ServerStream;
-    }
-    return core::InteractionKind::Unary;
-  }
+  case d::RequestType::Http:
+    // SSE = an enabled Accept: text/event-stream header (the native HTTP sender forces SSE on this signal).
+    return d::acceptsEventStream(std::get<d::HttpRequest>(m.payload()))
+               ? core::InteractionKind::ServerStream
+               : core::InteractionKind::Unary;
   case d::RequestType::Grpc: {
     switch (std::get<d::GrpcRequest>(m.payload()).methodType()) {
     case d::GrpcMethodType::ServerStreaming: return core::InteractionKind::ServerStream;
@@ -547,7 +531,7 @@ CoreApiClient::listGrpcMethods(const d::GrpcRequest &g) {
   // Native reflection (no Engine): resolve {{var}} in the target, then run grpcdesc directly on domain types.
   auto resolved = resolveGrpcTarget(g, activeVarsMap(sessionRepo_.get(), envRepo_.get()));
   std::string err;
-  std::vector<d::GrpcMethodDescriptor> descs = listDescriptorsResolved(resolved, err);
+  std::vector<d::GrpcMethodDescriptor> descs = grpcdesc::listGrpcMethods(resolved, err);
   if (!err.empty())
     return d::Result<std::vector<d::GrpcMethodDescriptor>>::fail({d::ErrorCode::Network, err, ""});
   return d::Result<std::vector<d::GrpcMethodDescriptor>>::ok(std::move(descs));

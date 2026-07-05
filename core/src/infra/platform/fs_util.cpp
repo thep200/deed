@@ -13,6 +13,8 @@
 #ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
+#else
+#include <process.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -41,7 +43,7 @@ void writeFileAtomic(const std::string& path, const std::string& content) {
 #ifndef _WIN32
         static_cast<long long>(::getpid());
 #else
-        0;
+        static_cast<long long>(::_getpid());
 #endif
     fs::path tmp = target;
     tmp += "." + std::to_string(pid) + "." + std::to_string(ctr.fetch_add(1)) + ".tmp";

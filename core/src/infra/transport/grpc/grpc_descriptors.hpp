@@ -59,7 +59,4 @@ bool buildDescriptors(const core::domain::GrpcRequest& g, DescriptorContext& ctx
 // List services/methods from a built context (used for the RPC-selection dropdown).
 std::vector<core::domain::GrpcMethodDescriptor> listMethods(const DescriptorContext& ctx);
 
-// unary | server_streaming | client_streaming | bidi_streaming.
-std::string methodTypeOf(const gp::MethodDescriptor* m);
-
 } // namespace core::grpcdesc

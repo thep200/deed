@@ -29,7 +29,7 @@ bool parseTypeRest(const std::string& rest, ParsedRequestName& out) {
     std::string type = rest.substr(0, sep);
     if (type == "grpc" || type == "ws" || type == "gql" || type == "kafka") {
         out.type = (type == "ws")   ? RequestType::WebSocket
-                 : (type == "gql")  ? RequestType::GraphQL
+                 : (type == "gql")  ? RequestType::GraphQl
                  : (type == "kafka") ? RequestType::Kafka
                                      : RequestType::Grpc;
         out.slug = rest.substr(sep + 1);            // everything left = slug
@@ -82,7 +82,7 @@ std::string encodeRequestFilename(const std::string& id, RequestType type,
     std::string prefix = id + "_";                     // id always first (caller guarantees a valid id)
     if (type == RequestType::Grpc) return prefix + "grpc_" + slug + ".json";   // NO method
     if (type == RequestType::WebSocket) return prefix + "ws_" + slug + ".json"; // NO method
-    if (type == RequestType::GraphQL) return prefix + "gql_" + slug + ".json";  // NO method
+    if (type == RequestType::GraphQl) return prefix + "gql_" + slug + ".json";  // NO method
     if (type == RequestType::Kafka) return prefix + "kafka_" + slug + ".json";  // NO method
     std::string m;
     for (unsigned char c : method) m += static_cast<char>(std::tolower(c));

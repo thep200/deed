@@ -2,6 +2,7 @@
 #include "infra/transport/shared/sse_parser.hpp"
 
 #include <algorithm>
+#include <string_view>
 
 namespace core {
 
@@ -22,15 +23,17 @@ void SseParser::feed(const char* data, std::size_t n, const Emit& emit) {
 
     // Split complete lines. Terminators: "\n", "\r\n", or a lone "\r". A trailing '\r' at the end of the
     // buffer is ambiguous (could be the CR of a CRLF split across chunks) -> keep it for the next feed.
+    // Lines are passed as views into buf_ (no per-line copy): buf_ is only mutated after the loop and the
+    // emit callback never touches this parser.
     std::size_t i = 0, lineStart = 0;
     while (i < buf_.size()) {
         char c = buf_[i];
         if (c == '\n') {
-            onLine(buf_.substr(lineStart, i - lineStart), emit);
+            onLine(std::string_view(buf_.data() + lineStart, i - lineStart), emit);
             lineStart = ++i;
         } else if (c == '\r') {
             if (i + 1 >= buf_.size()) break;     // trailing CR -> defer (maybe CRLF next chunk)
-            onLine(buf_.substr(lineStart, i - lineStart), emit);
+            onLine(std::string_view(buf_.data() + lineStart, i - lineStart), emit);
             i += (buf_[i + 1] == '\n') ? 2 : 1;  // CRLF or lone CR
             lineStart = i;
         } else {
@@ -44,15 +47,15 @@ void SseParser::finish(const Emit& emit) {
     // EOF: process whatever is left as the final line (M12). feed() defers a trailing '\r' (it could be the
     // CR of a CRLF split across chunks) — at a clean EOF that ambiguity is resolved, so strip it and emit.
     if (!buf_.empty()) {
-        std::string line = buf_;
-        if (line.back() == '\r') line.pop_back();
+        std::string_view line = buf_;
+        if (line.back() == '\r') line.remove_suffix(1);
         if (!line.empty()) onLine(line, emit);
         buf_.clear();
     }
     dispatch(emit);   // flush a final event that had no terminating blank line
 }
 
-void SseParser::handleDataField(const std::string& value) {
+void SseParser::handleDataField(std::string_view value) {
     if (maxEventBytes_ != 0 && dataBuf_.size() >= maxEventBytes_) {
         truncated_ = true; // cap hit -> stop accumulating (no OOM)
         return;
@@ -65,31 +68,31 @@ void SseParser::handleDataField(const std::string& value) {
     }
 }
 
-void SseParser::handleRetryField(const std::string& value) {
+void SseParser::handleRetryField(std::string_view value) {
     bool allDigit = !value.empty();
     for (char c : value) if (c < '0' || c > '9') { allDigit = false; break; }
     if (!allDigit) return;
     // Clamp to a sane ceiling (M11): a hostile/huge `retry:` must not make the I/O thread sleep for
     // days (cancel latency) — overflow from stol also lands on the max.
-    try { long v = std::stol(value); retryMs_ = v < 0 ? 0 : (v > 60000 ? 60000 : v); }
+    try { long v = std::stol(std::string(value)); retryMs_ = v < 0 ? 0 : (v > 60000 ? 60000 : v); }
     catch (...) { retryMs_ = 60000; }
 }
 
-void SseParser::onLine(const std::string& line, const Emit& emit) {
+void SseParser::onLine(std::string_view line, const Emit& emit) {
     if (line.empty()) { dispatch(emit); return; }   // blank line -> dispatch
     if (line[0] == ':') return;                      // comment / heartbeat -> ignore (idle reset is upstream)
 
     std::size_t colon = line.find(':');
-    std::string field = (colon == std::string::npos) ? line : line.substr(0, colon);
-    std::string value;
-    if (colon != std::string::npos) {
+    std::string_view field = (colon == std::string_view::npos) ? line : line.substr(0, colon);
+    std::string_view value;
+    if (colon != std::string_view::npos) {
         value = line.substr(colon + 1);
-        if (!value.empty() && value[0] == ' ') value.erase(0, 1);   // strip ONE leading space
+        if (!value.empty() && value[0] == ' ') value.remove_prefix(1);   // strip ONE leading space
     }
 
-    if (field == "event") eventType_ = value;
+    if (field == "event") eventType_.assign(value);
     else if (field == "data") handleDataField(value);
-    else if (field == "id") { if (value.find('\0') == std::string::npos) lastEventId_ = value; } // empty id valid
+    else if (field == "id") { if (value.find('\0') == std::string_view::npos) lastEventId_.assign(value); } // empty id valid
     else if (field == "retry") handleRetryField(value);
     // unknown field -> ignore (spec)
 }

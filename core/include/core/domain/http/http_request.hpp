@@ -1,6 +1,8 @@
 // core/domain/http/http_request.hpp — HttpRequest aggregate payload (REFACTOR_SPEC §5.4).
 #pragma once
 
+#include <cctype>
+#include <cstddef>
 #include <string>
 #include <utility>
 
@@ -27,9 +29,9 @@ public:
     Auth auth = Auth::none();
   };
 
-  // The url<->path-variable consistency is treated as a soft concern (a missing binding is reported by
-  // missingPathBindings(), not rejected) — the URL may legitimately contain `{{vars}}` or `:seg` resolved
-  // later. The factory therefore only assembles; structural URL/body checks happen in the use-case layer.
+  // The url<->path-variable consistency is a use-case-layer concern (a missing binding is not rejected
+  // here) — the URL may legitimately contain `{{vars}}` or `:seg` resolved later. The factory therefore
+  // only assembles; structural URL/body checks happen in the use-case layer.
   static Result<HttpRequest> create(Parts p) {
     return Result<HttpRequest>::ok(HttpRequest(std::move(p)));
   }
@@ -53,5 +55,29 @@ private:
   explicit HttpRequest(Parts p) : p_(std::move(p)) {}
   Parts p_;
 };
+
+// True when an enabled `Accept` header contains `text/event-stream` — the signal that forces the SSE path
+// (the model has no separate streamMode field). Case-insensitive, compared in place (no allocations).
+inline bool acceptsEventStream(const HttpRequest &h) {
+  constexpr const char *kAccept = "accept";
+  constexpr const char *kEventStream = "text/event-stream";
+  constexpr std::size_t kAcceptLen = 6, kEventStreamLen = 17;
+  auto low = [](char c) { return (char)std::tolower((unsigned char)c); };
+  for (const auto &hd : h.headers().items()) {
+    if (!hd.enabled()) continue;
+    const std::string &n = hd.name();
+    if (n.size() != kAcceptLen) continue;
+    bool isAccept = true;
+    for (std::size_t i = 0; isAccept && i < kAcceptLen; ++i) isAccept = low(n[i]) == kAccept[i];
+    if (!isAccept) continue;
+    const std::string &v = hd.value();
+    for (std::size_t i = 0; i + kEventStreamLen <= v.size(); ++i) {
+      bool match = true;
+      for (std::size_t j = 0; match && j < kEventStreamLen; ++j) match = low(v[i + j]) == kEventStream[j];
+      if (match) return true;
+    }
+  }
+  return false;
+}
 
 } // namespace core::domain

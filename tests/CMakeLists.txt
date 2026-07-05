@@ -36,6 +36,12 @@ target_link_libraries(ws_e2e PRIVATE core)
 # runner SKIPs it if that server can't build offline).
 add_executable(grpc_e2e core_tests/grpc_e2e_test.cpp)
 target_link_libraries(grpc_e2e PRIVATE core)
+# SPEC_kafka §11 integration layer: manual consumer cancel/timeout verification against a REAL broker
+# (devdok up -d kafka). Deliberately NOT a ctest — run `kafka_manual off|on` by hand; see the file header.
+add_executable(kafka_manual core_tests/kafka_manual_test.cpp)
+target_link_libraries(kafka_manual PRIVATE core)
+target_include_directories(kafka_manual PRIVATE ${CMAKE_SOURCE_DIR}/core/src)
+
 add_test(NAME e2e
          COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_e2e.sh
                  $<TARGET_FILE:http_e2e>:http $<TARGET_FILE:ws_e2e>:ws $<TARGET_FILE:grpc_e2e>:grpc)

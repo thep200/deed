@@ -1,13 +1,11 @@
-#include <algorithm>
-#include <cctype>
 #include <string>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
-#include "core/domain/common/dto_common.hpp" // surviving KeyValue / MultipartPart DTOs (parse scratch only)
 #include "core/infra/import/importer.hpp"
 #include "infra/import/shell_tokenize.hpp"
+#include "infra/transport/shared/dto_common.hpp" // surviving KeyValue / MultipartPart DTOs (parse scratch only)
 #include "infra/transport/shared/url_util.hpp"
 
 namespace core {
@@ -45,18 +43,6 @@ struct Acc {
     std::vector<std::string> unknown;
     std::string error;
 };
-
-std::string trim(const std::string& s) {
-    size_t a = s.find_first_not_of(" \t\r\n");
-    if (a == std::string::npos) return "";
-    size_t b = s.find_last_not_of(" \t\r\n");
-    return s.substr(a, b - a + 1);
-}
-
-std::string lower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
-    return s;
-}
 
 // Split "key: value" from -H.
 KeyValue parseHeader(const std::string& raw) {

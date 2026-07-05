@@ -15,11 +15,12 @@
 #include "core/domain/kafka/kafka_request.hpp"
 #include "core/domain/request/request_config.hpp"
 #include "core/domain/request/request_id.hpp"
+#include "core/domain/request/request_type.hpp"
 #include "core/domain/ws/websocket_request.hpp"
 
 namespace core::domain {
 
-enum class RequestType { Http, Grpc, GraphQl, WebSocket, Kafka };
+using RequestType = ::core::RequestType;
 
 class RequestModel {
 public:

@@ -2,7 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "infra/serialization/json_codec.hpp"               // core::codec::parseGuarded — JSON nesting-depth guard (H5)
+#include "infra/serialization/json_codec.hpp"               // core::codec::parseGuarded (H5 depth guard) + safe getters
 #include "core/infra/serialization/field_json.hpp"  // core::serial — domain field codecs (headers/auth/body/...)
 #include "infra/serialization/wire_format.hpp"      // core::wire::* on-disk request type tokens
 
@@ -14,20 +14,10 @@ using nlohmann::json;
 namespace {
 
 std::string gs(const json &j, const char *k, const std::string &def = "") {
-  auto it = j.find(k);
-  return (it != j.end() && it->is_string()) ? it->get<std::string>() : def;
+  return core::codec::getStr(j, k, def);
 }
-int gi(const json &j, const char *k, int def) {
-  auto it = j.find(k);
-  return (it != j.end() && it->is_number_integer()) ? it->get<int>() : def;
-}
-bool gb(const json &j, const char *k, bool def) {
-  auto it = j.find(k);
-  if (it == j.end()) return def;
-  if (it->is_boolean()) return it->get<bool>();
-  if (it->is_number()) return it->get<double>() != 0;
-  return def;
-}
+int gi(const json &j, const char *k, int def) { return core::codec::getInt(j, k, def); }
+bool gb(const json &j, const char *k, bool def) { return core::codec::getBool(j, k, def); }
 
 const char *typeStr(d::RequestType t) {
   switch (t) {

@@ -14,8 +14,8 @@ namespace core::domain {
 struct PathVariableTag {};
 
 // Invariant: when enabled, key must be a non-empty identifier (it binds a `:key` segment in the URL).
-// The url<->variable cross-check (every `:seg` has a binding) is enforced by HttpRequest::create (§5.4),
-// not here, because a single PathVariable has no URL context.
+// The url<->variable cross-check (every `:seg` has a binding) is a use-case-layer concern, not enforced
+// here, because a single PathVariable has no URL context.
 class PathVariable : public detail::KeyValueEntry<PathVariableTag> {
 public:
   static Result<PathVariable> create(std::string key, std::string value, bool enabled = true) {
@@ -48,12 +48,6 @@ public:
   const std::vector<PathVariable> &items() const noexcept { return items_; }
   std::size_t size() const noexcept { return items_.size(); }
   bool empty() const noexcept { return items_.empty(); }
-
-  bool has(const std::string &key) const {
-    for (const auto &p : items_)
-      if (p.key() == key) return true;
-    return false;
-  }
 
   bool operator==(const PathVariableList &o) const { return items_ == o.items_; }
   bool operator!=(const PathVariableList &o) const { return !(*this == o); }

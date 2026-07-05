@@ -8,13 +8,14 @@
 namespace core {
 
 // Protocol classification (matches the "type" field in the request file).
-enum class RequestType { Http, Grpc, WebSocket, GraphQL, Kafka };
+// Order MUST match RequestModel::Payload's variant order (type() == variant index).
+enum class RequestType { Http, Grpc, GraphQl, WebSocket, Kafka };
 
 inline std::string toString(RequestType t) {
   switch (t) {
   case RequestType::Grpc: return "grpc";
   case RequestType::WebSocket: return "ws";
-  case RequestType::GraphQL: return "graphql";
+  case RequestType::GraphQl: return "graphql";
   case RequestType::Kafka: return "kafka";
   default: return "http";
   }
@@ -24,7 +25,7 @@ inline bool parseRequestType(const std::string &s, RequestType &out) {
   if (s == "http") { out = RequestType::Http; return true; }
   if (s == "grpc") { out = RequestType::Grpc; return true; }
   if (s == "ws") { out = RequestType::WebSocket; return true; }
-  if (s == "graphql") { out = RequestType::GraphQL; return true; }
+  if (s == "graphql") { out = RequestType::GraphQl; return true; }
   if (s == "kafka") { out = RequestType::Kafka; return true; }
   return false;
 }
