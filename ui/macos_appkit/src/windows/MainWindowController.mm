@@ -548,11 +548,24 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
         _kafkaConsumerLastResp = _lastResp;
     }
 
-    // 2) Resolve the INCOMING kind's kafka-specific buffers: its archive if we have one, else a fresh
-    //    default — serialized to JSON text so both paths feed the SAME parse step in (3).
+    // 2) Resolve the INCOMING kind's kafka-specific buffers: the in-session archive if we have one, else
+    //    the model's persisted inactiveDraft (how the other side survives app restart), else a fresh
+    //    default — all serialized to JSON text so every path feeds the SAME parse step in (3).
     bool toConsumer = wasProducer;
     NSArray<NSString *> *incomingKafkaBufs = toConsumer ? _kafkaConsumerReqBuffers : _kafkaProducerReqBuffers;
     bool haveDraft = toConsumer ? (incomingKafkaBufs.count >= 1) : (incomingKafkaBufs.count >= 2);
+    if (!haveDraft && k.inactiveDraft()) {
+        // create()'s invariant: inactiveDraft holds the non-active alternative == the incoming kind.
+        if (toConsumer) {
+            const auto &c = std::get<KafkaConsumeSpec>(*k.inactiveDraft());
+            incomingKafkaBufs = @[ N(core::serial::kafkaConsumeConfigToJson(c.config)) ];
+        } else {
+            const auto &p = std::get<KafkaProduceSpec>(*k.inactiveDraft());
+            incomingKafkaBufs = @[ N(core::serial::kafkaMessageToJson(p.message)),
+                                   N(core::serial::kafkaProduceConfigToJson(p.config)) ];
+        }
+        haveDraft = true;
+    }
     if (!haveDraft) {
         if (toConsumer) {
             KafkaConsumeConfig cfg{{KafkaTopic::create("demo-topic").take()}, std::nullopt,
@@ -578,7 +591,24 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
         if (msgR && cfgR) mode = Result<KafkaRequest::Mode>::ok(KafkaRequest::Mode{KafkaProduceSpec{cfgR.take(), msgR.take()}});
     }
     if (!mode.isOk()) return; // archived JSON somehow invalid -> leave the toggle/state untouched
-    auto rebuilt = KafkaRequest::create(k.brokers(), k.security(), mode.take());
+
+    // The OUTGOING kind rides along as the model's inactiveDraft so it PERSISTS (autosave writes both
+    // sides — the in-session buffer archive of step (1) dies with the window). Best effort: parse the
+    // just-archived buffers (they may be newer than the model); unparseable mid-edit text falls back to
+    // the model's last-synced state of that side.
+    std::optional<KafkaRequest::Mode> outgoingDraft{k.mode()};
+    if (wasProducer && outgoingKafkaBufs.count >= 2) {
+        auto msgR = core::serial::jsonToKafkaMessage(S(outgoingKafkaBufs[0]));
+        auto cfgR = core::serial::jsonToKafkaProduceConfig(S(outgoingKafkaBufs[1]));
+        if (msgR && cfgR) outgoingDraft = KafkaRequest::Mode{KafkaProduceSpec{cfgR.take(), msgR.take()}};
+    } else if (!wasProducer && outgoingKafkaBufs.count >= 1) {
+        auto cfgR = core::serial::jsonToKafkaConsumeConfig(S(outgoingKafkaBufs[0]));
+        if (cfgR) outgoingDraft = KafkaRequest::Mode{KafkaConsumeSpec{cfgR.take()}};
+    }
+    KafkaRequest::Mode incomingMode = mode.take();
+    auto rebuilt = KafkaRequest::create(k.brokers(), k.security(), incomingMode, std::move(outgoingDraft));
+    // A draft that fails create()'s invariants must not block the toggle itself — retry without it.
+    if (!rebuilt) rebuilt = KafkaRequest::create(k.brokers(), k.security(), std::move(incomingMode));
     if (!rebuilt) return;
     _model = _model->withPayload(RequestModel::Payload(rebuilt.take()));
 

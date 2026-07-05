@@ -112,6 +112,39 @@ static void test_kafka_consumer() {
   roundtrip(m.value(), "kafka consumer roundtrip");
 }
 
+// Both sides persist (SPEC_kafka §2.0.3): the inactive kind rides along as KafkaRequest::inactiveDraft —
+// toggling Producer/Consumer then quitting must not lose the side the user left. Round-trip both
+// directions (producer active + consumer draft, and the reverse).
+static void test_kafka_inactive_draft() {
+  auto brokers = BrokerList::parse("localhost:9092").take();
+  KafkaProduceConfig pcfg{KafkaTopic::create("produce-topic").take()};
+  KafkaMessage msg;
+  msg.value = MessagePayload{"{\n  \"draft\": true\n}"};
+  KafkaConsumeConfig ccfg{{KafkaTopic::create("consume-topic").take()}, std::nullopt,
+                          ConsumerGroup::create("deed-tail-draft").take()};
+
+  auto producerActive = KafkaRequest::create(brokers, KafkaSecurity::plaintext(),
+                                             KafkaRequest::Mode{KafkaProduceSpec{pcfg, msg}},
+                                             KafkaRequest::Mode{KafkaConsumeSpec{ccfg}})
+                            .take();
+  auto m1 = RequestModel::create(RequestId("req_kafka_d1"), "ProduceDraft", 7, cfg(), producerActive);
+  roundtrip(m1.value(), "kafka producer-active + consumer-draft roundtrip");
+
+  auto consumerActive = KafkaRequest::create(brokers, KafkaSecurity::plaintext(),
+                                             KafkaRequest::Mode{KafkaConsumeSpec{ccfg}},
+                                             KafkaRequest::Mode{KafkaProduceSpec{pcfg, msg}})
+                            .take();
+  auto m2 = RequestModel::create(RequestId("req_kafka_d2"), "ConsumeDraft", 8, cfg(), consumerActive);
+  roundtrip(m2.value(), "kafka consumer-active + producer-draft roundtrip");
+
+  // Same-kind draft violates the invariant -> create() must reject it.
+  RT_CHECK(!KafkaRequest::create(brokers, KafkaSecurity::plaintext(),
+                                 KafkaRequest::Mode{KafkaConsumeSpec{ccfg}},
+                                 KafkaRequest::Mode{KafkaConsumeSpec{ccfg}})
+                .isOk(),
+           "kafka same-kind inactiveDraft rejected");
+}
+
 // SPEC_kafka.md §4's exact sample JSON (timeout_ms adjusted: 0 is invalid per Timeout::fromMillis, see
 // the implementation plan's documented deviation — the consumer sample uses a normal positive default).
 static void test_parse_kafka_samples() {
@@ -247,6 +280,7 @@ int run_mapper_roundtrip_tests() {
   test_graphql();
   test_kafka_producer();
   test_kafka_consumer();
+  test_kafka_inactive_draft();
   test_parse_kafka_samples();
   test_parse_real_schema();
   test_parse_legacy_ws_gql();

@@ -298,20 +298,24 @@ static NSArray<NSString *> *BodyAllModes(void);
         if (!br.isOk()) return fail(-1, br.error().message); // -1: no per-tab buffer -> reported on the URL field
         // KafkaRequest::Mode has no default alternative (KafkaProduceSpec holds a non-default-constructible
         // KafkaTopic) -> build the Result inline per branch instead of default-constructing a Mode first.
+        // curK.inactiveDraft() rides along unchanged: the editors only hold the ACTIVE kind's tabs, and
+        // dropping the draft here would lose the other side on every autosave (it must survive app restart).
         if (curK.kind() == d::KafkaClientKind::Producer) {
             auto msgR = core::serial::jsonToKafkaMessage(S(_reqBuffers[0]));
             if (!msgR.isOk()) return fail(0, msgR.error().message);
             auto cfgR = core::serial::jsonToKafkaProduceConfig(S(_reqBuffers[1]));
             if (!cfgR.isOk()) return fail(1, cfgR.error().message);
             auto kr = d::KafkaRequest::create(br.take(), curK.security(),
-                                              d::KafkaRequest::Mode{d::KafkaProduceSpec{cfgR.take(), msgR.take()}});
+                                              d::KafkaRequest::Mode{d::KafkaProduceSpec{cfgR.take(), msgR.take()}},
+                                              curK.inactiveDraft());
             if (!kr.isOk()) return fail(0, kr.error().message);
             payload = kr.take();
         } else {
             auto cfgR = core::serial::jsonToKafkaConsumeConfig(S(_reqBuffers[0]));
             if (!cfgR.isOk()) return fail(0, cfgR.error().message);
             auto kr = d::KafkaRequest::create(br.take(), curK.security(),
-                                              d::KafkaRequest::Mode{d::KafkaConsumeSpec{cfgR.take()}});
+                                              d::KafkaRequest::Mode{d::KafkaConsumeSpec{cfgR.take()}},
+                                              curK.inactiveDraft());
             if (!kr.isOk()) return fail(0, kr.error().message);
             payload = kr.take();
         }

@@ -167,10 +167,14 @@ json kafkaToJson(const d::KafkaRequest &k) {
         {"security", kafkaSecurityToJson(k.security())},
         {"producer", nullptr},
         {"consumer", nullptr}};
-  k.match(overloaded{
+  auto fillSlot = overloaded{
       [&](const d::KafkaProduceSpec &p) { j["producer"] = kafkaProducerToJson(p); },
       [&](const d::KafkaConsumeSpec &c) { j["consumer"] = kafkaConsumerToJson(c); },
-  });
+  };
+  k.match(fillSlot);
+  // Both sides persist: the inactive kind's draft (if any) fills the other slot — toggling
+  // Producer/Consumer then quitting must not lose what the user typed on the side they left.
+  if (k.inactiveDraft()) std::visit(fillSlot, *k.inactiveDraft());
   return j;
 }
 
@@ -307,7 +311,23 @@ d::Result<Payload> parseKafkaPayload(const json &b) {
   }();
   if (!mode) return d::Result<Payload>::fail(mode.error());
 
-  auto r = d::KafkaRequest::create(brokers.take(), security.take(), mode.take());
+  // The OTHER kind's slot, when non-null, is the preserved inactive draft (both sides persist — see
+  // kafkaToJson). LENIENT on purpose: a corrupt/legacy draft drops silently rather than bricking the
+  // whole request (only the active side is authoritative).
+  std::optional<d::KafkaRequest::Mode> draft;
+  if (kind == "consumer") {
+    if (const auto it = b.find("producer"); it != b.end() && !it->is_null()) {
+      if (auto p = kafkaProducerFromJson(*it)) draft = d::KafkaRequest::Mode{p.take()};
+    }
+  } else {
+    if (const auto it = b.find("consumer"); it != b.end() && !it->is_null()) {
+      if (auto c = kafkaConsumerFromJson(*it)) draft = d::KafkaRequest::Mode{c.take()};
+    }
+  }
+
+  auto r = d::KafkaRequest::create(brokers.value(), security.value(), mode.value(), std::move(draft));
+  // Same leniency for a draft that parses but fails create()'s invariants: retry without it.
+  if (!r) r = d::KafkaRequest::create(brokers.take(), security.take(), mode.take());
   if (!r) return d::Result<Payload>::fail(r.error());
   return d::Result<Payload>::ok(Payload{r.take()});
 }

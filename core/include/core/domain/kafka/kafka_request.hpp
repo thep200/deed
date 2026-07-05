@@ -2,6 +2,7 @@
 // two client kinds chosen by which Mode alternative is held (mirrors WebSocketRequest's shape).
 #pragma once
 
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -23,43 +24,22 @@ public:
   // Re-validates invariants the leaf VOs can't check alone (each side sees only its own struct, this sees
   // the whole Mode): producer partition -1|>=0; consumer topics non-empty, partition -1|nullopt|>=0,
   // maxMessages>0 if set, pollTimeout>0 (SPEC_kafka §3 bất biến).
-  static Result<KafkaRequest> create(BrokerList brokers, KafkaSecurity security, Mode mode) {
-    bool ok = true;
-    std::string msg, field;
-    std::visit(
-        [&](auto &&m) {
-          using T = std::decay_t<decltype(m)>;
-          if constexpr (std::is_same_v<T, KafkaProduceSpec>) {
-            int p = m.config.partition.value;
-            if (p != KafkaPartition::kAuto && p < 0) {
-              ok = false;
-              msg = "partition must be -1 (auto) or >= 0";
-              field = "kafka.producer.config.partition";
-            }
-          } else if constexpr (std::is_same_v<T, KafkaConsumeSpec>) {
-            if (m.config.topics.empty()) {
-              ok = false;
-              msg = "topics must not be empty";
-              field = "kafka.consumer.config.topics";
-            } else if (m.config.partition && m.config.partition->value != KafkaPartition::kAuto &&
-                       m.config.partition->value < 0) {
-              ok = false;
-              msg = "partition must be -1 (all) or >= 0";
-              field = "kafka.consumer.config.partition";
-            } else if (m.config.maxMessages && *m.config.maxMessages <= 0) {
-              ok = false;
-              msg = "maxMessages must be > 0 when set";
-              field = "kafka.consumer.config.maxMessages";
-            } else if (m.config.pollTimeout.count() <= 0) {
-              ok = false;
-              msg = "pollTimeout must be > 0";
-              field = "kafka.consumer.config.pollTimeout";
-            }
-          }
-        },
-        mode);
-    if (!ok) return Result<KafkaRequest>::fail({ErrorCode::Validation, msg, field});
-    return Result<KafkaRequest>::ok(KafkaRequest(std::move(brokers), std::move(security), std::move(mode)));
+  //
+  // `inactiveDraft` = the OTHER client-kind's last state (SPEC_kafka §2.0.3): toggling Producer/Consumer
+  // is a per-request draft switch, not a data loss — the request carries both sides so the inactive one
+  // survives persistence/app restart. Invariant: if present, it holds the opposite Mode alternative.
+  static Result<KafkaRequest> create(BrokerList brokers, KafkaSecurity security, Mode mode,
+                                     std::optional<Mode> inactiveDraft = std::nullopt) {
+    if (auto err = validateMode(mode)) return Result<KafkaRequest>::fail(*err);
+    if (inactiveDraft) {
+      if (inactiveDraft->index() == mode.index())
+        return Result<KafkaRequest>::fail({ErrorCode::Validation,
+                                           "inactiveDraft must hold the other client kind",
+                                           "kafka.inactiveDraft"});
+      if (auto err = validateMode(*inactiveDraft)) return Result<KafkaRequest>::fail(*err);
+    }
+    return Result<KafkaRequest>::ok(
+        KafkaRequest(std::move(brokers), std::move(security), std::move(mode), std::move(inactiveDraft)));
   }
 
   KafkaClientKind kind() const noexcept {
@@ -69,21 +49,54 @@ public:
   const BrokerList &brokers() const noexcept { return brokers_; }
   const KafkaSecurity &security() const noexcept { return security_; }
   const Mode &mode() const noexcept { return mode_; }
+  const std::optional<Mode> &inactiveDraft() const noexcept { return inactiveDraft_; }
 
   template <class V> decltype(auto) match(V &&v) const { return std::visit(std::forward<V>(v), mode_); }
 
   bool operator==(const KafkaRequest &o) const {
-    return brokers_ == o.brokers_ && security_ == o.security_ && mode_ == o.mode_;
+    return brokers_ == o.brokers_ && security_ == o.security_ && mode_ == o.mode_ &&
+           inactiveDraft_ == o.inactiveDraft_;
   }
   bool operator!=(const KafkaRequest &o) const { return !(*this == o); }
 
 private:
-  KafkaRequest(BrokerList brokers, KafkaSecurity security, Mode mode)
-      : brokers_(std::move(brokers)), security_(std::move(security)), mode_(std::move(mode)) {}
+  static std::optional<Error> validateMode(const Mode &mode) {
+    std::optional<Error> err;
+    std::visit(
+        [&](auto &&m) {
+          using T = std::decay_t<decltype(m)>;
+          if constexpr (std::is_same_v<T, KafkaProduceSpec>) {
+            int p = m.config.partition.value;
+            if (p != KafkaPartition::kAuto && p < 0)
+              err = Error{ErrorCode::Validation, "partition must be -1 (auto) or >= 0",
+                          "kafka.producer.config.partition"};
+          } else if constexpr (std::is_same_v<T, KafkaConsumeSpec>) {
+            if (m.config.topics.empty())
+              err = Error{ErrorCode::Validation, "topics must not be empty", "kafka.consumer.config.topics"};
+            else if (m.config.partition && m.config.partition->value != KafkaPartition::kAuto &&
+                     m.config.partition->value < 0)
+              err = Error{ErrorCode::Validation, "partition must be -1 (all) or >= 0",
+                          "kafka.consumer.config.partition"};
+            else if (m.config.maxMessages && *m.config.maxMessages <= 0)
+              err = Error{ErrorCode::Validation, "maxMessages must be > 0 when set",
+                          "kafka.consumer.config.maxMessages"};
+            else if (m.config.pollTimeout.count() <= 0)
+              err = Error{ErrorCode::Validation, "pollTimeout must be > 0",
+                          "kafka.consumer.config.pollTimeout"};
+          }
+        },
+        mode);
+    return err;
+  }
+
+  KafkaRequest(BrokerList brokers, KafkaSecurity security, Mode mode, std::optional<Mode> inactiveDraft)
+      : brokers_(std::move(brokers)), security_(std::move(security)), mode_(std::move(mode)),
+        inactiveDraft_(std::move(inactiveDraft)) {}
 
   BrokerList brokers_;
   KafkaSecurity security_;
   Mode mode_;
+  std::optional<Mode> inactiveDraft_; // the OTHER kind's preserved draft (see create())
 };
 
 } // namespace core::domain
