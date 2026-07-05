@@ -47,13 +47,10 @@ struct MessageKey {
   bool operator==(const MessageKey &o) const { return value == o.value; }
 };
 // A producer value is always JSON text (validated by IJsonValidator at the use-case layer, not here — domain
-// stays JSON-agnostic); tombstone means "no value" and skips validation. No raw/binary mode.
+// stays JSON-agnostic). No raw/binary mode.
 struct MessagePayload {
   std::string value;
-  bool tombstone = false;
-  bool operator==(const MessagePayload &o) const {
-    return value == o.value && tombstone == o.tombstone;
-  }
+  bool operator==(const MessagePayload &o) const { return value == o.value; }
 };
 struct KafkaMessage {
   std::optional<MessageKey> key;

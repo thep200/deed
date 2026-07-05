@@ -181,7 +181,7 @@ static void test_kafka() {
     KafkaProduceConfig cfg{topic.value()};
     cfg.partition = KafkaPartition{-1};
     KafkaMessage msg;
-    msg.value = MessagePayload{"{}", false};
+    msg.value = MessagePayload{"{}"};
     auto r = KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaProduceSpec{cfg, msg}});
     CHECK(r.isOk(), "producer partition -1 (auto) ok");
     CHECK(r.value().kind() == KafkaClientKind::Producer, "kind() == Producer");

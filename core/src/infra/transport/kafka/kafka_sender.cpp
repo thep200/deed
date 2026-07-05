@@ -147,9 +147,8 @@ void produce(const std::string &bootstrap, const d::KafkaSecurity &security, con
     keyPtr = spec.message.key->value.data();
     keyLen = spec.message.key->value.size();
   }
-  bool tombstone = spec.message.value.tombstone;
-  void *payload = tombstone ? nullptr : const_cast<char *>(spec.message.value.value.data());
-  size_t payloadLen = tombstone ? 0 : spec.message.value.value.size();
+  void *payload = const_cast<char *>(spec.message.value.value.data());
+  size_t payloadLen = spec.message.value.value.size();
   int32_t partition = spec.config.partition.value == d::KafkaPartition::kAuto
                           ? RdKafka::Topic::PARTITION_UA
                           : spec.config.partition.value;
@@ -228,7 +227,7 @@ void produce(const std::string &bootstrap, const d::KafkaSecurity &security, con
 
 // ---- Consumer (streaming, spec §5/§6) ----
 void consume(const std::string &bootstrap, const d::KafkaSecurity &security, const d::KafkaConsumeSpec &spec,
-            d::IResponseSink &sink, const d::ICancellationToken &cancel) {
+            d::IResponseSink &sink, const d::ICancellationToken &cancel, std::chrono::milliseconds requestTimeout) {
   std::unique_ptr<RdKafka::Conf> conf(RdKafka::Conf::create(RdKafka::Conf::CONF_GLOBAL));
   setConf(conf.get(), "bootstrap.servers", bootstrap);
   applySecurity(conf.get(), security);
@@ -244,6 +243,31 @@ void consume(const std::string &bootstrap, const d::KafkaSecurity &security, con
   if (!consumer) {
     sink.emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Internal, "consumer create failed: " + err, {}}}));
     return;
+  }
+
+  // BUG FIX: a wrong/unreachable bootstrap never surfaces as a consume() error — consume() just keeps
+  // returning ERR__TIMED_OUT (empty poll), which the loop below treats as "tail hết dữ liệu" and spins on
+  // forever, so the consumer never closed itself (Cancel was the only way out). Validate connectivity
+  // up-front with a bounded metadata() call — the shared per-request Config-tab timeout, same value the
+  // producer's delivery deadline honors — so a bad broker URL fails fast and the consumer closes cleanly
+  // (SPEC_kafka §7 "Network: không kết nối được broker").
+  {
+    RdKafka::Metadata *rawMd = nullptr;
+    RdKafka::ErrorCode cerr =
+        consumer->metadata(true, nullptr, &rawMd, static_cast<int>(requestTimeout.count()));
+    std::unique_ptr<RdKafka::Metadata> md(rawMd); // owns the reply; librdkafka hands us a heap Metadata
+    if (cerr != RdKafka::ERR_NO_ERROR) {
+      // A metadata timeout here means we never reached any broker — report it as Network (a plain
+      // "Local: Timed out" would read as an unhelpful protocol error) rather than mapConsumeErr's default.
+      MappedErr m = cerr == RdKafka::ERR__TIMED_OUT
+                        ? MappedErr{d::ErrorKind::Network,
+                                    "Could not connect to the broker — check host:port and whether Kafka "
+                                    "has started."}
+                        : mapConsumeErr(cerr);
+      sink.emit(d::ResponseEvent(d::EvFailed{{m.kind, m.message, {}}}));
+      consumer->close();
+      return;
+    }
   }
 
   RdKafka::ErrorCode serr;
@@ -316,7 +340,7 @@ d::Status KafkaSender::execute(const d::RequestModel &resolved, d::IResponseSink
   const auto requestTimeout = resolved.config().timeout.value();
   k.match(overloaded{
       [&](const d::KafkaProduceSpec &p) { produce(bootstrap, k.security(), p, sink, cancel, requestTimeout); },
-      [&](const d::KafkaConsumeSpec &c) { consume(bootstrap, k.security(), c, sink, cancel); },
+      [&](const d::KafkaConsumeSpec &c) { consume(bootstrap, k.security(), c, sink, cancel, requestTimeout); },
   });
   return d::ok();
 }

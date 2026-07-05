@@ -106,7 +106,7 @@ core::domain::RequestModel::Payload defaultPayloadForCreate(core::domain::Reques
     // GraphQL uses for its non-empty-query invariant (not an "always-empty-ok" draft like url/target).
     cd::KafkaProduceConfig cfg{cd::KafkaTopic::create("demo-topic").take()};
     cd::KafkaMessage msg;
-    msg.value = cd::MessagePayload{"{}", false};
+    msg.value = cd::MessagePayload{"{}"};
     auto mode = cd::KafkaRequest::Mode{cd::KafkaProduceSpec{std::move(cfg), std::move(msg)}};
     return cd::KafkaRequest::create(cd::BrokerList::parse("localhost:9092").take(),
                                     cd::KafkaSecurity::plaintext(), std::move(mode))

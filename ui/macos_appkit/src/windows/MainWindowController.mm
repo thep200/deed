@@ -568,7 +568,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
         } else {
             KafkaProduceConfig cfg{KafkaTopic::create("demo-topic").take()};
             KafkaMessage msg;
-            msg.value = MessagePayload{"{}", false};
+            msg.value = MessagePayload{"{}"};
             incomingKafkaBufs = @[ N(core::serial::kafkaMessageToJson(msg)), N(core::serial::kafkaProduceConfigToJson(cfg)) ];
         }
     }
@@ -645,7 +645,7 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
         // non-empty-query default above (not an "always-empty-ok" draft like Http/WebSocket's Url).
         KafkaProduceConfig cfg{KafkaTopic::create("demo-topic").take()};
         KafkaMessage msg;
-        msg.value = MessagePayload{"{}", false};
+        msg.value = MessagePayload{"{}"};
         return KafkaRequest::create(BrokerList::parse("localhost:9092").take(), KafkaSecurity::plaintext(),
                                     KafkaRequest::Mode{KafkaProduceSpec{std::move(cfg), std::move(msg)}})
             .take();
@@ -690,7 +690,7 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
         _reqTabTitles = @[ StrTabGqlQuery, StrTabVariables, StrTabHeaders, StrTabAuth, StrTabConfig ];
         _respTabTitles = @[ StrTabResponse, StrTabRequest ];
     } else if (t == core::domain::RequestType::Kafka) {
-        // Producer: Message (key/value/headers/tombstone) + Kafka (topic/ack/compression/...). Consumer:
+        // Producer: Message (key/value/headers) + Kafka (topic/ack/compression/...). Consumer:
         // ONE Kafka tab (topics/group/offset-reset/...) — no Message tab (nothing to compose, SPEC_kafka §2.2).
         // StrTabConfig (timeout_ms/tls) is still appended LAST for every type, same as every other type.
         if ([self kafkaClientKind] == core::domain::KafkaClientKind::Consumer) {

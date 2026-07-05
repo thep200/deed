@@ -94,7 +94,7 @@ static void test_kafka_producer() {
   pcfg.acks = Acks::All;
   pcfg.compression = Compression::None;
   KafkaMessage msg;
-  msg.value = MessagePayload{"{\n  \"hello\": \"world\"\n}", false};
+  msg.value = MessagePayload{"{\n  \"hello\": \"world\"\n}"};
   auto req =
       KafkaRequest::create(brokers, KafkaSecurity::plaintext(), KafkaRequest::Mode{KafkaProduceSpec{pcfg, msg}})
           .take();
@@ -130,7 +130,7 @@ static void test_parse_kafka_samples() {
           "partition": -1, "retries": 3, "topic": "demo-topic"
         },
         "message": {
-          "headers": [], "key": "", "tombstone": false,
+          "headers": [], "key": "",
           "value": "{\n  \"hello\": \"world\"\n}"
         }
       },

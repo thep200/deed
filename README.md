@@ -373,14 +373,12 @@ A **Prod / Cons** toggle next to the URL switches the request between producer a
   {
     "key": "user-42",
     "value": { "name": "deed" },
-    "tombstone": false,
     "headers": []
   }
   ```
 
   - `key` — optional message key (empty = no key; Kafka then picks the partition round-robin).
   - `value` — the payload, written as real JSON right in the editor.
-  - `tombstone` — set to `true` to send a **null value** (key + headers only). On a log-compacted topic this deletes the key. Needs a `key` to make sense.
   - `headers` — key/value lines, same format as HTTP headers.
 
 - **Kafka** tab — the producer settings:

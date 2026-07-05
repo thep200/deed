@@ -36,11 +36,11 @@ std::optional<d::JsonText> jsonToValidate(const d::RequestModel &m) {
     } else if constexpr (std::is_same_v<T, d::GrpcRequest>) {
       if (!p.message().empty()) out = p.message();
     } else if constexpr (std::is_same_v<T, d::KafkaRequest>) {
-      // Producer value is always JSON now (no raw/binary mode); tombstone/empty (draft) skip validation.
+      // Producer value is always JSON now (no raw/binary mode); an empty (draft) value skips validation.
       p.match([&](auto &&spec) {
         using S = std::decay_t<decltype(spec)>;
         if constexpr (std::is_same_v<S, d::KafkaProduceSpec>) {
-          if (!spec.message.value.tombstone && !spec.message.value.value.empty())
+          if (!spec.message.value.value.empty())
             out = d::JsonText::of(spec.message.value.value);
         }
       });

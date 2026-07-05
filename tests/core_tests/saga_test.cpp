@@ -87,7 +87,7 @@ RequestModel makeKafkaProducer() {
   auto brokers = BrokerList::parse("localhost:9092").take();
   KafkaProduceConfig cfg{KafkaTopic::create("demo-topic").take()};
   KafkaMessage msg;
-  msg.value = MessagePayload{"{}", false};
+  msg.value = MessagePayload{"{}"};
   auto req = KafkaRequest::create(brokers, KafkaSecurity::plaintext(),
                                   KafkaRequest::Mode{KafkaProduceSpec{cfg, msg}})
                  .take();

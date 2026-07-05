@@ -391,7 +391,6 @@ std::string kafkaMessageToJson(const d::KafkaMessage &m) {
   } catch (...) {
     j["value"] = m.value.value; // not valid JSON yet (empty draft / mid-edit) -> show verbatim as a string
   }
-  j["tombstone"] = m.value.tombstone;
   j["headers"] = kafkaKvToJson(m.headers);
   return j.dump(2);
 }
@@ -406,7 +405,6 @@ d::Result<d::KafkaMessage> jsonToKafkaMessage(const std::string &text) {
       // Kafka. A JSON string -> use its content directly (back-compat with the old string-encoded form).
       m.value.value = it->is_string() ? it->get<std::string>() : it->dump(2);
     }
-    m.value.tombstone = gb(j, "tombstone", false);
     m.headers = kafkaKvFromJson<d::KafkaHeader>(j.value("headers", json::array()));
     return d::Result<d::KafkaMessage>::ok(std::move(m));
   } catch (const std::exception &e) {
