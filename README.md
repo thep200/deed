@@ -244,7 +244,7 @@ URL: localhost:8080/api/products?limit=1000
 
 ### Request Auth
 
-The **Auth** tab offers four types: **None**, **Basic**, **Bearer**, and **API key**.
+The **Auth** tab is one flat JSON object with a single `type` key: **none**, **basic**, or **bearer**. All fields sit next to `type` — no nesting.
 
 None:
 
@@ -259,10 +259,8 @@ Basic — username and password:
 ```json
 {
   "type": "basic",
-  "basic": {
-    "username": "admin",
-    "password": "s3cret"
-  }
+  "username": "admin",
+  "password": "s3cret"
 }
 ```
 
@@ -271,24 +269,13 @@ Bearer — a token:
 ```json
 {
   "type": "bearer",
-  "bearer": {
-    "token": "{{token}}"
-  }
+  "token": "{{token}}"
 }
 ```
 
-API key, sent as a header (`in` = `"header"`):
+Need an API key? That's just a header (or query param) — put it in the **Headers** or **Query** tab directly, e.g. header `X-API-Key: {{apiKey}}`. The former `apikey` auth type was removed for exactly this reason.
 
-```json
-{
-  "type": "apikey",
-  "apikey": {
-    "key": "X-API-Key",
-    "value": "{{apiKey}}",
-    "in": "header"
-  }
-}
-```
+> Older saved requests still load: the previous nested shape (`{"type":"basic","basic":{…}}`) is read transparently and rewritten flat on the next save; a saved `"type": "apikey"` falls back to `none` (move the key/value into **Headers**/**Query**).
 
 ### Response Body
 
@@ -320,7 +307,7 @@ Server-Sent Events is simply an HTTP request that streams. Add an `Accept: text/
 **Tabs:**
 
 - **Message** — the request message as JSON (field names as in the `.proto`). For **client-streaming / bidi** methods, put a JSON **array** here — each element is sent as one message, e.g. `[{"n": 1}, {"n": 2}, {"n": 3}]`.
-- **Metadata** — key/value lines sent as gRPC metadata, same format as HTTP headers (`enabled: 0` to skip a line).
+- **Metadata** — key/value lines sent as gRPC metadata, same format as HTTP headers (`enabled: 0` to skip a line). Keys must be lowercase (`a-z 0-9 - _ .`). There is no Auth tab for gRPC: call-level auth **is** metadata — new requests come seeded with disabled example lines (`authorization: Bearer <token>`, `x-api-key`, `x-request-id`); flip `enabled` to `1` and fill in the value to send one. Channel security (TLS) is the `tls` flag in **Config**.
 - **Config** — `timeout_ms` is the gRPC deadline; `tls` picks secure vs plaintext channel.
 
 **Responses** — unary and client-streaming show one JSON response. Server-streaming and bidi stream into the right pane message by message; press **Cancel** to hang up. Very long streams are truncated for safety after 100k events or 64 MB (tunable in `.env`: `STREAM_MAX_EVENTS`, `STREAM_MAX_BYTES_MB`).
@@ -337,7 +324,7 @@ You can also paste a `grpcurl` command into the URL field and Deed imports it as
 
 - **Message** — the frame to send. If it's non-empty it is sent automatically right after connecting; after that, edit it and press **Send** again to push the current text as a new frame through the open session — as many times as you like.
 - **Headers** — extra handshake headers (the HTTP upgrade request).
-- **Auth** — applied to the handshake, same four types as HTTP.
+- **Auth** — applied to the handshake, same three types as HTTP.
 
 **Session** — pressing **Send** connects. The right pane logs every frame in and out, live. **Cancel** performs a graceful disconnect (close code 1000). Deed keeps the connection healthy with automatic keepalive pings and closes it if the server goes silent too long (tunable in `.env`: `WS_PING_INTERVAL_MS`, `WS_IDLE_TIMEOUT_MS`, …).
 

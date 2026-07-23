@@ -381,10 +381,8 @@ core::domain::RequestModel CoreApiClient::aliasifyModel(const core::domain::Requ
       if constexpr (std::is_same_v<T, d::AuthNone>) return d::Auth::none();
       else if constexpr (std::is_same_v<T, d::AuthBearer>) {
         auto r = d::Auth::bearer(whole(x.token)); return r ? r.take() : a;
-      } else if constexpr (std::is_same_v<T, d::AuthBasic>) {
+      } else { // AuthBasic
         auto r = d::Auth::basic(whole(x.username), whole(x.password)); return r ? r.take() : a;
-      } else { // AuthApiKey — alias the value only (key is the header/param name)
-        auto r = d::Auth::apiKey(x.key, whole(x.value), x.in); return r ? r.take() : a;
       }
     });
   };

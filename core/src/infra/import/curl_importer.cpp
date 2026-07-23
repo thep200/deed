@@ -25,9 +25,8 @@ struct SBody {
     std::string binaryFilePath;
 };
 struct SAuth {
-    std::string type = "none"; // none|basic|bearer|apikey
+    std::string type = "none"; // none|basic|bearer
     std::string bearerToken, basicUsername, basicPassword;
-    std::string apikeyKey, apikeyValue, apikeyIn = "header";
 };
 struct SHttp {
     std::string method, url;
@@ -96,9 +95,10 @@ std::string base64Decode(const std::string& in) {
     return out;
 }
 
-// Route the Authorization header value into the pane's Auth tab (instead of the headers list).
-// Bearer -> bearer token; Basic -> base64-decode to user:pass; other scheme -> apikey header.
-void applyAuthHeader(SAuth& auth, const std::string& rawValue) {
+// Route a RECOGNIZED Authorization header value into the pane's Auth tab (instead of the headers list).
+// Bearer -> bearer token; valid Basic -> base64-decode to user:pass. Returns false for an unknown scheme
+// or malformed Basic — the caller keeps the raw header in the headers list (no "apikey" type anymore).
+bool applyAuthHeader(SAuth& auth, const std::string& rawValue) {
     std::string v = trim(rawValue);
     size_t sp = v.find(' ');
     std::string scheme = (sp == std::string::npos) ? "" : lower(v.substr(0, sp));
@@ -106,18 +106,17 @@ void applyAuthHeader(SAuth& auth, const std::string& rawValue) {
     if (scheme == "bearer") {
         auth.type = "bearer";
         auth.bearerToken = rest;
-    } else if (scheme == "basic" && looksBase64(rest)) {
+        return true;
+    }
+    if (scheme == "basic" && looksBase64(rest)) {
         std::string decoded = base64Decode(rest);
         size_t c = decoded.find(':');
         auth.type = "basic";
         auth.basicUsername = (c == std::string::npos) ? decoded : decoded.substr(0, c);
         auth.basicPassword = (c == std::string::npos) ? "" : decoded.substr(c + 1);
-    } else {
-        auth.type = "apikey";          // unknown/missing scheme -> keep as-is in Auth tab
-        auth.apikeyKey = "Authorization";
-        auth.apikeyValue = v;
-        auth.apikeyIn = "header";
+        return true;
     }
+    return false;
 }
 
 void pushHeader(SHttp& h, const char* key, const std::string& value) {
@@ -204,8 +203,8 @@ bool curlHeaderFlag(const std::string& flag, const std::string& value, CurlParse
         KeyValue kv = parseHeader(value);
         std::string lk = lower(kv.key);
         if (lk == "content-type") st.contentType = lower(kv.value);
-        if (lk == "authorization") applyAuthHeader(h.auth, kv.value);   // -> Auth tab (not the headers list)
-        else h.headers.push_back(kv);
+        // Recognized Authorization scheme -> Auth tab; anything else stays a plain header.
+        if (lk != "authorization" || !applyAuthHeader(h.auth, kv.value)) h.headers.push_back(kv);
     } else if (flag == "-A" || flag == "--user-agent") pushHeader(h, "User-Agent", value);
     else if (flag == "-e" || flag == "--referer") pushHeader(h, "Referer", value);
     else if (flag == "-b" || flag == "--cookie") pushHeader(h, "Cookie", value);
@@ -298,11 +297,6 @@ d::Auth authToDomain(const SAuth& a) {
     if (a.type == "bearer") { auto r = d::Auth::bearer(a.bearerToken); return r ? r.take() : d::Auth::none(); }
     if (a.type == "basic") {
         auto r = d::Auth::basic(a.basicUsername, a.basicPassword);
-        return r ? r.take() : d::Auth::none();
-    }
-    if (a.type == "apikey") {
-        auto r = d::Auth::apiKey(a.apikeyKey, a.apikeyValue,
-                                 a.apikeyIn == "query" ? d::ApiKeyIn::Query : d::ApiKeyIn::Header);
         return r ? r.take() : d::Auth::none();
     }
     return d::Auth::none();

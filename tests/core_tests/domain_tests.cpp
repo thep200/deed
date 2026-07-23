@@ -93,7 +93,6 @@ static void test_auth() {
   CHECK(Auth::none().isNone(), "auth none");
   CHECK(!Auth::basic("", "p").isOk(), "basic needs username");
   CHECK(!Auth::bearer("").isOk(), "bearer needs token");
-  CHECK(!Auth::apiKey("", "v", ApiKeyIn::Header).isOk(), "apikey needs name");
   auto bearer = Auth::bearer("tok").value();
   CHECK(bearer == Auth::bearer("tok").value(), "auth value equality");
   CHECK(bearer != Auth::none(), "auth inequality across alternatives");
@@ -103,8 +102,7 @@ static void test_auth() {
     using T = std::decay_t<decltype(a)>;
     if constexpr (std::is_same_v<T, AuthNone>) return "none";
     else if constexpr (std::is_same_v<T, AuthBasic>) return "basic";
-    else if constexpr (std::is_same_v<T, AuthBearer>) return "bearer";
-    else return "apikey";
+    else return "bearer";
   });
   CHECK(kind == "bearer", "auth match dispatches correct alternative");
 }

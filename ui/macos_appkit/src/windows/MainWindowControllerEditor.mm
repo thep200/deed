@@ -195,7 +195,6 @@ static NSArray<NSString *> *BodyAllModes(void);
         std::string msg = g.message().text();
         [_reqBuffers addObject:N(msg.empty() ? "{}" : msg)];
         [_reqBuffers addObject:N(core::serial::metadataToJson(g.metadata()))];
-        [_reqBuffers addObject:N(core::serial::authToJson(d::Auth::none()))];   // gRPC has no Auth tab (dummy)
         _urlField.stringValue = N(g.target()); _urlPrevLen = _urlField.stringValue.length;
         // reflection -> index 0; protoFiles/descriptorSet -> ".proto" (index 1).
         bool reflection = false;

@@ -28,6 +28,12 @@ inline RequestModel::Payload defaultPayloadFor(RequestType type) {
   case RequestType::Grpc: {
     GrpcRequest::Parts gp; // reflection + unary + empty target are the Parts defaults
     gp.message = JsonText::of("{}");
+    // Example metadata as OFF-by-default hints (same convention as the HTTP default headers below).
+    // gRPC has no Auth tab: call-level auth IS metadata (`authorization`), channel TLS lives in TlsConfig.
+    gp.metadata = GrpcMetadata::create({{"authorization", "Bearer <token>", false},
+                                        {"x-api-key", "<api-key>", false},
+                                        {"x-request-id", "<uuid>", false}})
+                      .take();
     return GrpcRequest::create(std::move(gp)).take();
   }
   case RequestType::Kafka: {

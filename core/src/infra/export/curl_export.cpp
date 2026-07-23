@@ -57,7 +57,7 @@ std::string applyPathVars(const std::string& url, const d::PathVariableList& var
 
 std::string toLower(std::string s) { for (auto& c : s) c = (char)::tolower((unsigned char)c); return s; }
 
-// Build the "?a=b&c=d" query string from enabled params (+ apikey-in-query). Empty if no params.
+// Build the "?a=b&c=d" query string from enabled params. Empty if no params.
 std::string curlQueryString(const d::HttpRequest& h) {
     std::string qs;
     auto add = [&](const std::string& k, const std::string& v) {
@@ -65,15 +65,10 @@ std::string curlQueryString(const d::HttpRequest& h) {
     };
     for (const auto& p : h.params().items())
         if (p.enabled() && !p.key().empty()) add(p.key(), p.value());
-    h.auth().match([&](auto&& a) {
-        using T = std::decay_t<decltype(a)>;
-        if constexpr (std::is_same_v<T, d::AuthApiKey>)
-            if (a.in == d::ApiKeyIn::Query) add(a.key, a.value);
-    });
     return qs;
 }
 
-// Append enabled `-H` headers and the auth flag (bearer/basic/apikey). Auth wins over an Authorization header.
+// Append enabled `-H` headers and the auth flag (bearer/basic). Auth wins over an Authorization header.
 void appendHeadersAndAuth(std::string& cmd, const d::HeaderList& headers, const d::Auth& auth) {
     bool authActive = !auth.isNone();
     for (const auto& hd : headers.items()) {
@@ -87,8 +82,6 @@ void appendHeadersAndAuth(std::string& cmd, const d::HeaderList& headers, const 
             cmd += " \\\n  -H " + shq("Authorization: Bearer " + a.token);
         else if constexpr (std::is_same_v<T, d::AuthBasic>)
             cmd += " \\\n  -u " + shq(a.username + ":" + a.password);
-        else if constexpr (std::is_same_v<T, d::AuthApiKey>)
-            if (a.in == d::ApiKeyIn::Header) cmd += " \\\n  -H " + shq(a.key + ": " + a.value);
     });
 }
 

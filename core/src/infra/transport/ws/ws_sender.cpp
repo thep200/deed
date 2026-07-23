@@ -397,8 +397,7 @@ private:
     WsResult result_;
 };
 
-// Apply a domain Auth to the handshake header list (bearer/basic/apikey-in-header; apikey-in-query is the
-// URL layer's job — the handshake ignores it, matching the legacy applyAuthHeaders behavior).
+// Apply a domain Auth to the handshake header list (bearer/basic -> Authorization header).
 void applyWsAuth(const d::Auth& auth, std::vector<std::pair<std::string, std::string>>& hdrs) {
     auth.match([&](auto&& a) {
         using T = std::decay_t<decltype(a)>;
@@ -409,8 +408,6 @@ void applyWsAuth(const d::Auth& auth, std::vector<std::pair<std::string, std::st
             hdrs.push_back({"Authorization",
                             "Basic " + base64(reinterpret_cast<const std::uint8_t*>(creds.data()),
                                               creds.size())});
-        } else if constexpr (std::is_same_v<T, d::AuthApiKey>) {
-            if (a.in == d::ApiKeyIn::Header) hdrs.push_back({a.key, a.value});
         }
     });
 }
@@ -421,7 +418,7 @@ struct curl_slist* buildWsHandshakeHeaders(const d::WebSocketRequest& w) {
     std::vector<std::pair<std::string, std::string>> headers;
     for (const auto& h : w.headers().items())
         if (h.enabled() && !h.name().empty()) headers.push_back({h.name(), h.value()});
-    applyWsAuth(w.auth(), headers);   // bearer/basic/apikey -> handshake header (no per-message headers)
+    applyWsAuth(w.auth(), headers);   // bearer/basic -> handshake header (no per-message headers)
     for (const auto& kv : headers)
         hdrs = curl_slist_append(hdrs, (kv.first + ": " + kv.second).c_str());
     const auto& subs = w.subprotocols();

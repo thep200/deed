@@ -1,6 +1,8 @@
 #import "windows/MainWindowControllerPrivate.h"
 #import <QuartzCore/QuartzCore.h>
 
+#include "core/domain/request/request_defaults.hpp" // defaultPayloadFor (fresh-request factory)
+
 // This file holds the core: UI building (build*), layout, per-type render, window & toast.
 // The remaining groups are split into categories: +Tree / +Editor / +Send / +Config / +Stress.
 // Shared ivars + imports live in MainWindowControllerPrivate.h.
@@ -653,7 +655,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
 static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::RequestType t) {
     using namespace core::domain;
     switch (t) {
-    case RequestType::Grpc: return GrpcRequest::create({}).take();
+    case RequestType::Grpc: return defaultPayloadFor(RequestType::Grpc); // shared factory: message "{}" + example metadata hints
     case RequestType::WebSocket:
         return WebSocketRequest::create({Url::create("").take(), {}, {}, Auth::none(), {}, WsSendKind::Text})
             .take();
@@ -724,7 +726,8 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
             _respTabTitles = @[ StrTabResponse ]; // one delivery-report result (like HTTP/GraphQL); no Request tab
         }
     } else {
-        _reqTabTitles = @[ StrTabMessage, StrTabMetadata, StrTabAuth, StrTabConfig ];
+        // gRPC: no Auth tab — call-level auth is a metadata entry (`authorization`); TLS is per-request Config.
+        _reqTabTitles = @[ StrTabMessage, StrTabMetadata, StrTabConfig ];
         _respTabTitles = @[ StrTabMessage, StrTabRequest ];
     }
     [self rebuildTabButtons];

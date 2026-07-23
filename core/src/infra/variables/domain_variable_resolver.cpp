@@ -71,11 +71,8 @@ d::Auth resolveAuth(const d::Auth &a, const VarMap &v) {
     } else if constexpr (std::is_same_v<T, d::AuthBearer>) {
       auto r = d::Auth::bearer(rs(x.token, v));
       return r ? r.take() : a;
-    } else if constexpr (std::is_same_v<T, d::AuthBasic>) {
+    } else { // AuthBasic
       auto r = d::Auth::basic(rs(x.username, v), rs(x.password, v));
-      return r ? r.take() : a;
-    } else { // AuthApiKey
-      auto r = d::Auth::apiKey(rs(x.key, v), rs(x.value, v), x.in);
       return r ? r.take() : a;
     }
   });

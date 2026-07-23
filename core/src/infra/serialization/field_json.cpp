@@ -105,6 +105,8 @@ d::Result<d::QueryParamList> jsonToParams(const std::string &text) {
 }
 
 // ---- Auth ----
+// ONE flat shape, discriminated only by "type": fields sit NEXT TO the discriminator
+// ({"type":"basic","username":...}), no per-type sub-object.
 std::string authToJson(const d::Auth &auth) {
   json j;
   auth.match([&](auto &&a) {
@@ -113,14 +115,11 @@ std::string authToJson(const d::Auth &auth) {
       j["type"] = "none";
     } else if constexpr (std::is_same_v<T, d::AuthBasic>) {
       j["type"] = "basic";
-      j["basic"] = {{"username", a.username}, {"password", a.password}};
+      j["username"] = a.username;
+      j["password"] = a.password;
     } else if constexpr (std::is_same_v<T, d::AuthBearer>) {
       j["type"] = "bearer";
-      j["bearer"] = {{"token", a.token}};
-    } else if constexpr (std::is_same_v<T, d::AuthApiKey>) {
-      j["type"] = "apikey";
-      j["apikey"] = {{"key", a.key}, {"value", a.value},
-                     {"in", a.in == d::ApiKeyIn::Query ? "query" : "header"}};
+      j["token"] = a.token;
     }
   });
   return j.dump(2);
@@ -130,20 +129,23 @@ d::Result<d::Auth> jsonToAuth(const std::string &text) {
     auto j = parseGuarded(text, "{\"type\":\"none\"}");
     if (!j.is_object()) return parseErr<d::Auth>("auth must be a JSON object");
     std::string type = gs(j, "type", "none");
+    // Saved request files predating the flat shape nest the fields under a sub-object named after the
+    // type ({"type":"basic","basic":{...}}); read that when present, else the flat top level.
+    auto fields = [&](const char *legacyKey) -> json {
+      return j.contains(legacyKey) && j[legacyKey].is_object() ? j[legacyKey] : j;
+    };
     if (type == "none") return d::Result<d::Auth>::ok(d::Auth::none());
     if (type == "basic") {
-      auto b = j.contains("basic") ? j["basic"] : json::object();
+      json b = fields("basic");
       return d::Auth::basic(gs(b, "username"), gs(b, "password"));
     }
     if (type == "bearer") {
-      auto b = j.contains("bearer") ? j["bearer"] : json::object();
+      json b = fields("bearer");
       return d::Auth::bearer(gs(b, "token"));
     }
-    if (type == "apikey") {
-      auto b = j.contains("apikey") ? j["apikey"] : json::object();
-      auto in = gs(b, "in", "header") == "query" ? d::ApiKeyIn::Query : d::ApiKeyIn::Header;
-      return d::Auth::apiKey(gs(b, "key"), gs(b, "value"), in);
-    }
+    // "apikey" was removed as a type: a custom key/value IS just a header (or query param), so it lives in
+    // the Headers/Query tab now. Saved files that still carry it degrade to none instead of failing to load.
+    if (type == "apikey") return d::Result<d::Auth>::ok(d::Auth::none());
     return parseErr<d::Auth>("unknown auth.type: " + type);
   } catch (const std::exception &e) {
     return parseErr<d::Auth>(e.what());

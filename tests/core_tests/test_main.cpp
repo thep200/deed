@@ -830,7 +830,6 @@ AuthView authView(const d::Auth& a) {
         using T = std::decay_t<decltype(x)>;
         if constexpr (std::is_same_v<T, d::AuthBearer>) { v.type = "bearer"; v.bearer = x.token; }
         else if constexpr (std::is_same_v<T, d::AuthBasic>) { v.type = "basic"; v.basicUser = x.username; }
-        else if constexpr (std::is_same_v<T, d::AuthApiKey>) v.type = "apikey";
     });
     return v;
 }
@@ -941,8 +940,10 @@ static void test_audit_fixes() {
         auto gv = impv::authView(impv::httpOf(good).auth());
         CHECK(good.ok && gv.type == "basic" && gv.basicUser == "user", "M15: valid Basic -> basic creds");
         auto bad = curl.parse("curl -H 'Authorization: Basic not_base64!!' http://x.test");
-        CHECK(bad.ok && impv::authView(impv::httpOf(bad).auth()).type == "apikey",
-              "M15: malformed Basic -> apikey (not garbled creds)");
+        const auto& badH = impv::httpOf(bad);
+        CHECK(bad.ok && impv::authView(badH.auth()).type == "none" && badH.headers().size() == 1 &&
+                  badH.headers().items()[0].name() == "Authorization",
+              "M15: malformed Basic -> raw Authorization header kept (not garbled creds)");
     }
     // M14: an empty inline value (--data=) must not swallow the next token as data.
     {

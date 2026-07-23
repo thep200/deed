@@ -81,16 +81,13 @@ d::Cookie parseSetCookie(const std::string &raw) {
   return c;
 }
 
-void applyAuth(cpr::Session &session, cpr::Header &header, cpr::Parameters &params, const d::Auth &auth) {
+void applyAuth(cpr::Session &session, cpr::Header &header, const d::Auth &auth) {
   auth.match([&](auto &&a) {
     using T = std::decay_t<decltype(a)>;
     if constexpr (std::is_same_v<T, d::AuthBearer>) {
       header["Authorization"] = "Bearer " + a.token;
     } else if constexpr (std::is_same_v<T, d::AuthBasic>) {
       session.SetAuth(cpr::Authentication{a.username, a.password, cpr::AuthMode::BASIC});
-    } else if constexpr (std::is_same_v<T, d::AuthApiKey>) {
-      if (a.in == d::ApiKeyIn::Query) { params.Add({a.key, a.value}); session.SetParameters(params); }
-      else header[a.key] = a.value;
     }
   });
 }
@@ -160,7 +157,7 @@ void configureSession(cpr::Session &session, const d::HttpRequest &h, const d::R
 
   cpr::Header header;
   for (const auto &hd : h.headers().items()) if (hd.enabled() && !hd.name().empty()) header[hd.name()] = hd.value();
-  applyAuth(session, header, params, h.auth());
+  applyAuth(session, header, h.auth());
   for (const auto &e : extraHeaders) if (!e.first.empty()) header[e.first] = e.second;
   session.SetHeader(header);
 

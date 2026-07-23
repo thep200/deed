@@ -1,6 +1,7 @@
 // core/domain/auth/auth.hpp — Auth sum type (REFACTOR_SPEC §5.2).
-// Auth is DATA only: applying it to a request (Base64 for Basic, the Authorization header, an api-key
-// query param) is the sender's job (infra), never the domain's.
+// Auth is DATA only: applying it to a request (Base64 for Basic, the Authorization header) is the
+// sender's job (infra), never the domain's. Custom auth headers/params (former "apikey" type) are just
+// entries in the Headers/Query tab — no dedicated alternative.
 #pragma once
 
 #include <string>
@@ -25,19 +26,9 @@ struct AuthBearer {
   std::string token;
   bool operator==(const AuthBearer &o) const { return token == o.token; }
 };
-enum class ApiKeyIn { Header, Query };
-struct AuthApiKey {
-  std::string key;
-  std::string value;
-  ApiKeyIn in = ApiKeyIn::Header;
-  bool operator==(const AuthApiKey &o) const {
-    return key == o.key && value == o.value && in == o.in;
-  }
-};
-
 class Auth {
 public:
-  using Variant = std::variant<AuthNone, AuthBasic, AuthBearer, AuthApiKey>;
+  using Variant = std::variant<AuthNone, AuthBasic, AuthBearer>;
 
   static Auth none() { return Auth(AuthNone{}); }
 
@@ -51,12 +42,6 @@ public:
       return Result<Auth>::fail({ErrorCode::Validation, "bearer token required", "auth.token"});
     return Result<Auth>::ok(Auth(AuthBearer{std::move(token)}));
   }
-  static Result<Auth> apiKey(std::string key, std::string value, ApiKeyIn in) {
-    if (key.empty())
-      return Result<Auth>::fail({ErrorCode::Validation, "api key name required", "auth.key"});
-    return Result<Auth>::ok(Auth(AuthApiKey{std::move(key), std::move(value), in}));
-  }
-
   // Exhaustive visit (compile-time enforced by the overload set). No RTTI.
   template <class V> decltype(auto) match(V &&v) const { return std::visit(std::forward<V>(v), data_); }
 
