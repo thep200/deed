@@ -36,8 +36,10 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
 
 - (void)showWindow {
     DeedConfig *cfg = [DeedConfig shared];
-    // Display font comes from Settings (app-support) — set BEFORE building widgets.
+    // Theme + display font come from Settings (app-support) — set BEFORE building widgets.
+    // Theme is applied only here (startup): changing it in Settings requires an app restart.
     { core::AppConfigStore a; a.setDefaults([self appDefaultsFromEnv]); core::AppConfig c = a.load();
+      [OS9Theme setThemeName:N(c.theme)];
       [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize]; }
     // Button style: new (btn-new.svg) by default, or classic (button.svg) via .env.
     [OS9Theme setButtonStyleName:[cfg stringFor:@"BUTTON_STYLE" def:@"new"]];
@@ -155,6 +157,8 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
         _fieldEditor = [[NSTextView alloc] initWithFrame:NSZeroRect];
         _fieldEditor.fieldEditor = YES;
         [self disableAutoFeatures:_fieldEditor];
+        // Caret follows the theme ink — the default black caret is invisible on the dark insetBg.
+        _fieldEditor.insertionPointColor = [OS9Theme textPrimary];
     }
     return _fieldEditor;
 }
@@ -181,7 +185,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _treeScroll.hasVerticalScroller = YES;
     _treeScroll.borderType = NSNoBorder;        // serrated border drawn by OS9SerratedInset
     [self styleScroller:_treeScroll];
-    _treeScroll.backgroundColor = [NSColor whiteColor];
+    _treeScroll.backgroundColor = [OS9Theme insetBg];
 
     _tree = [[DeedOutlineView alloc] initWithFrame:NSZeroRect];
     NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:@"name"];
@@ -200,7 +204,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _tree.action = @selector(treeClicked:);          // click folder -> fold/unfold
     _tree.doubleAction = @selector(treeDoubleClicked:); // dbl: empty area -> new HTTP; on a row -> rename
     _expandedFolders = [NSMutableSet set];
-    _tree.backgroundColor = [NSColor whiteColor];
+    _tree.backgroundColor = [OS9Theme insetBg];
     [_tree registerForDraggedTypes:@[ kTreeDragType ]]; // drag-and-drop move
     __weak MainWindowController *weakSelf = self;
     _tree.contextHandler = ^(NSInteger row, NSPoint pt) { [weakSelf showContextMenuForRow:row atWindowPoint:pt]; };
@@ -303,7 +307,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _urlField.bezeled = NO;
     _urlField.bordered = NO;
     _urlField.drawsBackground = NO;                  // white background drawn by OS9InsetView
-    _urlField.textColor = [NSColor blackColor];      // black text on white
+    _urlField.textColor = [OS9Theme textPrimary];    // theme ink on inset background
     _urlField.focusRingType = NSFocusRingTypeNone;
     _urlField.usesSingleLineMode = YES;              // no line wrapping
     _urlField.cell.wraps = NO;

@@ -89,7 +89,7 @@ static void bevel(NSRect r, NSColor *tl, NSColor *br) {
 
     if (_label.length) {
         NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont],
-                                NSForegroundColorAttributeName : [NSColor blackColor]};
+                                NSForegroundColorAttributeName : [OS9Theme textPrimary]};
         NSSize ls = [_label sizeWithAttributes:attrs];
         NSPoint p = NSMakePoint(floor(NSMidX(knob) - ls.width / 2), floor(NSMidY(knob) - ls.height / 2));
         [_label drawAtPoint:p withAttributes:attrs];

@@ -216,7 +216,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     [[OS9Theme face] set];
     NSRectFill(self.bounds);
     NSBezierPath *p = [OS9Theme serratedPathInRect:NSInsetRect(self.bounds, 1, 1)];
-    [[NSColor whiteColor] set];
+    [[OS9Theme insetBg] set];
     [p fill];
     [[OS9Theme frame] set];
     p.lineWidth = 1.0;
@@ -405,7 +405,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     NSRectFill(b);
 
     CGFloat dx = -[self scrollX];   // header scrolls horizontally in sync with body; sticky VERTICALLY.
-    NSColor *fg = [OS9Theme frame];
+    NSColor *fg = [OS9Theme textPrimary];
 
     DrawCellText(StrGridAlias, NSMakeRect(dx, 0, _aliasW, kHeaderH), fg);
     [self drawVDivAt:_aliasW + dx height:kHeaderH];
@@ -424,7 +424,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     CGFloat addX = [self trailingX] + dx;
     CGFloat trailW = [self trailingColW];
     [self drawVDivAt:addX height:kHeaderH];
-    DrawPlus(NSInsetRect(NSMakeRect(addX, 0, trailW, kHeaderH), (trailW - kGlyph) / 2, 4), [OS9Theme frame]);
+    DrawPlus(NSInsetRect(NSMakeRect(addX, 0, trailW, kHeaderH), (trailW - kGlyph) / 2, 4), [OS9Theme textPrimary]);
 
     [self drawHDivAt:kHeaderH width:b.size.width];
 }
@@ -432,7 +432,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 #pragma mark body drawing
 
 - (void)drawBodyIn:(NSView *)v dirty:(NSRect)dirty {
-    [[NSColor whiteColor] set];
+    [[OS9Theme insetBg] set];
     NSRectFill(v.bounds);
 
     NSInteger nRows = _aliases.count;
@@ -468,13 +468,13 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
     NSInteger lastRow  = MIN(nRows - 1, (NSInteger)floor((NSMaxY(dirty) - 1) / kRowH));
     for (NSInteger row = firstRow; row <= lastRow; row++) {
         BOOL sel = (row == _selectedRow);
-        NSColor *fg = sel ? [NSColor whiteColor] : [OS9Theme frame];
+        NSColor *fg = sel ? [OS9Theme menuHoverText] : [OS9Theme textPrimary];
         CGFloat y = row * kRowH;
         NSRect aliasCell = NSMakeRect(0, y, _aliasW, kRowH);
         if (row == _hoverRow || sel) aliasCell.size.width -= (kGlyph + 6);  // leave room for × delete alias
         DrawCellText(_aliases[row], aliasCell, fg);
         if (row == _hoverRow || sel)
-            DrawClose([self closeBoxInAliasRowAtY:y], sel ? [NSColor whiteColor] : [OS9Theme shadow]);
+            DrawClose([self closeBoxInAliasRowAtY:y], sel ? [OS9Theme menuHoverText] : [OS9Theme shadow]);
         NSArray<NSString *> *rowVals = (row < (NSInteger)_cellCache.count) ? _cellCache[row] : nil;  // H8: cached
         for (NSInteger e = 0; e < nCols; e++) {
             NSString *val = (rowVals && e < (NSInteger)rowVals.count) ? rowVals[e] : @"";

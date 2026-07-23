@@ -35,6 +35,7 @@ struct AppConfig {
   std::string lastCollectionRoot; // most recently opened collection dir (reopened at startup)
   std::string fontName;           // display font (empty = default); from Settings
   int fontSize = kDefaultFontSize;
+  std::string theme = "light";    // UI theme: "light" | "dark" (UI interprets; applied on restart)
 
   // --- Response cache (USER layer — edited in Settings; clamped ≤ ENV max). RESPONSE_CACHE.md §1 ---
   int ramCacheSizeMb = kDefaultRamCacheSizeMb;    // operating RAM cache level

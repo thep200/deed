@@ -114,13 +114,13 @@
     // List box: platinum background + black outline, SQUARE CORNERS.
     [[OS9Theme buttonFace] set];
     NSRectFill(_listRect);
-    NSDictionary *norm = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor blackColor]};
-    NSDictionary *hi   = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor whiteColor]};
+    NSDictionary *norm = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [OS9Theme textPrimary]};
+    NSDictionary *hi   = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [OS9Theme menuHoverText]};
     // Truncating "…" variant built ONCE before the loop (shared constant paragraph style) — previously
     // alloc'd NSMutableParagraphStyle + mutableCopy per row.
     NSParagraphStyle *trunc = [OS9Theme truncatingTailStyle];
-    NSDictionary *normTr = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor blackColor], NSParagraphStyleAttributeName : trunc};
-    NSDictionary *hiTr   = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor whiteColor], NSParagraphStyleAttributeName : trunc};
+    NSDictionary *normTr = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [OS9Theme textPrimary], NSParagraphStyleAttributeName : trunc};
+    NSDictionary *hiTr   = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [OS9Theme menuHoverText], NSParagraphStyleAttributeName : trunc};
     BOOL scrolls = (_maxScroll > 0);
     CGFloat textRight = NSMaxX(_listRect) - 6 - (scrolls ? 5 : 0);   // leave room for the scrollbar
     [NSGraphicsContext saveGraphicsState];
@@ -130,11 +130,11 @@
         if (rowY + _rowH < _listRect.origin.y || rowY > NSMaxY(_listRect)) continue;   // offscreen -> skip
         NSRect row = NSMakeRect(_listRect.origin.x, rowY, _listRect.size.width, _rowH);
         BOOL hot = (i == _hover);
-        if (hot) { [[NSColor colorWithCalibratedRed:0.2 green:0.2 blue:0.6 alpha:1.0] set]; NSRectFill(row); }
+        if (hot) { [[OS9Theme menuHoverBg] set]; NSRectFill(row); }
         NSDictionary *attrs = hot ? hi : norm;
         if (i == _selected)
             [OS9Theme drawCheckInRect:NSMakeRect(row.origin.x + 6, row.origin.y + (_rowH - 11) / 2, 11, 11)
-                                color:(hot ? [NSColor whiteColor] : [NSColor blackColor])];
+                                color:(hot ? [OS9Theme menuHoverText] : [OS9Theme textPrimary])];
         // Truncate "…" to row width.
         NSDictionary *trAttrs = hot ? hiTr : normTr;
         CGFloat textX = row.origin.x + 22;
@@ -150,13 +150,13 @@
         CGFloat contentH = _items.count * _rowH;
         CGFloat thumbH = MAX(18, visibleH * visibleH / contentH);
         CGFloat thumbY = _listRect.origin.y + 1 + (_scrollOff / _maxScroll) * (visibleH - thumbH);
-        [[NSColor colorWithCalibratedWhite:0.5 alpha:1] set];
+        [[OS9Theme menuSeparator] set];
         NSRectFill(NSMakeRect(NSMaxX(_listRect) - 4, floor(thumbY), 3, floor(thumbH)));
     }
 
     // Box border: NSFrameRect (no AA, crisp, drawn within _listRect) — redrawing on hover doesn't
     // accumulate edge alpha like NSBezierPath stroke antialias would (view not layer-backed).
-    [[NSColor colorWithCalibratedWhite:0.15 alpha:1] set];
+    [[OS9Theme menuBorder] set];
     NSFrameRect(_listRect);
 }
 

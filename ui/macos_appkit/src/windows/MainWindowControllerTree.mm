@@ -18,6 +18,7 @@
     core::AppConfig d;
     d.fontName = S([dc stringFor:@"FONT_NAME" def:@""]);
     d.fontSize = (int)[dc intFor:@"FONT_SIZE" def:core::kDefaultFontSize];
+    d.theme = S([dc stringFor:@"THEME" def:@"light"]);
     d.ramCacheSizeMb = (int)[dc intFor:@"RAM_CACHE_SIZE" def:core::kDefaultRamCacheSizeMb];
     d.diskCacheSizeMb = (int)[dc intFor:@"DISK_CACHE_SIZE" def:core::kDefaultDiskCacheSizeMb];
     return d;

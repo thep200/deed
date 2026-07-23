@@ -3,6 +3,11 @@
 #import <Cocoa/Cocoa.h>
 
 @interface OS9Theme : NSObject
+// Theme selection (Settings "theme": "light" | "dark") — set ONCE at startup BEFORE building widgets;
+// changing it later needs an app restart (no live re-style).
++ (void)setThemeName:(NSString *)name;   // "dark" -> dark palette; anything else -> light
++ (BOOL)isDarkTheme;                     // for the rare branch outside tokens (NSTextField caret...)
+
 + (NSColor *)face;        // platinum background gray
 + (NSColor *)buttonFace;  // #DDDDDD — button face (per button.svg)
 + (NSColor *)faceLight;   // lighter (subtle gradient)
@@ -14,6 +19,46 @@
 + (NSColor *)windowBg;    // window background
 + (NSColor *)accent;      // selection blue
 + (NSColor *)rowSelectionGray; // subtle gray for selected tree row (instead of default blue)
+
+// --- Semantic tokens (theme-aware). Use these instead of NSColor literals in widgets/windows. ---
++ (NSColor *)textPrimary;      // main ink: labels, rows, field text, toast text (black / near-white)
++ (NSColor *)textSecondary;    // muted text: editor gutter numbers
++ (NSColor *)insetBg;          // sunken field/editor/tree/grid background (white / near-black)
++ (NSColor *)titleTextActive;  // title bar text, active window
++ (NSColor *)titleTextInactive;
+// menus (OS9Dropdown / OS9StyleMenu)
++ (NSColor *)menuHoverBg;      // navy hover row fill
++ (NSColor *)menuHoverText;    // text/check on hover row
++ (NSColor *)menuSeparator;    // separator + disabled text gray
++ (NSColor *)menuBorder;       // menu panel border
+// status line (Send) + dialog error label
++ (NSColor *)statusOk;
++ (NSColor *)statusError;
+// toast
++ (NSColor *)toastBg;
++ (NSColor *)toastOk;
++ (NSColor *)toastError;
++ (NSColor *)toastInfo;
+// scroller (OS9Scroller thumb)
++ (NSColor *)scrollerThumb;
++ (NSColor *)scrollerBorder;
++ (NSColor *)scrollerGripDark;
++ (NSColor *)scrollerGripLight;
+// Scintilla editor palette (SciTextView / JsonEditorBehavior)
++ (NSColor *)editorBg;
++ (NSColor *)editorFg;         // default text + operator + caret
++ (NSColor *)editorString;
++ (NSColor *)editorNumber;     // number + keyword
++ (NSColor *)editorProperty;
++ (NSColor *)editorSelectionBg;
++ (NSColor *)editorBraceFg;    // matched-brace highlight fg/bg
++ (NSColor *)editorBraceBg;
++ (NSColor *)editorBraceBadFg; // unmatched brace
+// pictorial glyphs (OS9Glyphs strokes, TreeViews 3D box)
++ (NSColor *)glyphStroke;
++ (NSColor *)glyphBoxFill;
++ (NSColor *)glyphBoxHighlight;
++ (NSColor *)glyphBoxOutline;
 + (NSFont  *)uiFont;
 + (NSFont  *)monoFont;
 // Configured font at role-specific size/weight (heading, title...) BUT same family as uiFont.

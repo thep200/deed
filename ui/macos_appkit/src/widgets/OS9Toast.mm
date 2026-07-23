@@ -25,13 +25,13 @@ static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClo
 }
 
 // Background is ALWAYS gray (not colored by kind).
-- (NSColor *)fillColor { return [NSColor colorWithCalibratedWhite:0.82 alpha:1]; }
+- (NSColor *)fillColor { return [OS9Theme toastBg]; }
 
 // Dashed border color by kind (from assets/color.png).
 - (NSColor *)accentColor {
-    if (_kind == 1) return [NSColor colorWithCalibratedRed:0.29 green:0.59 blue:0.40 alpha:1]; // green
-    if (_kind == 2) return [NSColor colorWithCalibratedRed:0.78 green:0.25 blue:0.22 alpha:1]; // red
-    return [NSColor colorWithCalibratedRed:0.42 green:0.50 blue:0.69 alpha:1];                  // blue-gray (info)
+    if (_kind == 1) return [OS9Theme toastOk];
+    if (_kind == 2) return [OS9Theme toastError];
+    return [OS9Theme toastInfo];
 }
 - (NSString *)glyph { return _kind == 1 ? @"✓" : (_kind == 2 ? @"!" : @"i"); }
 
@@ -55,17 +55,17 @@ static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClo
     if (_kind == 1) {
         CGFloat s = 13;
         [OS9Theme drawCheckInRect:NSMakeRect(kToastPadL + (kToastIcon - s) / 2, (body.size.height - s) / 2, s, s)
-                            color:[NSColor blackColor]];
+                            color:[OS9Theme textPrimary]];
     } else {
         NSDictionary *ga = @{NSFontAttributeName : [OS9Theme uiFontOfSize:13 bold:YES],
-                             NSForegroundColorAttributeName : [NSColor blackColor]};
+                             NSForegroundColorAttributeName : [OS9Theme textPrimary]};
         NSSize gs = [[self glyph] sizeWithAttributes:ga];
         [[self glyph] drawAtPoint:NSMakePoint(kToastPadL + (kToastIcon - gs.width) / 2,
                                               (body.size.height - gs.height) / 2) withAttributes:ga];
     }
     // text (truncate with … if too long) — shared paragraph style
     NSDictionary *ta = @{NSFontAttributeName : [OS9Toast textFont],
-                         NSForegroundColorAttributeName : [NSColor blackColor],
+                         NSForegroundColorAttributeName : [OS9Theme textPrimary],
                          NSParagraphStyleAttributeName : [OS9Theme truncatingTailStyle]};
     CGFloat tx = kToastPadL + kToastIcon + kToastGapL;
     NSRect tr = NSMakeRect(tx, 0, NSMinX([self closeRect]) - tx - 4, body.size.height);
@@ -73,7 +73,7 @@ static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClo
     [_message drawInRect:NSMakeRect(tr.origin.x, (body.size.height - ts.height) / 2, tr.size.width, ts.height)
           withAttributes:ta];
     // ✕ button on the right
-    NSDictionary *xa = @{NSFontAttributeName : [OS9Theme uiFontOfSize:12 bold:YES], NSForegroundColorAttributeName : [NSColor blackColor]};
+    NSDictionary *xa = @{NSFontAttributeName : [OS9Theme uiFontOfSize:12 bold:YES], NSForegroundColorAttributeName : [OS9Theme textPrimary]};
     NSRect cr = [self closeRect];
     NSSize xs = [@"✕" sizeWithAttributes:xa];
     [@"✕" drawAtPoint:NSMakePoint(NSMidX(cr) - xs.width / 2, (body.size.height - xs.height) / 2) withAttributes:xa];

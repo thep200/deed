@@ -7,7 +7,7 @@
     [[OS9Theme face] set];
     NSRectFill(self.bounds);
     NSBezierPath *p = [OS9Theme serratedPathInRect:NSInsetRect(self.bounds, 1, 1)];
-    [[NSColor whiteColor] set];
+    [[OS9Theme insetBg] set];
     [p fill];
     [[OS9Theme frame] set];
     p.lineWidth = 1.0;

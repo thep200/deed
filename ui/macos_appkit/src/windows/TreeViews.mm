@@ -140,8 +140,10 @@ static const CGFloat kArrowPx = 0.625;   // ~+25% vs original
 // matching SVG coordinate system). SourceOver blend to keep the faint border (alpha < 1).
 static void DrawTreeArrow(const TreePx *px, size_t n, CGFloat ox, CGFloat oy) {
     const CGFloat s = kArrowPx;
+    const BOOL dark = [OS9Theme isDarkTheme];   // invert the grayscale art on dark background
     for (size_t i = 0; i < n; i++) {
-        [[NSColor colorWithCalibratedWhite:px[i].gray / 255.0 alpha:px[i].a] set];
+        CGFloat g = px[i].gray / 255.0;
+        [[NSColor colorWithCalibratedWhite:(dark ? 1.0 - g : g) alpha:px[i].a] set];
         NSRectFillUsingOperation(NSMakeRect(ox + px[i].x * s, oy + px[i].y * s, s, s),
                                  NSCompositingOperationSourceOver);
     }
@@ -169,13 +171,13 @@ static NSBezierPath *TreeFolderPath(CGFloat x, CGFloat y) {
 // 3D folder icon: bright front face raised, dark side face offset down-right (shows 2 edges) + shadow.
 - (void)drawFolderIconInRect:(NSRect)r {
     CGFloat x = r.origin.x + 0.5, y = r.origin.y + 1.5;
-    NSColor *face = [NSColor colorWithCalibratedWhite:0.88 alpha:1.0];   // front face (bright)
-    NSColor *side = [NSColor colorWithCalibratedWhite:0.56 alpha:1.0];   // side/depth face (dark)
+    NSColor *face = [OS9Theme faceLight];   // front face (bright)
+    NSColor *side = [OS9Theme shadow];      // side/depth face (dark)
     NSColor *line = [OS9Theme frame];
     const CGFloat d = 2.5;   // 3D thickness (diagonal offset left->right, downward)
 
     // 1) faint drop shadow (farthest, bottom-right)
-    [[NSColor colorWithCalibratedWhite:0.40 alpha:0.30] set];
+    [[[OS9Theme darkShadow] colorWithAlphaComponent:0.30] set];
     [TreeFolderPath(x + d + 1.0, y + d + 1.0) fill];
 
     // 2) side face (dark) offset down-right -> reveals 3D thickness at right edge + bottom
@@ -186,7 +188,7 @@ static NSBezierPath *TreeFolderPath(CGFloat x, CGFloat y) {
     // 3) front face (bright) at origin -> raised, both edges visible (front + side face)
     NSBezierPath *front = TreeFolderPath(x, y);
     [face set]; [front fill];
-    [[NSColor colorWithCalibratedWhite:0.97 alpha:1.0] set];   // bright bevel on body top edge
+    [[OS9Theme highlight] set];   // bright bevel on body top edge
     NSRectFill(NSMakeRect(x + 1, y + 3, 11, 1));
     [line set]; front.lineWidth = 1.0; [front stroke];
 }
@@ -219,7 +221,7 @@ static NSBezierPath *TreeFolderPath(CGFloat x, CGFloat y) {
     }
 
     NSDictionary *attrs = @{ NSFontAttributeName : [OS9Theme uiFont],
-                             NSForegroundColorAttributeName : [NSColor blackColor] };
+                             NSForegroundColorAttributeName : [OS9Theme textPrimary] };
     CGFloat ty = floor((h - [@"Mg" sizeWithAttributes:attrs].height) / 2);
 
     if (_isFolder) {
@@ -251,13 +253,13 @@ static NSBezierPath *TreeFolderPath(CGFloat x, CGFloat y) {
 @implementation OS9RowView
 // Fill a light gray background when the row is selected (single OR multi); do NOT invert to white text.
 - (void)drawBackgroundInRect:(NSRect)dirtyRect {
-    [[NSColor whiteColor] set];
+    [[OS9Theme insetBg] set];
     NSRectFill(self.bounds);
     if (self.selected) { [[OS9Theme rowSelectionGray] set]; NSRectFill(self.bounds); }
     // 1px full-width row separator (light Platinum) — idempotent, antialias off.
     [NSGraphicsContext saveGraphicsState];
     [[NSGraphicsContext currentContext] setShouldAntialias:NO];
-    [[NSColor colorWithCalibratedWhite:0.84 alpha:1.0] set];
+    [[OS9Theme rowSelectionGray] set];
     NSRect b = self.bounds;
     NSRectFill(NSMakeRect(0, 0, b.size.width, 1));   // row bottom (non-flipped: y=0 = bottom)
     [NSGraphicsContext restoreGraphicsState];

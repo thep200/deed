@@ -769,9 +769,12 @@ static void test_app_config_defaults(const std::string& root) {
     std::string cfgPath = (fs::path(root) / "appcfg_defaults.json").string();
     fs::remove(cfgPath);
 
+    CHECK_EQ(AppConfig{}.theme, std::string("light"), "built-in theme default is light");
+
     AppConfig defaults;
     defaults.fontName = "Courier";
     defaults.fontSize = 17;
+    defaults.theme = "dark";
     defaults.ramCacheSizeMb = 33;
     defaults.diskCacheSizeMb = 77;
     core::CacheLimits lim;
@@ -784,6 +787,7 @@ static void test_app_config_defaults(const std::string& root) {
     AppConfig c = store.load();
     CHECK_EQ(c.fontName, std::string("Courier"), "font_name default from .env");
     CHECK_EQ(c.fontSize, 17, "font_size default from .env");
+    CHECK_EQ(c.theme, std::string("dark"), "theme default from .env");
     CHECK_EQ(c.ramCacheSizeMb, 33, "ram_cache_size default from .env");
     CHECK_EQ(c.diskCacheSizeMb, 77, "disk_cache_size default from .env");
     CHECK_EQ(core::detail::buildCacheConfig(c, lim).ramEffBytes, (std::uint64_t)33 * 1024 * 1024,
@@ -796,7 +800,16 @@ static void test_app_config_defaults(const std::string& root) {
     AppConfig pc = st.load();
     CHECK_EQ(pc.fontSize, 20, "key present in file -> use file value");
     CHECK_EQ(pc.fontName, std::string("Courier"), "missing key -> falls back to .env default");
+    CHECK_EQ(pc.theme, std::string("dark"), "missing theme key -> falls back to .env default");
     CHECK_EQ(pc.ramCacheSizeMb, 33, "missing key -> ram default .env");
+
+    // theme present in the file overrides the default; save/load round-trips it.
+    { std::ofstream o(cfgPath); o << "{\"theme\": \"light\"}"; }
+    CHECK_EQ(st.load().theme, std::string("light"), "theme from file overrides .env default");
+    AppConfig rt = st.load();
+    rt.theme = "dark";
+    st.save(rt);
+    CHECK_EQ(st.load().theme, std::string("dark"), "theme survives save/load round-trip");
     fs::remove(cfgPath);
 }
 

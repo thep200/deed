@@ -226,15 +226,15 @@
     if (effStatus == core::StreamStatus::Ok) {
         line = [NSString stringWithFormat:StrFmtStreamOk, trunc, sizeStr, (unsigned long long)events,
                                           [self elapsedText:effElapsedMs]];
-        color = [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1.0];
+        color = [OS9Theme statusOk];
     } else if (effStatus == core::StreamStatus::Cancelled) {
         line = [NSString stringWithFormat:StrFmtStreamCancelled, StrStatusCancelled, sizeStr,
                                           (unsigned long long)events, [self elapsedText:effElapsedMs]];
-        color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
+        color = [OS9Theme statusError];
     } else {
         NSString *kind = (effStatus == core::StreamStatus::Timeout) ? StrStreamKindTimeout : StrStreamKindError;
         line = [NSString stringWithFormat:StrFmtStreamError, kind, code, message ?: @""];
-        color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
+        color = [OS9Theme statusError];
         if ([self requestType] == core::RequestType::Grpc) _grpcMethodsFetched = NO;   // re-fetch RPCs next open
     }
     _statusLabel.stringValue = line;
@@ -255,7 +255,7 @@
     // which carry no live duration) -> status only, no time.
     if (elapsedMs > 0) statusText = [NSString stringWithFormat:@"%@ | %@", statusText, [self elapsedText:elapsedMs]];
     _statusLabel.stringValue = statusText;
-    _statusLabel.textColor = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
+    _statusLabel.textColor = [OS9Theme statusError];
     _hasResp = NO;
     [_respBuffers removeAllObjects];
     for (NSUInteger i = 0; i < _respTabTitles.count; i++) [_respBuffers addObject:@""];
@@ -343,7 +343,7 @@
                                     [self humanSize:_streamBytes], (unsigned long long)_streamEvents];
     else
         _statusLabel.stringValue = [NSString stringWithFormat:StrFmtReqElapsed, t];
-    _statusLabel.textColor = [NSColor blackColor];
+    _statusLabel.textColor = [OS9Theme textPrimary];
 }
 
 - (NSString *)humanSize:(int64_t)bytes {
@@ -433,7 +433,7 @@
 
 - (void)updateStatus:(NSString *)text {
     _statusLabel.stringValue = text ?: @"";
-    _statusLabel.textColor = [NSColor blackColor];
+    _statusLabel.textColor = [OS9Theme textPrimary];
 }
 
 // Time HH:mm:ss.SSS (millisecond precision) from epoch ms. <=0 -> placeholder.
@@ -458,8 +458,8 @@
                        [self clockFromEpochMs:startMs], [self clockFromEpochMs:endMs]];
     _statusLabel.stringValue = [NSString stringWithFormat:@"%@ | %@ | %@ | %@", code, size,
                                                           [self elapsedText:elapsedMs], range];
-    _statusLabel.textColor = (r.statusCode >= 400) ? [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0]
-                                                   : [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1.0];
+    _statusLabel.textColor = (r.statusCode >= 400) ? [OS9Theme statusError]
+                                                   : [OS9Theme statusOk];
 }
 
 @end

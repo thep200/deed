@@ -71,7 +71,7 @@ static const CGFloat kFieldH = 22;
         [OS9Theme drawStripedTitleInRect:tr stripesInRect:tr active:YES];
         if (_titleText.length) {
             NSDictionary *a = @{NSFontAttributeName : [OS9Theme uiFont],
-                                NSForegroundColorAttributeName : [NSColor blackColor]};
+                                NSForegroundColorAttributeName : [OS9Theme titleTextActive]};
             NSSize sz = [_titleText sizeWithAttributes:a];
             // small background behind the text to separate it from the stripes (readability)
             NSRect lblBg = NSMakeRect((b.size.width - sz.width) / 2 - 6, 2, sz.width + 12, kTitleH - 3);
@@ -87,7 +87,9 @@ static const CGFloat kFieldH = 22;
 // Simple self-drawn alert icons (note=ⓘ, caution=⚠, stop=⊘). Placed in a column of width kIconW.
 - (void)drawAlertIconAt:(NSPoint)p {
     NSRect r = NSMakeRect(p.x, p.y, 28, 28);
-    NSColor *ink = [NSColor blackColor];
+    // Pictorial alert icons keep their canonical colors (yellow/red/blue + white detail) in both
+    // themes; only the triangle outline follows the theme ink.
+    NSColor *ink = [OS9Theme textPrimary];
     if (_icon == OS9AlertCaution) {
         NSBezierPath *tri = [NSBezierPath bezierPath];
         [tri moveToPoint:NSMakePoint(NSMidX(r), r.origin.y)];
@@ -137,7 +139,7 @@ static const CGFloat kFieldH = 22;
     NSString *(^_validate)(NSString *);
 }
 
-- (NSColor *)errorColor { return [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0]; }
+- (NSColor *)errorColor { return [OS9Theme statusError]; }
 
 // Measure the message text width (wrapped within maxW) -> compute dialog size.
 - (NSRect)measureMessage:(NSString *)msg width:(CGFloat)maxTextW {
@@ -268,7 +270,7 @@ static const CGFloat kFieldH = 22;
     _field.bezeled = NO;
     _field.bordered = NO;
     _field.drawsBackground = NO;                  // white background drawn by OS9SerratedInset
-    _field.textColor = [NSColor blackColor];
+    _field.textColor = [OS9Theme textPrimary];
     _field.focusRingType = NSFocusRingTypeNone;   // disable the blue focus ring
     _field.usesSingleLineMode = YES;
     _field.cell.scrollable = YES;
@@ -304,7 +306,7 @@ static const CGFloat kFieldH = 22;
     l.stringValue = text ?: @"";
     l.editable = NO; l.selectable = NO; l.bordered = NO; l.drawsBackground = NO;
     l.font = [OS9Theme uiFont];
-    l.textColor = [NSColor blackColor];
+    l.textColor = [OS9Theme textPrimary];
     l.cell.wraps = YES; l.cell.lineBreakMode = NSLineBreakByWordWrapping;
     return l;
 }
@@ -342,7 +344,13 @@ static const CGFloat kFieldH = 22;
 
 - (NSInteger)present:(NSWindow *)parent firstResponder:(NSView *)fr {
     [_win makeKeyAndOrderFront:nil];
-    if (fr) { [_win makeFirstResponder:fr]; if ([fr isKindOfClass:[NSTextField class]]) [(NSTextField *)fr selectText:nil]; }
+    if (fr) {
+        // Theme caret for the prompt field (default black caret is invisible on the dark insetBg).
+        NSTextView *fe = (NSTextView *)[_win fieldEditor:YES forObject:fr];
+        if ([fe isKindOfClass:[NSTextView class]]) fe.insertionPointColor = [OS9Theme textPrimary];
+        [_win makeFirstResponder:fr];
+        if ([fr isKindOfClass:[NSTextField class]]) [(NSTextField *)fr selectText:nil];
+    }
     NSInteger code = [NSApp runModalForWindow:_win];
     // §2.3: deactivate the input field's input context (rename) WHILE the window is alive, THEN close.
     OS9SafeEndEditing(_win, _field);

@@ -61,8 +61,9 @@ static NSString *const kEnvNone = @"ENV";
         core::AppConfig c = _apiClient->appConfig().load();
         _settingEditor.string = [NSString stringWithFormat:
             @"{\n  \"font_name\": \"%s\",\n  \"font_size\": %d,\n"
+             "  \"theme\": \"%s\",\n"
              "  \"ram_cache_size\": %d,\n  \"disk_cache_size\": %d\n}",
-            c.fontName.c_str(), c.fontSize,
+            c.fontName.c_str(), c.fontSize, c.theme.c_str(),
             c.ramCacheSizeMb, c.diskCacheSizeMb];
     }
     _configMode = YES;
@@ -77,6 +78,7 @@ static NSString *const kEnvNone = @"ENV";
     // hiding the config pane — otherwise the hidden view still holds the input context -> crash in updateWindows.
     OS9SafeEndEditing(_window, nil);
     // Auto-save on back, for whichever screen is open.
+    BOOL themeChanged = NO;   // theme applies on restart only -> different toast
     if (_apiClient) {
         if (_configKind == 0) {
             [_envVC save];
@@ -85,13 +87,16 @@ static NSString *const kEnvNone = @"ENV";
             NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
             if (dict) {
                 core::AppConfig c = _apiClient->appConfig().load();
+                std::string oldTheme = c.theme;
                 if (dict[@"font_name"]) c.fontName = [dict[@"font_name"] UTF8String];
                 if (dict[@"font_size"]) c.fontSize = [dict[@"font_size"] intValue];
+                if (dict[@"theme"]) c.theme = [dict[@"theme"] UTF8String];
                 if (dict[@"ram_cache_size"]) c.ramCacheSizeMb = [dict[@"ram_cache_size"] intValue];
                 if (dict[@"disk_cache_size"]) c.diskCacheSizeMb = [dict[@"disk_cache_size"] intValue];
                 _apiClient->appConfig().save(c);
+                themeChanged = (c.theme != oldTheme);
                 _apiClient->cache().reloadCacheConfig();   // apply new cap/threshold -> evict if smaller (§1.2)
-                [self applyConfiguredFontAndRefresh];
+                [self applyConfiguredFontAndRefresh];      // theme NOT applied here — restart to apply
             } else {
                 [self toastWarn:StrToastInvalidSettings];
             }
@@ -103,7 +108,8 @@ static NSString *const kEnvNone = @"ENV";
     [self refreshEnvButton];
     [self updateTitle];   // title bar -> current request name
     [self relayout];
-    [self toastOk:StrToastSaved];
+    if (themeChanged) [self toast:StrToastThemeRestart];
+    else [self toastOk:StrToastSaved];
 }
 
 #pragma mark Proto source (gRPC)

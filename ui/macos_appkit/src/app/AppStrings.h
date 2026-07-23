@@ -177,6 +177,7 @@ extern NSString *const StrToastWsEmptyFrame;
 extern NSString *const StrToastWsQueueFull;
 extern NSString *const StrToastCopiedCurl;
 extern NSString *const StrToastSaved;
+extern NSString *const StrToastThemeRestart;
 extern NSString *const StrToastRenamed;
 extern NSString *const StrToastDuplicated;
 extern NSString *const StrToastInvalidSettings;

@@ -1,4 +1,5 @@
 #import "widgets/OS9Scroller.h"
+#import "theme/OS9Theme.h"
 
 @implementation OS9Scroller
 
@@ -23,9 +24,9 @@
     NSRect b = self.bounds;
     NSRect kk = vert ? NSMakeRect(b.origin.x + 1, k.origin.y, b.size.width - 2, k.size.height)
                      : NSMakeRect(k.origin.x, b.origin.y + 1, k.size.width, b.size.height - 2);
-    [[NSColor colorWithCalibratedWhite:0.6 alpha:0.95] set]; // gray (#999999)
+    [[OS9Theme scrollerThumb] set];  // gray (#999999)
     NSRectFill(kk);
-    [[NSColor colorWithCalibratedWhite:0.15 alpha:0.95] set]; // border #262626
+    [[OS9Theme scrollerBorder] set]; // border #262626
     NSFrameRect(kk);
     // 3 center ribs (dark line + white highlight), fully within thumb width
     CGFloat cx = NSMidX(kk), cy = NSMidY(kk);
@@ -35,12 +36,12 @@
     for (int i = -1; i <= 1; i++) {                // 3 lines
         if (vert) {
             CGFloat y = floor(cy + i * 3);
-            [[NSColor colorWithCalibratedWhite:0.15 alpha:0.55] set]; NSRectFill(NSMakeRect(floor(cx - gw / 2), y, gw, 1));
-            [[NSColor colorWithCalibratedWhite:1 alpha:0.6] set];     NSRectFill(NSMakeRect(floor(cx - gw / 2), y + 1, gw, 1));
+            [[OS9Theme scrollerGripDark] set];  NSRectFill(NSMakeRect(floor(cx - gw / 2), y, gw, 1));
+            [[OS9Theme scrollerGripLight] set]; NSRectFill(NSMakeRect(floor(cx - gw / 2), y + 1, gw, 1));
         } else {
             CGFloat x = floor(cx + i * 3);
-            [[NSColor colorWithCalibratedWhite:0.15 alpha:0.55] set]; NSRectFill(NSMakeRect(x, floor(cy - gh / 2), 1, gh));
-            [[NSColor colorWithCalibratedWhite:1 alpha:0.6] set];     NSRectFill(NSMakeRect(x + 1, floor(cy - gh / 2), 1, gh));
+            [[OS9Theme scrollerGripDark] set];  NSRectFill(NSMakeRect(x, floor(cy - gh / 2), 1, gh));
+            [[OS9Theme scrollerGripLight] set]; NSRectFill(NSMakeRect(x + 1, floor(cy - gh / 2), 1, gh));
         }
     }
 }

@@ -105,28 +105,25 @@
     }
     [self msg:SCI_STYLESETFONT w:STYLE_DEFAULT l:(sptr_t)_fontFace.UTF8String];
     [self msg:SCI_STYLESETSIZE w:STYLE_DEFAULT l:(sptr_t)(long)_fontPt];
-    [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_DEFAULT value:[NSColor blackColor]];
-    [_sci setColorProperty:SCI_STYLESETBACK parameter:STYLE_DEFAULT value:[NSColor whiteColor]];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_DEFAULT value:[OS9Theme editorFg]];
+    [_sci setColorProperty:SCI_STYLESETBACK parameter:STYLE_DEFAULT value:[OS9Theme editorBg]];
     [self msg:SCI_STYLECLEARALL w:0 l:0]; // apply default to all styles
 
     // line numbers: platinum background, gray text
     [_sci setColorProperty:SCI_STYLESETBACK parameter:STYLE_LINENUMBER value:[OS9Theme buttonFace]];
-    [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_LINENUMBER value:[NSColor colorWithCalibratedWhite:0.4 alpha:1]];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_LINENUMBER value:[OS9Theme textSecondary]];
 
-    // JSON syntax colors
-    NSColor *green = [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1];
-    NSColor *blue = [NSColor colorWithCalibratedRed:0.1 green:0.2 blue:0.8 alpha:1];
-    NSColor *purple = [NSColor colorWithCalibratedRed:0.45 green:0.1 blue:0.5 alpha:1];
-    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_STRING value:green];
-    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_STRINGEOL value:green];
-    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_NUMBER value:blue];
-    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_PROPERTYNAME value:purple];
-    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_KEYWORD value:blue];
-    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_OPERATOR value:[NSColor blackColor]];
+    // JSON syntax colors (theme-aware — OS9Theme editor* tokens)
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_STRING value:[OS9Theme editorString]];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_STRINGEOL value:[OS9Theme editorString]];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_NUMBER value:[OS9Theme editorNumber]];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_PROPERTYNAME value:[OS9Theme editorProperty]];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_KEYWORD value:[OS9Theme editorNumber]];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_OPERATOR value:[OS9Theme editorFg]];
 
     // caret + selection
-    [_sci setColorProperty:SCI_SETCARETFORE parameter:0 value:[NSColor blackColor]];
-    [_sci setColorProperty:SCI_SETSELBACK parameter:1 value:[NSColor colorWithCalibratedRed:0.78 green:0.82 blue:0.95 alpha:1]];
+    [_sci setColorProperty:SCI_SETCARETFORE parameter:0 value:[OS9Theme editorFg]];
+    [_sci setColorProperty:SCI_SETSELBACK parameter:1 value:[OS9Theme editorSelectionBg]];
 }
 
 - (void)setFontName:(NSString *)name size:(CGFloat)size {

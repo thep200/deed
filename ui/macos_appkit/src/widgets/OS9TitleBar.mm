@@ -48,9 +48,9 @@ typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBH
 
 // Title width (measured with bold font) — to compute the pinstripe break / icon group alignment.
 - (NSDictionary *)titleAttrsActive:(BOOL)active {
-    CGFloat w = active ? 0.149 : 0.541;   // #262626 active / #8A8A8A inactive
     return @{NSFontAttributeName : [OS9Theme boldUiFont],
-             NSForegroundColorAttributeName : [NSColor colorWithCalibratedWhite:w alpha:1.0]};
+             NSForegroundColorAttributeName :
+                 (active ? [OS9Theme titleTextActive] : [OS9Theme titleTextInactive])};
 }
 
 - (void)drawRect:(NSRect)dirty {

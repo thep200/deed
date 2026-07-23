@@ -79,6 +79,7 @@ json toJson(const AppConfig& c) {
     return json{{"last_collection_root", c.lastCollectionRoot},
                 {"font_name", c.fontName},
                 {"font_size", c.fontSize},
+                {"theme", c.theme},
                 {"ram_cache_size", c.ramCacheSizeMb},
                 {"disk_cache_size", c.diskCacheSizeMb}};
 }
@@ -89,6 +90,7 @@ AppConfig appConfigFromJson(const json& j, const AppConfig& def) {
     c.lastCollectionRoot = getStrCompat(j, "last_collection_root", "lastCollectionRoot", def.lastCollectionRoot);
     c.fontName = getStrCompat(j, "font_name", "fontName", def.fontName);
     c.fontSize = getIntCompat(j, "font_size", "fontSize", def.fontSize);
+    c.theme = getStrCompat(j, "theme", "theme", def.theme);
     c.ramCacheSizeMb = getIntCompat(j, "ram_cache_size", "ramCacheSizeMb", def.ramCacheSizeMb);
     c.diskCacheSizeMb = getIntCompat(j, "disk_cache_size", "diskCacheSizeMb", def.diskCacheSizeMb);
     // cacheResponses/cachePersist no longer in user config -> keep the struct's default true.

@@ -4,7 +4,7 @@
 NSTextField *OS9Label(NSString *text) {
     NSTextField *l = [NSTextField labelWithString:text ?: @""];
     l.font = [OS9Theme uiFont];
-    l.textColor = [NSColor blackColor];
+    l.textColor = [OS9Theme textPrimary];
     l.backgroundColor = [NSColor clearColor];
     l.drawsBackground = NO;
     return l;
@@ -34,7 +34,7 @@ NSTextField *OS9CenteredLabel(NSString *text) {
     cell.bezeled = NO; cell.editable = NO; cell.selectable = NO;
     l.cell = cell;
     l.font = [OS9Theme uiFont];
-    l.textColor = [NSColor blackColor];
+    l.textColor = [OS9Theme textPrimary];
     l.backgroundColor = [NSColor clearColor];
     l.drawsBackground = NO;
     return l;

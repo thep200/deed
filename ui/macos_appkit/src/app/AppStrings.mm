@@ -159,6 +159,7 @@ NSString *const StrToastWsEmptyFrame = @"Type a message to send";
 NSString *const StrToastWsQueueFull = @"WebSocket send queue is full";
 NSString *const StrToastCopiedCurl = @"Copied as cURL";
 NSString *const StrToastSaved = @"Saved";
+NSString *const StrToastThemeRestart = @"Saved — restart app to apply theme";
 NSString *const StrToastRenamed = @"Renamed";
 NSString *const StrToastDuplicated = @"Duplicated";
 NSString *const StrToastInvalidSettings = @"Invalid settings JSON — skipped";

@@ -132,9 +132,9 @@ static const CGFloat kPadR = 14;   // right padding
             [NSGraphicsContext saveGraphicsState];
             [[NSGraphicsContext currentContext] setShouldAntialias:NO];
             CGFloat y = floor(row.origin.y + row.size.height / 2.0);
-            [[NSColor colorWithCalibratedWhite:0.55 alpha:1.0] set];
+            [[OS9Theme menuSeparator] set];
             NSRectFill(NSMakeRect(row.origin.x + 5, y,     row.size.width - 10, 1));
-            [[NSColor colorWithCalibratedWhite:1.0  alpha:1.0] set];
+            [[OS9Theme highlight] set];
             NSRectFill(NSMakeRect(row.origin.x + 5, y + 1, row.size.width - 10, 1));
             [NSGraphicsContext restoreGraphicsState];
             continue;
@@ -143,11 +143,11 @@ static const CGFloat kPadR = 14;   // right padding
         if (hot) {
             [NSGraphicsContext saveGraphicsState];
             [[NSGraphicsContext currentContext] setShouldAntialias:NO];
-            [[NSColor colorWithCalibratedRed:0.2 green:0.2 blue:0.6 alpha:1.0] set];   // navy highlight
+            [[OS9Theme menuHoverBg] set];   // navy highlight
             NSRectFill(row);
             [NSGraphicsContext restoreGraphicsState];
         }
-        NSColor *fg = hot ? [NSColor whiteColor] : [NSColor blackColor];
+        NSColor *fg = hot ? [OS9Theme menuHoverText] : [OS9Theme textPrimary];
         NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : fg};
         if (e.checked)
             [OS9Theme drawCheckInRect:NSMakeRect(row.origin.x + 6, row.origin.y + (kRowH - 11) / 2, 11, 11)
@@ -159,7 +159,7 @@ static const CGFloat kPadR = 14;   // right padding
     }
 
     // Crisp black box frame, square corners (NSFrameRect: no AA edge buildup on hover redraws).
-    [[NSColor colorWithCalibratedWhite:0.15 alpha:1] set];
+    [[OS9Theme menuBorder] set];
     NSFrameRect(_menuRect);
 }
 

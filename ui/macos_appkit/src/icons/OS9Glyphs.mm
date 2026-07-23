@@ -1,4 +1,5 @@
 #import "icons/OS9Glyphs.h"
+#import "theme/OS9Theme.h"
 
 NSImage *OS9GearImage(CGFloat size) {
     return [NSImage imageWithSize:NSMakeSize(size, size)
@@ -30,7 +31,7 @@ NSImage *OS9GearImage(CGFloat size) {
         CGFloat lw = MAX(1.0, floor(size * 0.09));
         gear.lineWidth = lw;
         gear.lineJoinStyle = NSLineJoinStyleMiter;
-        [[NSColor blackColor] set];
+        [[OS9Theme glyphStroke] set];
         [gear stroke];
 
         // center axle hole (outlined circle)
@@ -55,7 +56,7 @@ NSImage *OS9SendImage(CGFloat size) {
         [body closePath];
         body.lineWidth = 0.6;                              // thinner (was 1.0)
         body.lineJoinStyle = NSLineJoinStyleMiter;
-        [[NSColor blackColor] set];
+        [[OS9Theme glyphStroke] set];
         [body stroke];
         return YES;
     }];
@@ -77,9 +78,9 @@ NSImage *OS9FolderImage(CGFloat size) {
         CGFloat x0   = floor(1 * s),  x1 = floor(15 * s);
         CGFloat yBot = floor(2 * s),  yTop = floor(12 * s);   // top edge of body
         CGFloat tabW = floor(6 * s),  tabH = floor(2 * s);    // tab juts up by tabH
-        NSColor *fill = [NSColor colorWithCalibratedRed:0.62 green:0.74 blue:0.86 alpha:1.0];
-        NSColor *hi   = [NSColor colorWithCalibratedRed:0.82 green:0.90 blue:0.97 alpha:1.0];
-        NSColor *line = [NSColor colorWithCalibratedRed:0.27 green:0.38 blue:0.50 alpha:1.0];
+        NSColor *fill = [OS9Theme glyphBoxFill];
+        NSColor *hi   = [OS9Theme glyphBoxHighlight];
+        NSColor *line = [OS9Theme glyphBoxOutline];
 
         NSBezierPath *p = [NSBezierPath bezierPath];
         [p moveToPoint:NSMakePoint(x0,             yBot)];          // bottom-left
@@ -131,7 +132,7 @@ NSImage *OS9SpinnerImage(CGFloat size, CGFloat phase) {
             sp.lineCapStyle = NSLineCapStyleRound;
             [sp moveToPoint:NSMakePoint(cx + rIn*cos(a),  cy + rIn*sin(a))];
             [sp lineToPoint:NSMakePoint(cx + rOut*cos(a), cy + rOut*sin(a))];
-            [[NSColor colorWithCalibratedWhite:0.0 alpha:alpha] set];
+            [[[OS9Theme glyphStroke] colorWithAlphaComponent:alpha] set];
             [sp stroke];
         }
         return YES;

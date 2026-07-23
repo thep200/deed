@@ -1,4 +1,5 @@
 #import "editor/JsonEditorBehavior.h"
+#import "theme/OS9Theme.h"
 
 #import <ScintillaView.h>
 #include <Scintilla.h>
@@ -28,15 +29,12 @@
 #pragma mark - (f) brace-match
 
 - (void)applyHighlightStyles {
-    // Matched pair: bold + pale yellow background; broken pair: red text.
+    // Matched pair: bold + pale yellow background; broken pair: red text. Colors theme-aware.
     [self msg:SCI_STYLESETBOLD w:STYLE_BRACELIGHT l:1];
-    [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_BRACELIGHT
-                     value:[NSColor colorWithCalibratedRed:0.0 green:0.0 blue:0.55 alpha:1]];
-    [_sci setColorProperty:SCI_STYLESETBACK parameter:STYLE_BRACELIGHT
-                     value:[NSColor colorWithCalibratedRed:1.0 green:0.92 blue:0.55 alpha:1]];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_BRACELIGHT value:[OS9Theme editorBraceFg]];
+    [_sci setColorProperty:SCI_STYLESETBACK parameter:STYLE_BRACELIGHT value:[OS9Theme editorBraceBg]];
     [self msg:SCI_STYLESETBOLD w:STYLE_BRACEBAD l:1];
-    [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_BRACEBAD
-                     value:[NSColor colorWithCalibratedRed:0.8 green:0.0 blue:0.0 alpha:1]];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_BRACEBAD value:[OS9Theme editorBraceBadFg]];
 }
 
 static BOOL IsBrace(char c) {
