@@ -19,6 +19,7 @@
 #include "infra/platform/stream_pool.hpp"
 #include "infra/platform/thread_pool.hpp"
 #include "infra/variables/domain_variable_resolver.hpp"
+#include "infra/transport/graphql/gql_introspection.hpp" // native introspection (introspectGraphQl)
 #include "infra/transport/grpc/grpc_method_listing.hpp" // native gRPC reflection (listGrpcMethods)
 
 #include <chrono>
@@ -533,6 +534,21 @@ CoreApiClient::listGrpcMethods(const d::GrpcRequest &g) {
   if (!err.empty())
     return d::Result<std::vector<d::GrpcMethodDescriptor>>::fail({d::ErrorCode::Network, err, ""});
   return d::Result<std::vector<d::GrpcMethodDescriptor>>::ok(std::move(descs));
+}
+
+d::Result<d::GqlSchema> CoreApiClient::introspectGraphQl(const d::RequestModel &request) {
+  if (request.type() != d::RequestType::GraphQl)
+    return d::Result<d::GqlSchema>::fail({d::ErrorCode::Validation, "not a graphql request", ""});
+  // Resolve {{vars}} against the CURRENT active env (fresh read, like listGrpcMethods — the UI may call
+  // this without a preceding refreshVariableScope). Resolver failure -> proceed unresolved, like send().
+  d::VariableScope scope;
+  scope.values = activeVarsMap(sessionRepo_.get(), envRepo_.get());
+  d::RequestModel resolved = request;
+  if (resolver_) {
+    auto r = resolver_->resolve(request, scope);
+    if (r.isOk()) resolved = r.take();
+  }
+  return gql::runIntrospection(resolved);
 }
 
 } // namespace core::app

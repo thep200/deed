@@ -81,6 +81,7 @@ NSString *const StrTabGqlQuery = @"Query";
 NSString *const StrTabVariables = @"Vars";
 NSString *const StrTabMetadata = @"Metadata";
 NSString *const StrTabConfig = @"Config";
+NSString *const StrTabSchema = @"Schema";
 
 #pragma mark - Kafka client-kind toggle
 NSString *const StrKafkaProducer = @"Prod";
@@ -165,6 +166,8 @@ NSString *const StrToastInvalidSettings = @"Invalid settings JSON — skipped";
 NSString *const StrToastAutosaveFailed = @"Autosave failed: invalid JSON";
 NSString *const StrToastRequestGone = @"Request no longer exists";
 NSString *const StrToastEnterGrpcHost = @"Enter gRPC host first (e.g. localhost:50051)";
+NSString *const StrToastEnterGqlUrl = @"Enter the GraphQL endpoint URL first (e.g. https://api.example.com/graphql)";
+NSString *const StrFetchingSchema = @"Fetching schema...";
 NSString *const StrStatusCancelled = @"Cancelled";
 NSString *const StrStatusNetworkError = @"NETWORK ERROR";
 
@@ -189,5 +192,6 @@ NSString *const StrFmtToastImportFailed = @"Import %@ failed: %s";
 NSString *const StrFmtToastImportedCreated = @"Imported & created: %@";
 NSString *const StrFmtToastReplaced = @"Replaced current request (%@)";
 NSString *const StrFmtToastListRpcs = @"List RPCs: %@";
+NSString *const StrFmtToastFetchSchema = @"Fetch schema: %@";
 NSString *const StrFmtToastCreated = @"Created: %@";
 NSString *const StrFmtVarRenamed = @"Variable renamed; requests using {{%@}} must be updated manually.";

@@ -712,8 +712,11 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
         _respTabTitles = @[ StrTabMessage, StrTabRequest ];
     } else if (t == core::domain::RequestType::GraphQl) {
         // GraphQL: Query document + Variables (JSON) + Headers + Auth. query/mutation -> normal response pane.
+        // Schema = introspected server schema, fetched on first click (content lives in _gqlSchema* ivars,
+        // NOT in _respBuffers — it is independent of the last response). Keep it LAST: response buffers
+        // only cover the first two titles, and the applyResponseBuffers clamp falls back to Response.
         _reqTabTitles = @[ StrTabGqlQuery, StrTabVariables, StrTabHeaders, StrTabAuth, StrTabConfig ];
-        _respTabTitles = @[ StrTabResponse, StrTabRequest ];
+        _respTabTitles = @[ StrTabResponse, StrTabRequest, StrTabSchema ];
     } else if (t == core::domain::RequestType::Kafka) {
         // Producer: Message (key/value/headers) + Kafka (topic/ack/compression/...). Consumer:
         // ONE Kafka tab (topics/group/offset-reset/...) — no Message tab (nothing to compose, SPEC_kafka §2.2).

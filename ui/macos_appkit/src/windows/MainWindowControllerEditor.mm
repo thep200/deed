@@ -143,6 +143,7 @@ static NSArray<NSString *> *BodyAllModes(void);
     _kafkaProducerReqBuffers = nil; _kafkaConsumerReqBuffers = nil;
     _kafkaProducerRespBuffers = nil; _kafkaConsumerRespBuffers = nil;
     _kafkaProducerHasResp = NO; _kafkaConsumerHasResp = NO;
+    [self invalidateGqlSchema];   // schema cache is per-request; a fresh editor context drops it
     _kafkaProducerLastResp = core::domain::ApiResponse{};
     _kafkaConsumerLastResp = core::domain::ApiResponse{};
     namespace d = core::domain;
@@ -482,6 +483,17 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
 
 - (void)respTabClicked:(OS9BevelButton *)b {
     NSInteger tab = b.tag;
+    // Schema tab (GraphQL): content lives in the _gqlSchema* ivars, NOT in _respBuffers — handle BEFORE
+    // the bounds guard so the tab works even when no response exists yet ( _respBuffers empty).
+    if ([self requestType] == core::RequestType::GraphQl && tab >= 0 &&
+        tab < (NSInteger)_respTabTitles.count && [_respTabTitles[tab] isEqualToString:StrTabSchema]) {
+        _activeRespTab = tab;
+        _rightPaneActiveTabKey = StrTabSchema;
+        [self highlightActiveTab:_respTabButtons active:tab];
+        if (!_gqlSchemaFetched && !_gqlSchemaFetching) [self fetchGqlSchema]; // shows "Fetching schema..."
+        [self displayGqlSchemaPane];
+        return;
+    }
     if (tab < 0 || tab >= (NSInteger)_respBuffers.count) return;
     _activeRespTab = tab;
     if (tab < (NSInteger)_respTabTitles.count) _rightPaneActiveTabKey = _respTabTitles[tab];  // remember right pane
@@ -510,6 +522,12 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     // setting editor (Scintilla) holds the cursor?
     if ([_settingEditor hasFocus]) {
         _settingEditor.string = [self applyView:S(_settingEditor.string)];
+        return;
+    }
+    // Schema tab active: Pretty/Raw re-render from the cached schema (SDL vs introspection JSON) —
+    // independent of _hasResp (the tab works before any send).
+    if ([self respActiveTabIsSchema] && (_gqlSchemaFetched || _gqlSchemaFetching)) {
+        [self displayGqlSchemaPane];
         return;
     }
     if (_hasResp) [self rebuildResponseBuffers]; // default: response pane
@@ -573,6 +591,8 @@ static void OS9MarkTreeNeedsDisplay(NSView *v) {
 // Detect "paste/drop" by a sudden length jump (>=8 chars at once) — typing grows 1 char at a time.
 - (void)controlTextDidChange:(NSNotification *)note {
     if (note.object != _urlField) return;
+    // GraphQL: any endpoint edit stales the introspected schema (next Schema-tab click re-fetches).
+    if ([self requestType] == core::RequestType::GraphQl) [self invalidateGqlSchema];
     NSString *text = _urlField.stringValue ?: @"";
     NSUInteger len = text.length;
     NSUInteger prev = _urlPrevLen;
@@ -780,8 +800,10 @@ static NSString *GqlImportLabel(NSInteger kind) {
 
 - (void)methodChanged:(id)sender { }
 - (void)urlCommitted:(id)sender {
-    // gRPC: URL field = target -> Enter reloads the RPC list. HTTP: split out the query.
+    // gRPC: URL field = target -> Enter reloads the RPC list. GraphQL: endpoint changed -> schema stale.
+    // HTTP: split out the query.
     if ([self requestType] == core::RequestType::Grpc) [self reloadGrpcMethods];
+    else if ([self requestType] == core::RequestType::GraphQl) [self invalidateGqlSchema];
     else [self parseUrlQueryIntoQueryTab];
 }
 

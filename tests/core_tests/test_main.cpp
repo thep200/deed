@@ -42,6 +42,7 @@ int run_import_service_tests();
 // Defined in persistence_repo_test.cpp — REFACTOR_SPEC §6.3 env/session/appConfig repository ports. #failures.
 int run_persistence_repo_tests();
 int run_field_json_tests();
+int run_gql_introspection_tests();
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -994,14 +995,15 @@ int main() {
     int importFail = run_import_service_tests(); // REFACTOR_SPEC P6 IImportService (curl/grpcurl/graphql)
     int prepoFail = run_persistence_repo_tests(); // REFACTOR_SPEC §6.3 env/session/appConfig repository ports
     int fieldFail = run_field_json_tests();      // REFACTOR_SPEC Phase E: domain field codec (JSON<->VO)
+    int introFail = run_gql_introspection_tests(); // GraphQL introspection SDL printer (Schema tab)
 
     fs::remove_all(root);
 
-    std::printf("\n==== %d passed, %d failed (+%d stream, +%d ws, +%d sse, +%d gql, +%d mapper, +%d saga, +%d repo, +%d import, +%d prepo, +%d field) ====\n",
-                g_pass, g_fail, streamFail, wsFail, sseFail, gqlFail, mapFail, sagaFail, repoFail, importFail, prepoFail, fieldFail);
+    std::printf("\n==== %d passed, %d failed (+%d stream, +%d ws, +%d sse, +%d gql, +%d mapper, +%d saga, +%d repo, +%d import, +%d prepo, +%d field, +%d intro) ====\n",
+                g_pass, g_fail, streamFail, wsFail, sseFail, gqlFail, mapFail, sagaFail, repoFail, importFail, prepoFail, fieldFail, introFail);
     return (g_fail == 0 && streamFail == 0 && wsFail == 0 && sseFail == 0 && gqlFail == 0 &&
             mapFail == 0 && sagaFail == 0 && repoFail == 0 && importFail == 0 && prepoFail == 0 &&
-            fieldFail == 0)
+            fieldFail == 0 && introFail == 0)
                ? 0
                : 1;
 }

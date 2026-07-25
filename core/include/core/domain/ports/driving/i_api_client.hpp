@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/domain/common/result.hpp"
+#include "core/domain/graphql/gql_schema.hpp"
 #include "core/domain/grpc/grpc_method.hpp"
 #include "core/domain/grpc/grpc_request.hpp"
 #include "core/domain/ports/driving/exec_id.hpp"
@@ -35,6 +36,8 @@ public:
   // Non-sending use-cases (synchronous, pure domain).
   virtual Status validateJson(const JsonText &) = 0;
   virtual Result<std::vector<GrpcMethodDescriptor>> listGrpcMethods(const GrpcRequest &) = 0;
+  // Fetch the endpoint's schema via the standard introspection query (synchronous — call off-main).
+  virtual Result<GqlSchema> introspectGraphQl(const RequestModel &) = 0;
 };
 
 } // namespace core::domain

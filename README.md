@@ -342,7 +342,7 @@ You can also paste a `grpcurl` command into the URL field and Deed imports it as
 
 Queries and mutations are sent over HTTP and show one response. A **subscription** runs over WebSocket using the `graphql-transport-ws` protocol (the legacy `subscriptions-transport-ws` is also supported) and streams events into the right pane until you press **Cancel** — set `"subTransport": "ws"` in the saved request file to switch the transport over.
 
-Deed haven't supported instrospect yet.
+**Schema (introspection)** — the right pane has a **Schema** tab. First click POSTs the standard introspection query to the endpoint (with the request's headers/auth) and renders the server schema as SDL; the **Pretty/Raw** button toggles between SDL and the raw introspection JSON. The result is cached per request and refetched after you edit the URL, switch requests, or a send fails — just click the tab again. Servers with introspection disabled show the error as a toast.
 
 ![GraphQL](assets/images/graphql.png)
 

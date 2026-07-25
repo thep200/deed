@@ -47,6 +47,7 @@ add_library(core STATIC
   src/infra/transport/ws/ws_sender.cpp
   src/infra/transport/kafka/kafka_sender.cpp
   src/infra/transport/shared/sse_parser.cpp
+  src/infra/transport/graphql/gql_introspection.cpp
   src/infra/transport/graphql/gql_operation.cpp
   src/infra/transport/graphql/gql_ws_protocol.cpp
   src/infra/import/shell_tokenize.cpp

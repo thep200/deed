@@ -69,6 +69,7 @@ public:
   domain::Status validateJson(const domain::JsonText &) override;
   domain::Result<std::vector<domain::GrpcMethodDescriptor>>
   listGrpcMethods(const domain::GrpcRequest &) override;
+  domain::Result<domain::GqlSchema> introspectGraphQl(const domain::RequestModel &) override;
 
   // Set the active environment's {{var}} bindings used to resolve requests before sending. The UI calls
   // this when the active environment changes (mirrors Engine's active-env snapshot).

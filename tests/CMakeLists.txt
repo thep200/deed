@@ -3,7 +3,7 @@ add_executable(core_tests core_tests/test_main.cpp core_tests/stream_sink_test.c
                core_tests/gql_ws_protocol_test.cpp core_tests/mapper_roundtrip_test.cpp
                core_tests/saga_test.cpp core_tests/repository_test.cpp
                core_tests/import_service_test.cpp core_tests/persistence_repo_test.cpp
-               core_tests/field_json_test.cpp)
+               core_tests/field_json_test.cpp core_tests/gql_introspection_test.cpp)
 target_link_libraries(core_tests PRIVATE core)
 # White-box access to infra mappers/sagas (core/src) for REFACTOR_SPEC P2+ tests.
 target_include_directories(core_tests PRIVATE ${CMAKE_SOURCE_DIR}/core/src)

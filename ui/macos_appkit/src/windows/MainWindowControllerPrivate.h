@@ -102,6 +102,14 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     BOOL _grpcMethodsFetched;     // true once fetched for THIS request -> reuse, don't re-fetch (until invalidated)
     uint64_t _loadReqSeq;         // token: apply only the LATEST loadRequestAtRel model (async load)
 
+    // GraphQL introspected schema (Schema response tab) — same lifecycle as the gRPC trio above:
+    // fetched on first tab click, cached per request, invalidated on URL edit / request switch / send failure.
+    NSString *_gqlSchemaSdl;      // SDL view (Pretty)
+    NSString *_gqlSchemaJson;     // raw introspection JSON view (Raw)
+    uint64_t _gqlSchemaReqSeq;    // race guard: apply only the latest introspectGraphQl result
+    BOOL _gqlSchemaFetched;       // true once fetched for THIS request
+    BOOL _gqlSchemaFetching;      // in flight -> block double-fetch on re-click
+
     // Chrome + containers
     NSWindow *_window;
     CALayer *_cornerMask;       // SQUARE_CORNERS=2: 9-slice non-AA mask -> pixel-rounded window corners (nil otherwise)
@@ -354,6 +362,11 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)applyGrpcMethods:(const std::vector<core::domain::GrpcMethodDescriptor> &)methods error:(NSString *)err                 openMenu:(BOOL)openMenu;
 - (void)serviceMethodChanged:(id)sender;
 - (void)applySelectedGrpcMethod:(NSInteger)idx;
+- (void)invalidateGqlSchema;
+- (BOOL)respActiveTabIsSchema;
+- (void)displayGqlSchemaPane;
+- (void)fetchGqlSchema;
+- (void)applyGqlSchema:(NSString *)sdl json:(NSString *)json error:(NSString *)err;
 - (void)manageEnv:(id)sender;
 - (void)showContextMenuForRow:(NSInteger)row atWindowPoint:(NSPoint)pt;
 - (void)purgeCacheAtRel:(NSString *)rel isFolder:(BOOL)isFolder;

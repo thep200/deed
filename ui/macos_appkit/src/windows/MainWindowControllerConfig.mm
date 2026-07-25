@@ -254,6 +254,79 @@ static NSString *GrpcRpcLabel(const std::string &service, const std::string &met
     if (openMenu) [_servicePopup openMenu];
 }
 
+#pragma mark - GraphQL schema introspection (Schema response tab)
+
+// Drop the cached schema (URL edit / request switch / send failure). Silent — no pane/display touch;
+// the NEXT Schema-tab click re-fetches. Mirrors showSavedGrpcMethodLabel's invalidate role.
+- (void)invalidateGqlSchema {
+    _gqlSchemaSdl = nil;
+    _gqlSchemaJson = nil;
+    _gqlSchemaFetched = NO;
+    _gqlSchemaFetching = NO;
+}
+
+- (BOOL)respActiveTabIsSchema {
+    return [self requestType] == core::RequestType::GraphQl &&
+           _activeRespTab >= 0 && _activeRespTab < (NSInteger)_respTabTitles.count &&
+           [_respTabTitles[_activeRespTab] isEqualToString:StrTabSchema];
+}
+
+// Single render point for the Schema tab: Pretty (and Encode/Decode) -> SDL, Raw -> introspection JSON.
+- (void)displayGqlSchemaPane {
+    if (_gqlSchemaFetching) { _respText.string = StrFetchingSchema; return; }
+    if (!_gqlSchemaFetched) { _respText.string = @""; return; }
+    _respText.string = (_prettyMode == 1 ? _gqlSchemaJson : _gqlSchemaSdl) ?: @"";
+}
+
+// Fetch the endpoint's schema via the standard introspection query (first Schema-tab click). Mirrors
+// fetchGrpcMethodsThenOpen: silent editor sync, seq race guard, background call, main-queue apply.
+- (void)fetchGqlSchema {
+    if (!_model || _model->type() != core::domain::RequestType::GraphQl || !_apiClient) return;
+    // Persist URL/headers/auth edits into the model; on bad-JSON sync failure proceed with the
+    // last-good model (same tolerance as autosave).
+    [self syncModelFromEditors:YES];
+    const auto &g = std::get<core::domain::GraphQlRequest>(_model->payload());
+    if (g.url().raw().empty()) {
+        [self toastWarn:StrToastEnterGqlUrl];
+        return;
+    }
+    _gqlSchemaFetching = YES;
+    if ([self respActiveTabIsSchema]) [self displayGqlSchemaPane]; // "Fetching schema..."
+
+    uint64_t seq = ++_gqlSchemaReqSeq;
+    core::domain::RequestModel mReq = *_model; // copy for the background thread
+    core::app::CoreApiClient *api = _apiClient.get();
+    __weak MainWindowController *ws = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        auto res = api->introspectGraphQl(mReq);
+        NSString *sdl = res.isOk() ? N(res.value().sdl) : nil;
+        NSString *json = res.isOk() ? N(res.value().json) : nil;
+        NSString *errStr = res.isOk() ? nil : N(res.error().message);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            MainWindowController *s = ws;
+            if (!s || seq != s->_gqlSchemaReqSeq) return; // a newer fetch (or invalidation) superseded this
+            [s applyGqlSchema:sdl json:json error:errStr];
+        });
+    });
+}
+
+- (void)applyGqlSchema:(NSString *)sdl json:(NSString *)json error:(NSString *)err {
+    _gqlSchemaFetching = NO;
+    if (err.length || !sdl) {
+        _gqlSchemaFetched = NO; // failed -> the next click retries
+        _gqlSchemaSdl = nil;
+        _gqlSchemaJson = nil;
+        [self toastWarn:[NSString stringWithFormat:StrFmtToastFetchSchema, err ?: @"unknown error"]];
+        if ([self respActiveTabIsSchema])
+            _respText.string = [NSString stringWithFormat:@"[Error] %@", err ?: @""];
+        return;
+    }
+    _gqlSchemaSdl = sdl;
+    _gqlSchemaJson = json ?: @"";
+    _gqlSchemaFetched = YES;
+    if ([self respActiveTabIsSchema]) [self displayGqlSchemaPane];
+}
+
 // User picks an RPC -> write service/method/methodType into the model (autosave persists it).
 - (void)serviceMethodChanged:(id)sender {
     [self applySelectedGrpcMethod:_servicePopup.selectedIndex];

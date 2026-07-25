@@ -96,6 +96,7 @@ extern NSString *const StrTabGqlQuery;
 extern NSString *const StrTabVariables;
 extern NSString *const StrTabMetadata;
 extern NSString *const StrTabConfig;
+extern NSString *const StrTabSchema; // GraphQL response pane: introspected server schema
 
 #pragma mark - Kafka client-kind toggle (SPEC_kafka §2.0)
 extern NSString *const StrKafkaProducer;
@@ -183,6 +184,8 @@ extern NSString *const StrToastInvalidSettings;
 extern NSString *const StrToastAutosaveFailed;
 extern NSString *const StrToastRequestGone;
 extern NSString *const StrToastEnterGrpcHost;
+extern NSString *const StrToastEnterGqlUrl;
+extern NSString *const StrFetchingSchema;
 extern NSString *const StrStatusCancelled;
 extern NSString *const StrStatusNetworkError;
 
@@ -209,5 +212,6 @@ extern NSString *const StrFmtToastImportFailed;
 extern NSString *const StrFmtToastImportedCreated;
 extern NSString *const StrFmtToastReplaced;
 extern NSString *const StrFmtToastListRpcs;
+extern NSString *const StrFmtToastFetchSchema;
 extern NSString *const StrFmtToastCreated;
 extern NSString *const StrFmtVarRenamed;

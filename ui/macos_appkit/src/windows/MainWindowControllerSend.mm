@@ -151,6 +151,8 @@
     // gRPC send failed -> the RPC list may be stale (server down/changed). Invalidate so the next
     // dropdown open re-fetches it (requirement: re-fetch starting from the failed send).
     if ([self requestType] == core::RequestType::Grpc) _grpcMethodsFetched = NO;
+    // GraphQL send failed -> the cached schema may be stale for the same reason (click-triggered re-fetch).
+    if ([self requestType] == core::RequestType::GraphQl) [self invalidateGqlSchema];
     [self finishSending];
     [self displayErrorKind:err.kind message:N(err.message) elapsedMs:[self measuredElapsedMs]];
     [self toastWarn:[NSString stringWithFormat:@"%@: %@", N(core::domain::toString(err.kind)), N(err.message)]];
@@ -236,6 +238,7 @@
         line = [NSString stringWithFormat:StrFmtStreamError, kind, code, message ?: @""];
         color = [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0];
         if ([self requestType] == core::RequestType::Grpc) _grpcMethodsFetched = NO;   // re-fetch RPCs next open
+        if ([self requestType] == core::RequestType::GraphQl) [self invalidateGqlSchema]; // schema stale too
     }
     _statusLabel.stringValue = line;
     _statusLabel.textColor = color;
@@ -397,6 +400,16 @@
 - (void)applyResponseBuffers:(NSArray<NSString *> *)bufs {
     [_respBuffers removeAllObjects];
     [_respBuffers addObjectsFromArray:bufs];
+    // Schema tab (GraphQL) is NOT buffer-backed: if it is the remembered tab and a schema is cached,
+    // keep showing it (a send must not yank the user off the schema). Unfetched -> clamp below -> tab 0.
+    NSInteger si = [_respTabTitles indexOfObject:StrTabSchema];
+    if (si != NSNotFound && _gqlSchemaFetched && [_rightPaneActiveTabKey isEqualToString:StrTabSchema] &&
+        [self requestType] == core::RequestType::GraphQl) {
+        _activeRespTab = si;
+        [self displayGqlSchemaPane];
+        [self highlightActiveTab:_respTabButtons active:si];
+        return;
+    }
     // Reapply the right pane's remembered tab (semantic key); no match -> first tab.
     NSInteger ri = [self tabIndexForKey:_rightPaneActiveTabKey inTitles:_respTabTitles];
     if (ri >= (NSInteger)_respBuffers.count) ri = 0;
