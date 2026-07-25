@@ -7,6 +7,7 @@
     { "name": "curl", "features": ["websockets"] },
     "nlohmann-json",
     "grpc",
-    { "name": "librdkafka", "default-features": false, "features": ["zlib"] }
+    { "name": "librdkafka", "default-features": false, "features": ["zlib"] },
+    "avro-cpp"
   ]
 }

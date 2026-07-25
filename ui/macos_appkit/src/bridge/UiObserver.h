@@ -80,7 +80,8 @@ private:
     });
   }
   void deliverChunk(const std::string &chunk, std::uint64_t count) {
-    NSString *c = [NSString stringWithUTF8String:chunk.c_str()];
+    // stringWithUTF8String returns nil on invalid UTF-8 -> keep the stream framing alive with a marker.
+    NSString *c = [NSString stringWithUTF8String:chunk.c_str()] ?: @"\n  \"<non-UTF-8 chunk dropped>\"";
     const std::uint64_t tok = token_;
     __weak id<CoreResponseSink> ws = sink_;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -90,7 +91,7 @@ private:
   }
   void deliverClose(core::StreamStatus status, int code, const std::string &msg, std::uint64_t events,
                     long long elapsedMs) {
-    NSString *m = [NSString stringWithUTF8String:msg.c_str()];
+    NSString *m = [NSString stringWithUTF8String:msg.c_str()] ?: @"<non-UTF-8 message>";
     const std::uint64_t tok = token_;
     __weak id<CoreResponseSink> ws = sink_;
     dispatch_async(dispatch_get_main_queue(), ^{

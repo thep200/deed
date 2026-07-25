@@ -47,7 +47,11 @@ add_library(core STATIC
   src/infra/transport/ws/ws_sender.cpp
   src/infra/transport/kafka/kafka_sender.cpp
   src/infra/transport/shared/sse_parser.cpp
+  src/infra/auth/oauth2_token_provider.cpp
   src/infra/transport/graphql/gql_introspection.cpp
+  src/infra/transport/http/blocking_fetch.cpp
+  src/infra/transport/kafka/avro_serde.cpp
+  src/infra/transport/kafka/schema_registry_client.cpp
   src/infra/transport/graphql/gql_operation.cpp
   src/infra/transport/graphql/gql_ws_protocol.cpp
   src/infra/import/shell_tokenize.cpp
@@ -76,6 +80,7 @@ target_link_libraries(core
     protobuf::libprotobuf          # descriptor / dynamic_message / json_util
     protobuf::libprotoc            # compiler::Importer / DiskSourceTree (load .proto at runtime)
     RdKafka::rdkafka++             # Kafka producer+consumer (SPEC_kafka §6) — confined to src/infra/transport/kafka
+    avro-cpp::avrocpp              # Kafka Avro value serde (SPEC_kafka Avro v1) — confined to src/infra/transport/kafka
 )
 
 target_compile_features(core PUBLIC cxx_std_17)

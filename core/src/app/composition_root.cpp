@@ -19,6 +19,8 @@
 #include "infra/platform/stream_pool.hpp"
 #include "infra/platform/thread_pool.hpp"
 #include "infra/variables/domain_variable_resolver.hpp"
+#include "core/domain/auth/with_auth.hpp"                // oauth2Of/withAuth (OAuth2 materialization)
+#include "infra/auth/oauth2_token_provider.hpp"          // OAuth2 token fetch + cache (ITokenProvider)
 #include "infra/transport/graphql/gql_introspection.hpp" // native introspection (introspectGraphQl)
 #include "infra/transport/grpc/grpc_method_listing.hpp" // native gRPC reflection (listGrpcMethods)
 
@@ -254,6 +256,7 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
   std::unique_ptr<CoreApiClient> c(new CoreApiClient());
   c->clock_ = std::make_unique<infra::SystemClock>();
   c->validator_ = std::make_unique<infra::JsonValidator>();
+  c->tokenProvider_ = std::make_unique<infra::oauth2::OAuth2TokenProvider>(c->clock_.get());
   c->resolver_ = std::make_unique<infra::DomainVariableResolver>();
   c->importer_ = std::make_unique<infra::ImportService>();
 
@@ -294,7 +297,8 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
   c->streamPool_ = std::make_unique<core::StreamPool>();
   core::ThreadPool *pool = c->pool_.get();
   core::StreamPool *streamPool = c->streamPool_.get();
-  SendRequestSaga::Deps deps{ptrs, c->clock_.get(), c->validator_.get(), nullptr};
+  SendRequestSaga::Deps deps{ptrs, c->clock_.get(), c->validator_.get(), nullptr,
+                             c->tokenProvider_.get()};
   c->orchestrator_ = std::make_unique<RequestOrchestrator>(
       deps,
       [pool](std::function<void()> job) {
@@ -382,8 +386,15 @@ core::domain::RequestModel CoreApiClient::aliasifyModel(const core::domain::Requ
       if constexpr (std::is_same_v<T, d::AuthNone>) return d::Auth::none();
       else if constexpr (std::is_same_v<T, d::AuthBearer>) {
         auto r = d::Auth::bearer(whole(x.token)); return r ? r.take() : a;
-      } else { // AuthBasic
+      } else if constexpr (std::is_same_v<T, d::AuthBasic>) {
         auto r = d::Auth::basic(whole(x.username), whole(x.password)); return r ? r.take() : a;
+      } else { // AuthOAuth2 — alias every user-typed string field (NOT a catch-all: keep branches
+               // explicit; a trailing else here once silently coerced new alternatives to Basic)
+        d::AuthOAuth2 o = x;
+        o.tokenUrl = whole(o.tokenUrl); o.clientId = whole(o.clientId);
+        o.clientSecret = whole(o.clientSecret); o.scope = whole(o.scope);
+        o.username = whole(o.username); o.password = whole(o.password);
+        auto r = d::Auth::oauth2(std::move(o)); return r ? r.take() : a;
       }
     });
   };
@@ -547,6 +558,21 @@ d::Result<d::GqlSchema> CoreApiClient::introspectGraphQl(const d::RequestModel &
   if (resolver_) {
     auto r = resolver_->resolve(request, scope);
     if (r.isOk()) resolved = r.take();
+  }
+  // Introspection bypasses the saga, so OAuth2 materializes here too (Schema tab honors the Auth tab).
+  if (const auto *oauth = d::oauth2Of(resolved)) {
+    if (!tokenProvider_)
+      return d::Result<d::GqlSchema>::fail({d::ErrorCode::Unsupported, "oauth2 not configured", ""});
+    struct NeverCancel final : d::ICancellationToken {
+      bool cancelled() const noexcept override { return false; }
+    } cancel;
+    auto tok = tokenProvider_->bearerFor(*oauth, resolved.config().timeout, cancel);
+    if (!tok.isOk())
+      return d::Result<d::GqlSchema>::fail(
+          {tok.error().code, "oauth2 token: " + tok.error().message, ""});
+    auto bearer = d::Auth::bearer(tok.take());
+    if (!bearer.isOk()) return d::Result<d::GqlSchema>::fail(bearer.error());
+    resolved = d::withAuth(resolved, bearer.take());
   }
   return gql::runIntrospection(resolved);
 }

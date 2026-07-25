@@ -33,6 +33,7 @@
   - [Kafka](#kafka)
     - [Producer](#producer)
     - [Consumer](#consumer)
+    - [Avro (Schema Registry)](#avro-schema-registry)
 - [Releases](#releases)
 
 # Overview
@@ -43,8 +44,8 @@ Supports:
 - SSE
 - gRPC (unary, server-streaming, client-streaming, bidi)
 - WebSocket
-- GraphQL (query, mutation, subscription)
-- Kafka (producer & consumer)
+- GraphQL (query, mutation, subscription, schema introspection)
+- Kafka (producer & consumer, Avro via Schema Registry)
 
 # Installation
 
@@ -61,8 +62,9 @@ Currently, I'm still shipping deed files as `.app`. Please download the latest v
 - SSE
 - gRPC
 - WebSocket
-- GraphQL
-- Kafka
+- GraphQL (incl. schema introspection — Schema tab)
+- Kafka (incl. Avro values via Confluent Schema Registry)
+- Auth: Basic, Bearer, OAuth2 (client credentials / password, token fetched & cached automatically)
 - Lazy load collection tree
 - Request editor (JSON)
 - Response viewer (JSON)
@@ -76,6 +78,8 @@ Currently, I'm still shipping deed files as `.app`. Please download the latest v
 - Scintilla
 - libcurl/cpr
 - gRPC C++ + Protobuf
+- librdkafka
+- Apache Avro (avro-cpp)
 - nlohmann/json
 - CMake + Ninja
 
@@ -141,7 +145,7 @@ Every request type follows the same path when you press **Send**:
 
 1. Deed reads the URL field and the left-hand tabs (bad JSON in a tab shows a toast and jumps you to the offending tab — nothing is sent).
 2. Every `{{key}}` is replaced with its value from the active environment.
-3. Auth is applied and disabled lines are dropped.
+3. Auth is applied and disabled lines are dropped (an `oauth2` auth fetches its token here — cached, so only the first send of a session pays the extra round-trip).
 4. The request goes out on a background worker, so the UI never freezes and you can keep browsing the collection.
 
 What comes back depends on the request's shape:
@@ -244,7 +248,7 @@ URL: localhost:8080/api/products?limit=1000
 
 ### Request Auth
 
-The **Auth** tab is one flat JSON object with a single `type` key: **none**, **basic**, or **bearer**. All fields sit next to `type` — no nesting.
+The **Auth** tab is one flat JSON object with a single `type` key: **none**, **basic**, **bearer**, or **oauth2**. All fields sit next to `type` — no nesting.
 
 None:
 
@@ -272,6 +276,25 @@ Bearer — a token:
   "token": "{{token}}"
 }
 ```
+
+OAuth2 — Deed fetches the token itself, caches it in RAM for the session, and refreshes it near expiry. Works for HTTP, GraphQL (both transports), and WebSocket; the request goes out as a plain `Authorization: Bearer …`:
+
+```json
+{
+  "type": "oauth2",
+  "grant": "client_credentials",
+  "tokenUrl": "https://idp.example.com/connect/token",
+  "clientId": "{{clientId}}",
+  "clientSecret": "{{clientSecret}}",
+  "scope": "api",
+  "clientAuth": "header"
+}
+```
+
+- `grant` — `"client_credentials"` (default) or `"password"` (then add `"username"` / `"password"` fields). Authorization-code/PKCE is not supported yet.
+- `clientAuth` — how the client authenticates at the token endpoint: `"header"` (HTTP Basic, the RFC default) or `"body"` (`client_id`/`client_secret` as form fields — some IdPs insist).
+- `scope` is optional; `{{var}}` works in every field, including the secret.
+- A token-fetch failure fails the send with an `oauth2 token: …` message. WebSocket fetches the token once at the handshake — a token expiring mid-session does not re-handshake.
 
 Need an API key? That's just a header (or query param) — put it in the **Headers** or **Query** tab directly, e.g. header `X-API-Key: {{apiKey}}`. The former `apikey` auth type was removed for exactly this reason.
 
@@ -416,6 +439,26 @@ One **Kafka** tab:
 - `maxMessages` — `null` tails forever; a number stops after N records.
 
 **Send** starts tailing: records stream into the right pane live (topic, partition, offset, key, value, headers, timestamp). Press **Cancel** to stop.
+
+### Avro (Schema Registry)
+
+Deed speaks the Confluent wire format (magic byte + schema id + Avro binary) for message **values** (keys stay plain strings).
+
+**Producer** — you still type plain JSON in the Message tab; set two keys in the **Kafka** tab and Deed serializes it to Avro on send:
+
+```json
+{
+  "topic": "events",
+  "valueFormat": "avro",
+  "schemaRegistry": { "url": "http://localhost:8081", "username": "", "password": "" }
+}
+```
+
+Deed fetches the **latest** schema registered for the subject `<topic>-value` (TopicNameStrategy) and encodes your JSON against it. There's no schema registration in Deed — register the schema first (CI, `curl`, or the console tools). Avro **union** fields use the Avro-JSON encoding — `{"string": "hello"}` or `null`, the same convention `kafka-avro-console-producer` expects.
+
+**Consumer** — add the same `schemaRegistry` block to the consumer's Kafka tab and decoding is automatic: any record whose value carries the Confluent framing is decoded and shown as JSON, annotated with `"valueEncoding": "avro (id N)"`. Records that aren't Avro-framed display verbatim as before. If the registry is unreachable or the schema can't decode the bytes, the record still streams — verbatim, marked `undecoded` — and Deed retries the registry at most once per schema id every 30 seconds.
+
+> Registry credentials are stored in the request file as plain text (like every other secret today) — prefer `{{vars}}` from an environment you don't commit.
 
 # Releases
 

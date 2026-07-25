@@ -13,6 +13,7 @@
 #include "core/domain/ports/driven/i_request_observer.hpp"
 #include "core/domain/ports/driven/i_request_sender.hpp"
 #include "core/domain/ports/driven/i_response_cache.hpp"
+#include "core/domain/ports/driven/i_token_provider.hpp"
 #include "core/domain/request/request_model.hpp"
 #include "core/domain/ws/ws_message.hpp"
 
@@ -28,6 +29,7 @@ public:
     domain::IClock *clock = nullptr;               // required
     domain::IJsonValidator *jsonValidator = nullptr; // optional (skip JSON validation if null)
     domain::IResponseCache *cache = nullptr;         // optional (skip caching if null)
+    domain::ITokenProvider *tokenProvider = nullptr; // optional (an oauth2 request FAILS without it)
   };
 
   SendRequestSaga(domain::RequestExecutionId exec, domain::RequestModel request, Deps deps);

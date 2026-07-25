@@ -82,6 +82,10 @@ void appendHeadersAndAuth(std::string& cmd, const d::HeaderList& headers, const 
             cmd += " \\\n  -H " + shq("Authorization: Bearer " + a.token);
         else if constexpr (std::is_same_v<T, d::AuthBasic>)
             cmd += " \\\n  -u " + shq(a.username + ":" + a.password);
+        else if constexpr (std::is_same_v<T, d::AuthOAuth2>)
+            // Export stays a pure render (no network, no token cache): reference an env var the user
+            // fills (a mid-command shell comment would break the \-continuation chain).
+            cmd += " \\\n  -H \"Authorization: Bearer $OAUTH2_TOKEN\"";
     });
 }
 

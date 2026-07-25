@@ -18,6 +18,7 @@
 #include "core/domain/ports/driving/i_import_service.hpp"
 #include "core/domain/ports/driven/i_json_validator.hpp"
 #include "core/domain/ports/driven/i_request_sender.hpp"
+#include "core/domain/ports/driven/i_token_provider.hpp"
 #include "core/domain/ports/driven/i_variable_resolver.hpp"
 
 namespace core {
@@ -119,6 +120,7 @@ private:
   std::vector<std::unique_ptr<domain::IRequestSender>> senders_;
   std::unique_ptr<domain::IClock> clock_;
   std::unique_ptr<domain::IJsonValidator> validator_;
+  std::unique_ptr<domain::ITokenProvider> tokenProvider_; // OAuth2 (may be referenced by running sagas)
   std::unique_ptr<domain::IVariableResolver> resolver_;
   std::unique_ptr<domain::IImportService> importer_; // pasted-command import (curl/grpcurl/graphql)
   std::unique_ptr<ICollectionRepository> collectionRepo_; // collection/env/session/app-config/cache repos

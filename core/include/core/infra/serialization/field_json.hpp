@@ -32,7 +32,8 @@ std::string paramsToJson(const domain::QueryParamList &);
 domain::Result<domain::QueryParamList> jsonToParams(const std::string &);
 
 // Auth — flat JSON discriminated by "type": {"type":"none"} | {"type":"basic",username,password} |
-// {"type":"bearer",token} <-> Auth. Legacy nested sub-objects and the removed "apikey" type still read.
+// {"type":"bearer",token} | {"type":"oauth2",grant,tokenUrl,clientId,clientSecret,scope,clientAuth
+// [,username,password]} <-> Auth. Legacy nested sub-objects and the removed "apikey" type still read.
 std::string authToJson(const domain::Auth &);
 domain::Result<domain::Auth> jsonToAuth(const std::string &);
 

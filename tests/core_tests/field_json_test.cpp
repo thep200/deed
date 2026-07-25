@@ -62,6 +62,43 @@ int run_field_json_tests() {
     // Removed "apikey" type: saved files degrade to none instead of failing to load.
     auto lk = serial::jsonToAuth(R"({"type":"apikey","key":"k","value":"v","in":"query"})");
     check(lk.isOk() && lk.value() == Auth::none(), "legacy apikey degrades to none");
+
+    // OAuth2: both grants round-trip; defaults fill; unknown enum strings rejected.
+    AuthOAuth2 occ;
+    occ.tokenUrl = "https://idp/token"; occ.clientId = "cid"; occ.clientSecret = "s"; occ.scope = "r";
+    Auth oauthCc = Auth::oauth2(occ).take();
+    auto rcc = serial::jsonToAuth(serial::authToJson(oauthCc));
+    check(rcc.isOk() && rcc.value() == oauthCc, "auth oauth2 (client_credentials) round-trip");
+    AuthOAuth2 opw = occ;
+    opw.grant = OAuth2Grant::Password; opw.username = "u"; opw.password = "p";
+    opw.clientAuth = OAuth2ClientAuth::Body;
+    Auth oauthPw = Auth::oauth2(opw).take();
+    auto rpw = serial::jsonToAuth(serial::authToJson(oauthPw));
+    check(rpw.isOk() && rpw.value() == oauthPw, "auth oauth2 (password/body) round-trip");
+    auto defs = serial::jsonToAuth(R"({"type":"oauth2","tokenUrl":"https://t","clientId":"c"})");
+    check(defs.isOk(), "oauth2 minimal parses (defaults)");
+    check(!serial::jsonToAuth(R"({"type":"oauth2","tokenUrl":"t","clientId":"c","grant":"implicit"})").isOk(),
+          "oauth2 unknown grant rejected");
+    check(!serial::jsonToAuth(R"({"type":"oauth2","tokenUrl":"t","clientId":"c","clientAuth":"query"})").isOk(),
+          "oauth2 unknown clientAuth rejected");
+  }
+
+  // Kafka record display: valueEncoding annotation + non-UTF8 must never throw (it renders inside a
+  // noexcept observer — a throw is std::terminate; regression for the Avro-binary-value crash).
+  {
+    KafkaRecord r;
+    r.topic = "t";
+    r.value = "{\"a\":1}";
+    std::string plain = serial::kafkaRecordToDisplayJson(r);
+    check(plain.find("valueEncoding") == std::string::npos, "record display: no encoding key when plain");
+    r.valueEncoding = "avro (id 7)";
+    check(serial::kafkaRecordToDisplayJson(r).find("avro (id 7)") != std::string::npos,
+          "record display: valueEncoding shown");
+    KafkaRecord bin;
+    bin.topic = "t";
+    bin.value = std::string("\x00\x01\xff\xfe", 4); // invalid UTF-8 + NULs
+    std::string out = serial::kafkaRecordToDisplayJson(bin);
+    check(!out.empty(), "record display: non-UTF8 bytes render (no throw)");
   }
 
   // Body: each variant round-trips.

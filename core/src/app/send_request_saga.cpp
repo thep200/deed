@@ -1,5 +1,7 @@
 #include "core/app/send_request_saga.hpp"
 
+#include "core/domain/auth/with_auth.hpp"
+
 #include <chrono>
 #include <functional>
 #include <optional>
@@ -93,8 +95,26 @@ void SendRequestSaga::run(d::IRequestObserver &observer) {
     }
   }
 
-  // 2. pick a sender for this request type.
+  // 2. materialize OAuth2 -> Bearer (port; senders only ever see none/basic/bearer). The token POST
+  // blocks THIS worker thread bounded by the request's own config timeout; Cancel aborts it via token_.
   state_ = SagaState::Preparing;
+  if (const auto *oauth = d::oauth2Of(request_)) {
+    if (!deps_.tokenProvider) {
+      emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Unsupported, "oauth2 not configured", {}}}));
+      return;
+    }
+    auto tok = deps_.tokenProvider->bearerFor(*oauth, request_.config().timeout, token_);
+    auto bearer = tok.isOk() ? d::Auth::bearer(tok.take())
+                             : d::Result<d::Auth>::fail(tok.error());
+    if (!bearer.isOk()) {
+      emit(d::ResponseEvent(
+          d::EvFailed{{toErrorKind(bearer.error().code), "oauth2 token: " + bearer.error().message, {}}}));
+      return;
+    }
+    request_ = d::withAuth(request_, bearer.take());
+  }
+
+  // 3. pick a sender for this request type.
   domain::IRequestSender *picked = nullptr;
   for (auto *s : deps_.senders)
     if (s && s->supports(request_.type())) { picked = s; break; }
@@ -104,7 +124,7 @@ void SendRequestSaga::run(d::IRequestObserver &observer) {
     return;
   }
 
-  // 3. start.
+  // 4. start.
   state_ = SagaState::Active;
   long long atMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                        (deps_.clock ? deps_.clock->now() : std::chrono::steady_clock::now())
@@ -116,7 +136,7 @@ void SendRequestSaga::run(d::IRequestObserver &observer) {
     return;
   }
 
-  // 4. execute (sender emits EvMetadata/EvMessage/EvCompleted/EvFailed via the sink). For a duplex/stream
+  // 5. execute (sender emits EvMetadata/EvMessage/EvCompleted/EvFailed via the sink). For a duplex/stream
   // session (WebSocket) execute BLOCKS until the session closes, keeping this saga alive so push/cancel
   // from other threads reach the bound sender.
   FnSink sink;

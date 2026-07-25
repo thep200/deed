@@ -12,6 +12,9 @@ namespace core::domain {
 
 enum class Acks { None, Leader, All };               // "0" / "1" / "all"
 enum class Compression { None, Gzip, Snappy, Lz4, Zstd };
+// How the (always-JSON) editor value goes on the wire: verbatim JSON text, or Avro binary in the
+// Confluent framing, serialized against the LATEST Schema Registry schema of `<topic>-value`.
+enum class KafkaValueFormat { Json, Avro };
 
 // New-request producer defaults (SPEC_kafka §3). Pure domain — these seed a freshly created request's
 // Config tab; the user edits them per request in the UI (they are not app-global .env tunables).
@@ -32,12 +35,15 @@ struct KafkaProduceConfig {
   int retries = kDefaultProduceRetries;
   bool idempotence = false;
   std::string clientId = kDefaultKafkaClientId;
+  KafkaValueFormat valueFormat = KafkaValueFormat::Json; // Avro needs schemaRegistry (checked at send)
+  SchemaRegistryRef schemaRegistry;
   std::vector<KafkaExtra> extra;
 
   bool operator==(const KafkaProduceConfig &o) const {
     return topic == o.topic && partition == o.partition && acks == o.acks && compression == o.compression &&
            messageTimeout == o.messageTimeout && linger == o.linger && retries == o.retries &&
-           idempotence == o.idempotence && clientId == o.clientId && extra == o.extra;
+           idempotence == o.idempotence && clientId == o.clientId && valueFormat == o.valueFormat &&
+           schemaRegistry == o.schemaRegistry && extra == o.extra;
   }
   bool operator!=(const KafkaProduceConfig &o) const { return !(*this == o); }
 };

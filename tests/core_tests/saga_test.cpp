@@ -60,11 +60,23 @@ struct FakeSender final : IRequestSender {
   std::vector<ResponseEvent> script;
   bool returnFail = false;
   bool executed = false;
+  Auth seenAuth = Auth::none(); // what the saga handed us (asserts the OAuth2 -> Bearer rewrite)
   bool supports(RequestType t) const override { return t == type; }
-  Status execute(const RequestModel &, IResponseSink &sink, const ICancellationToken &) override {
+  Status execute(const RequestModel &m, IResponseSink &sink, const ICancellationToken &) override {
     executed = true;
+    if (m.type() == RequestType::Http) seenAuth = std::get<HttpRequest>(m.payload()).auth();
     for (const auto &ev : script) sink.emit(ev);
     return returnFail ? Status::fail({ErrorCode::Network, "boom"}) : core::domain::ok();
+  }
+};
+
+struct FakeTokenProvider final : ITokenProvider {
+  Result<std::string> result = Result<std::string>::ok("tok123");
+  int calls = 0;
+  Result<std::string> bearerFor(const AuthOAuth2 &, const Timeout &,
+                                const ICancellationToken &) override {
+    ++calls;
+    return result;
   }
 };
 
@@ -73,6 +85,17 @@ RequestModel makeHttp(Body body = Body::none()) {
   p.body = std::move(body);
   RequestConfig cfg{Timeout::fromMillis(1000).take(), true};
   return RequestModel::create(RequestId("req_1"), "R", 0, cfg, HttpRequest::create(std::move(p)).take())
+      .take();
+}
+
+RequestModel makeHttpOAuth2() {
+  AuthOAuth2 o;
+  o.tokenUrl = "https://idp/token";
+  o.clientId = "cid";
+  HttpRequest::Parts p{HttpMethod::Get, Url::create("https://h/x").take()};
+  p.auth = Auth::oauth2(std::move(o)).take();
+  RequestConfig cfg{Timeout::fromMillis(1000).take(), true};
+  return RequestModel::create(RequestId("req_o"), "O", 0, cfg, HttpRequest::create(std::move(p)).take())
       .take();
 }
 
@@ -348,6 +371,49 @@ static void test_kafka_consumer_cancel_before_run() {
   SG_CHECK(f && f->error.kind == ErrorKind::Cancelled, "kafka consumer cancel: EvFailed{Cancelled}");
 }
 
+static void test_oauth2_rewrites_to_bearer() {
+  FakeClock clock; FakeCache cache;
+  FakeSender sender;
+  sender.script = {completed()};
+  FakeTokenProvider tp;
+  SendRequestSaga saga(RequestExecutionId("o1"), makeHttpOAuth2(),
+                       {{&sender}, &clock, nullptr, &cache, &tp});
+  FakeObserver obs;
+  saga.run(obs);
+  SG_CHECK(tp.calls == 1, "oauth2: provider called once");
+  SG_CHECK(sender.executed, "oauth2: sender executed");
+  SG_CHECK(sender.seenAuth == Auth::bearer("tok123").take(), "oauth2: sender saw Bearer, not OAuth2");
+  SG_CHECK(saga.state() == SagaState::Completed, "oauth2: completed");
+}
+
+static void test_oauth2_provider_failure_short_circuits() {
+  FakeClock clock; FakeCache cache;
+  FakeSender sender;
+  FakeTokenProvider tp;
+  tp.result = Result<std::string>::fail({ErrorCode::Network, "invalid_client", ""});
+  SendRequestSaga saga(RequestExecutionId("o2"), makeHttpOAuth2(),
+                       {{&sender}, &clock, nullptr, &cache, &tp});
+  FakeObserver obs;
+  saga.run(obs);
+  SG_CHECK(!sender.executed, "oauth2 fail: sender never runs");
+  SG_CHECK(obs.events.size() == 1 && isAt<EvFailed>(obs.events, 0), "oauth2 fail: EvFailed only");
+  const auto *f = obs.events[0].get<EvFailed>();
+  SG_CHECK(f && f->error.message.find("oauth2 token:") == 0, "oauth2 fail: message prefixed");
+  SG_CHECK(cache.puts == 0, "oauth2 fail: no cache write");
+}
+
+static void test_oauth2_without_provider_unsupported() {
+  FakeClock clock; FakeCache cache;
+  FakeSender sender;
+  SendRequestSaga saga(RequestExecutionId("o3"), makeHttpOAuth2(),
+                       {{&sender}, &clock, nullptr, &cache}); // no tokenProvider wired
+  FakeObserver obs;
+  saga.run(obs);
+  SG_CHECK(!sender.executed, "oauth2 no-provider: sender never runs");
+  const auto *f = obs.events.size() == 1 ? obs.events[0].get<EvFailed>() : nullptr;
+  SG_CHECK(f && f->error.kind == ErrorKind::Unsupported, "oauth2 no-provider: Unsupported");
+}
+
 int run_saga_tests() {
   std::printf("[saga]\n");
   test_unary_happy();
@@ -362,6 +428,9 @@ int run_saga_tests() {
   test_kafka_producer_happy();
   test_kafka_consumer_streaming();
   test_kafka_consumer_cancel_before_run();
+  test_oauth2_rewrites_to_bearer();
+  test_oauth2_provider_failure_short_circuits();
+  test_oauth2_without_provider_unsupported();
   std::printf("  saga: %d passed, %d failed\n", sg_pass, sg_fail);
   return sg_fail;
 }

@@ -121,6 +121,18 @@ struct KafkaExtra {
   }
 };
 
+// Confluent Schema Registry pointer (SPEC_kafka Avro v1) — plain aggregate like KafkaExtra, no
+// validation: an empty url just means "not configured" (feature off). Credentials optional (Basic).
+struct SchemaRegistryRef {
+  std::string url;      // e.g. "http://localhost:8081"; empty = Avro handling off
+  std::string username; // optional basic auth
+  std::string password;
+  bool configured() const noexcept { return !url.empty(); }
+  bool operator==(const SchemaRegistryRef &o) const {
+    return url == o.url && username == o.username && password == o.password;
+  }
+};
+
 // Security — sum type; only Plaintext today (SSL/SASL are a seam, spec §8).
 struct KafkaPlaintext {
   bool operator==(const KafkaPlaintext &) const { return true; }

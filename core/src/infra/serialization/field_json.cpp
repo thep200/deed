@@ -120,6 +120,18 @@ std::string authToJson(const d::Auth &auth) {
     } else if constexpr (std::is_same_v<T, d::AuthBearer>) {
       j["type"] = "bearer";
       j["token"] = a.token;
+    } else if constexpr (std::is_same_v<T, d::AuthOAuth2>) {
+      j["type"] = "oauth2";
+      j["grant"] = a.grant == d::OAuth2Grant::Password ? "password" : "client_credentials";
+      j["tokenUrl"] = a.tokenUrl;
+      j["clientId"] = a.clientId;
+      j["clientSecret"] = a.clientSecret;
+      j["scope"] = a.scope;
+      j["clientAuth"] = a.clientAuth == d::OAuth2ClientAuth::Body ? "body" : "header";
+      if (a.grant == d::OAuth2Grant::Password) {
+        j["username"] = a.username;
+        j["password"] = a.password;
+      }
     }
   });
   return j.dump(2);
@@ -142,6 +154,24 @@ d::Result<d::Auth> jsonToAuth(const std::string &text) {
     if (type == "bearer") {
       json b = fields("bearer");
       return d::Auth::bearer(gs(b, "token"));
+    }
+    if (type == "oauth2") {
+      d::AuthOAuth2 o;
+      std::string grant = gs(j, "grant", "client_credentials");
+      if (grant == "password") o.grant = d::OAuth2Grant::Password;
+      else if (grant != "client_credentials")
+        return parseErr<d::Auth>("unknown auth.grant: " + grant);
+      std::string ca = gs(j, "clientAuth", "header");
+      if (ca == "body") o.clientAuth = d::OAuth2ClientAuth::Body;
+      else if (ca != "header")
+        return parseErr<d::Auth>("unknown auth.clientAuth: " + ca);
+      o.tokenUrl = gs(j, "tokenUrl");
+      o.clientId = gs(j, "clientId");
+      o.clientSecret = gs(j, "clientSecret");
+      o.scope = gs(j, "scope");
+      o.username = gs(j, "username");
+      o.password = gs(j, "password");
+      return d::Auth::oauth2(std::move(o));
     }
     // "apikey" was removed as a type: a custom key/value IS just a header (or query param), so it lives in
     // the Headers/Query tab now. Saved files that still carry it degrade to none instead of failing to load.
@@ -318,17 +348,33 @@ std::string kafkaRecordToDisplayJson(const d::KafkaRecord &r) {
       j["value"] = r.value; // else raw string
     }
   }
+  if (!r.valueEncoding.empty()) j["valueEncoding"] = r.valueEncoding; // e.g. "avro (id 7)"
   json hs = json::array();
   for (const auto &h : r.headers)
     if (h.enabled) hs.push_back({{"key", h.key}, {"value", h.value}});
   j["headers"] = hs;
   j["timestampMs"] = r.timestampMs;
   j["size"] = r.size;
-  return j.dump(2);
+  // error_handler_t::replace: value/headers hold VERBATIM bytes — invalid UTF-8 must render as U+FFFD,
+  // not throw out of the noexcept UiObserver::onEvent (std::terminate).
+  return j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 // ---- Kafka editor tabs (SPEC_kafka §2/§4) ----
 namespace {
+// Schema Registry block ({url, username, password}); absent/empty url = not configured (old files OK).
+json schemaRegistryToJson(const d::SchemaRegistryRef &r) {
+  return json{{"url", r.url}, {"username", r.username}, {"password", r.password}};
+}
+d::SchemaRegistryRef schemaRegistryFromJson(const json &j) {
+  d::SchemaRegistryRef r;
+  if (auto it = j.find("schemaRegistry"); it != j.end() && it->is_object()) {
+    r.url = gs(*it, "url");
+    r.username = gs(*it, "username");
+    r.password = gs(*it, "password");
+  }
+  return r;
+}
 template <class T> json kafkaKvToJson(const std::vector<T> &list) {
   json a = json::array();
   for (const auto &e : list) a.push_back({{"key", e.key}, {"value", e.value}, {"enabled", e.enabled ? 1 : 0}});
@@ -384,7 +430,7 @@ std::string kafkaMessageToJson(const d::KafkaMessage &m) {
     j["value"] = m.value.value; // not valid JSON yet (empty draft / mid-edit) -> show verbatim as a string
   }
   j["headers"] = kafkaKvToJson(m.headers);
-  return j.dump(2);
+  return j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace); // mid-edit bytes must not throw
 }
 d::Result<d::KafkaMessage> jsonToKafkaMessage(const std::string &text) {
   try {
@@ -414,6 +460,9 @@ std::string kafkaProduceConfigToJson(const d::KafkaProduceConfig &c) {
         {"retries", c.retries},
         {"idempotence", c.idempotence},
         {"clientId", c.clientId},
+        // Always emitted (defaults included) so the keys are discoverable in the Kafka tab.
+        {"valueFormat", c.valueFormat == d::KafkaValueFormat::Avro ? "avro" : "json"},
+        {"schemaRegistry", schemaRegistryToJson(c.schemaRegistry)},
         {"extra", kafkaKvToJson(c.extra)}};
   return j.dump(2);
 }
@@ -431,6 +480,9 @@ d::Result<d::KafkaProduceConfig> jsonToKafkaProduceConfig(const std::string &tex
     c.retries = gi(j, "retries", 3);
     c.idempotence = gb(j, "idempotence", false);
     c.clientId = gs(j, "clientId", "deed");
+    c.valueFormat = gs(j, "valueFormat", "json") == "avro" ? d::KafkaValueFormat::Avro
+                                                           : d::KafkaValueFormat::Json;
+    c.schemaRegistry = schemaRegistryFromJson(j); // lenient: absent -> not configured (old files)
     c.extra = kafkaKvFromJson<d::KafkaExtra>(j.value("extra", json::array()));
     return d::Result<d::KafkaProduceConfig>::ok(std::move(c));
   } catch (const std::exception &e) {
@@ -449,6 +501,7 @@ std::string kafkaConsumeConfigToJson(const d::KafkaConsumeConfig &c) {
         {"maxMessages", c.maxMessages ? json(*c.maxMessages) : json(nullptr)},
         {"pollTimeoutMs", c.pollTimeout.count()},
         {"clientId", c.clientId},
+        {"schemaRegistry", schemaRegistryToJson(c.schemaRegistry)},
         {"extra", kafkaKvToJson(c.extra)}};
   return j.dump(2);
 }
@@ -474,6 +527,7 @@ d::Result<d::KafkaConsumeConfig> jsonToKafkaConsumeConfig(const std::string &tex
     if (auto it = j.find("maxMessages"); it != j.end() && it->is_number()) c.maxMessages = it->get<int>();
     c.pollTimeout = std::chrono::milliseconds(gi(j, "pollTimeoutMs", 500));
     c.clientId = gs(j, "clientId", "deed");
+    c.schemaRegistry = schemaRegistryFromJson(j);
     c.extra = kafkaKvFromJson<d::KafkaExtra>(j.value("extra", json::array()));
     return d::Result<d::KafkaConsumeConfig>::ok(std::move(c));
   } catch (const std::exception &e) {

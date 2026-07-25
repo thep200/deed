@@ -93,6 +93,8 @@ static void test_kafka_producer() {
   KafkaProduceConfig pcfg{KafkaTopic::create("demo-topic").take()};
   pcfg.acks = Acks::All;
   pcfg.compression = Compression::None;
+  pcfg.valueFormat = KafkaValueFormat::Avro; // Avro fields must survive the file round-trip
+  pcfg.schemaRegistry = {"http://localhost:8081", "sr-user", "sr-pass"};
   KafkaMessage msg;
   msg.value = MessagePayload{"{\n  \"hello\": \"world\"\n}"};
   auto req =
@@ -106,6 +108,7 @@ static void test_kafka_consumer() {
   auto brokers = BrokerList::parse("localhost:9092").take();
   KafkaConsumeConfig ccfg{{KafkaTopic::create("demo-topic").take()}, std::nullopt,
                           ConsumerGroup::create("deed-tail-local").take()};
+  ccfg.schemaRegistry = {"http://localhost:8081", "", ""};
   auto req = KafkaRequest::create(brokers, KafkaSecurity::plaintext(), KafkaRequest::Mode{KafkaConsumeSpec{ccfg}})
                  .take();
   auto m = RequestModel::create(RequestId("req_kafka_c1"), "Consume", 6, cfg(), req);
@@ -118,6 +121,8 @@ static void test_kafka_consumer() {
 static void test_kafka_inactive_draft() {
   auto brokers = BrokerList::parse("localhost:9092").take();
   KafkaProduceConfig pcfg{KafkaTopic::create("produce-topic").take()};
+  pcfg.valueFormat = KafkaValueFormat::Avro;
+  pcfg.schemaRegistry = {"http://localhost:8081", "", ""};
   KafkaMessage msg;
   msg.value = MessagePayload{"{\n  \"draft\": true\n}"};
   KafkaConsumeConfig ccfg{{KafkaTopic::create("consume-topic").take()}, std::nullopt,

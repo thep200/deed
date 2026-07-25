@@ -12,6 +12,8 @@
 #include <nlohmann/json.hpp> // producer delivery summary (body text) — infra/transport may use it (not domain)
 #include <librdkafka/rdkafkacpp.h>
 
+#include "infra/transport/kafka/avro_serde.hpp"
+
 namespace core::infra {
 namespace d = core::domain;
 
@@ -123,7 +125,41 @@ public:
 };
 
 void produce(const std::string &bootstrap, const d::KafkaSecurity &security, const d::KafkaProduceSpec &spec,
-            d::IResponseSink &sink, const d::ICancellationToken &cancel, std::chrono::milliseconds requestTimeout) {
+            d::IResponseSink &sink, const d::ICancellationToken &cancel, std::chrono::milliseconds requestTimeout,
+            SchemaRegistryClient &registry) {
+  // Avro value format (SPEC_kafka Avro v1): serialize the (JSON) editor value against the LATEST
+  // registered schema of `<topic>-value`, wrapped in the Confluent framing. Fail fast — before any
+  // broker objects — with a message that names the fix. ErrorKind has no Validation -> Protocol.
+  std::string wireValue;
+  const std::string *valuePtr = &spec.message.value.value;
+  if (spec.config.valueFormat == d::KafkaValueFormat::Avro) {
+    if (!spec.config.schemaRegistry.configured()) {
+      sink.emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Protocol,
+          "Avro value format needs \"schemaRegistry\": {\"url\": ...} in the Kafka tab", {}}}));
+      return;
+    }
+    if (spec.message.value.value.find_first_not_of(" \t\r\n") == std::string::npos) {
+      sink.emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Protocol,
+          "message value is empty — Avro needs a JSON value matching the subject's schema", {}}}));
+      return;
+    }
+    const std::string subject = spec.config.topic.value() + "-value";
+    auto latest = registry.latestForSubject(spec.config.schemaRegistry, subject, cancel);
+    if (!latest.isOk()) {
+      sink.emit(d::ResponseEvent(
+          d::EvFailed{{d::ErrorKind::Protocol, subject + ": " + latest.error().message, {}}}));
+      return;
+    }
+    auto bin = avro_serde::jsonToAvroBinary(latest.value().schemaJson, spec.message.value.value);
+    if (!bin.isOk()) {
+      sink.emit(d::ResponseEvent(d::EvFailed{
+          {d::ErrorKind::Parse, "Avro serialization failed: " + bin.error().message, {}}}));
+      return;
+    }
+    wireValue = avro_serde::wrapConfluent(latest.value().id, bin.take());
+    valuePtr = &wireValue;
+  }
+
   std::unique_ptr<RdKafka::Conf> conf(RdKafka::Conf::create(RdKafka::Conf::CONF_GLOBAL));
   setConf(conf.get(), "bootstrap.servers", bootstrap);
   applySecurity(conf.get(), security);
@@ -156,8 +192,8 @@ void produce(const std::string &bootstrap, const d::KafkaSecurity &security, con
     keyPtr = spec.message.key->value.data();
     keyLen = spec.message.key->value.size();
   }
-  void *payload = const_cast<char *>(spec.message.value.value.data());
-  size_t payloadLen = spec.message.value.value.size();
+  void *payload = const_cast<char *>(valuePtr->data()); // RK_MSG_COPY below -> wireValue lifetime is fine
+  size_t payloadLen = valuePtr->size();
   int32_t partition = spec.config.partition.value == d::KafkaPartition::kAuto
                           ? RdKafka::Topic::PARTITION_UA
                           : spec.config.partition.value;
@@ -234,7 +270,8 @@ void produce(const std::string &bootstrap, const d::KafkaSecurity &security, con
 
 // ---- Consumer (streaming, spec §5/§6) ----
 void consume(const std::string &bootstrap, const d::KafkaSecurity &security, const d::KafkaConsumeSpec &spec,
-            d::IResponseSink &sink, const d::ICancellationToken &cancel, std::chrono::milliseconds requestTimeout) {
+            d::IResponseSink &sink, const d::ICancellationToken &cancel, std::chrono::milliseconds requestTimeout,
+            SchemaRegistryClient &registry) {
   std::unique_ptr<RdKafka::Conf> conf(RdKafka::Conf::create(RdKafka::Conf::CONF_GLOBAL));
   setConf(conf.get(), "bootstrap.servers", bootstrap);
   applySecurity(conf.get(), security);
@@ -354,6 +391,26 @@ void consume(const std::string &bootstrap, const d::KafkaSecurity &security, con
       if (msg->key()) rec.key = *msg->key();
       if (msg->payload() != nullptr && msg->len() > 0) {
         rec.value.assign(static_cast<const char *>(msg->payload()), msg->len());
+        // Confluent-Avro auto-detect (SPEC_kafka Avro v1): magic 0x00 + schema id + a configured
+        // registry -> decode for display; any failure degrades to verbatim bytes + a note (the
+        // display codec renders non-UTF8 safely). One blocking fetch per NEW schema id, ~<=5s,
+        // on this tail's own StreamPool thread; negative cache bounds a down registry.
+        if (spec.config.schemaRegistry.configured()) {
+          if (auto id = avro_serde::extractConfluentSchemaId(rec.value)) {
+            auto schema = registry.schemaById(spec.config.schemaRegistry, *id, cancel);
+            auto decoded = schema.isOk()
+                               ? avro_serde::avroBinaryToJson(schema.value(), rec.value.data() + 5,
+                                                              rec.value.size() - 5)
+                               : d::Result<std::string>::fail(schema.error());
+            if (decoded.isOk()) {
+              rec.value = decoded.take();
+              rec.valueEncoding = "avro (id " + std::to_string(*id) + ")";
+            } else {
+              rec.valueEncoding = "avro (id " + std::to_string(*id) +
+                                  ", undecoded: " + decoded.error().message + ")";
+            }
+          }
+        }
       } else {
         rec.valueIsNull = true;
       }
@@ -407,8 +464,12 @@ d::Status KafkaSender::execute(const d::RequestModel &resolved, d::IResponseSink
   const std::string bootstrap = k.brokers().toBootstrapServers();
   const auto requestTimeout = resolved.config().timeout.value();
   k.match(overloaded{
-      [&](const d::KafkaProduceSpec &p) { produce(bootstrap, k.security(), p, sink, cancel, requestTimeout); },
-      [&](const d::KafkaConsumeSpec &c) { consume(bootstrap, k.security(), c, sink, cancel, requestTimeout); },
+      [&](const d::KafkaProduceSpec &p) {
+        produce(bootstrap, k.security(), p, sink, cancel, requestTimeout, registry_);
+      },
+      [&](const d::KafkaConsumeSpec &c) {
+        consume(bootstrap, k.security(), c, sink, cancel, requestTimeout, registry_);
+      },
   });
   return d::ok();
 }

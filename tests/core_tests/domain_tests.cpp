@@ -93,6 +93,18 @@ static void test_auth() {
   CHECK(Auth::none().isNone(), "auth none");
   CHECK(!Auth::basic("", "p").isOk(), "basic needs username");
   CHECK(!Auth::bearer("").isOk(), "bearer needs token");
+  {
+    AuthOAuth2 o;
+    CHECK(!Auth::oauth2(o).isOk(), "oauth2 needs tokenUrl");
+    o.tokenUrl = "https://t";
+    CHECK(!Auth::oauth2(o).isOk(), "oauth2 needs clientId");
+    o.clientId = "c";
+    CHECK(Auth::oauth2(o).isOk(), "oauth2 cc minimal ok (secret optional)");
+    o.grant = OAuth2Grant::Password;
+    CHECK(!Auth::oauth2(o).isOk(), "oauth2 password grant needs credentials");
+    o.username = "u"; o.password = "p";
+    CHECK(Auth::oauth2(o).isOk(), "oauth2 password grant ok");
+  }
   auto bearer = Auth::bearer("tok").value();
   CHECK(bearer == Auth::bearer("tok").value(), "auth value equality");
   CHECK(bearer != Auth::none(), "auth inequality across alternatives");

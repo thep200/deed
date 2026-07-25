@@ -6,6 +6,7 @@
 #pragma once
 
 #include "core/domain/ports/driven/i_request_sender.hpp"
+#include "infra/transport/kafka/schema_registry_client.hpp"
 
 namespace core::infra {
 
@@ -14,6 +15,11 @@ public:
   bool supports(domain::RequestType t) const override { return t == domain::RequestType::Kafka; }
   domain::Status execute(const domain::RequestModel &resolved, domain::IResponseSink &sink,
                          const domain::ICancellationToken &cancel) override;
+
+private:
+  // Shared across calls so schema-by-id lookups cache across tails; internally mutexed (the send
+  // calls themselves stay stateless per the header note above).
+  SchemaRegistryClient registry_;
 };
 
 } // namespace core::infra

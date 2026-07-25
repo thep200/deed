@@ -8,6 +8,17 @@
 //   off 2: cancel while connecting        -> EvFailed{Cancelled}    (FAILURE)
 //   on  3: connected, session timeout     -> EvClosed{"timeout"}    (SUCCESS)
 //   on  4: cancel while consuming         -> EvClosed{"cancelled"}  (SUCCESS)
+//
+// AVRO (SPEC_kafka Avro v1) — manual flow, needs Schema Registry beside the broker:
+//   docker compose: confluentinc/cp-kafka + confluentinc/cp-schema-registry (SR on :8081)
+//   1. register a schema:
+//      curl -X POST -H 'Content-Type: application/vnd.schemaregistry.v1+json' \
+//        --data '{"schema":"{\"type\":\"record\",\"name\":\"E\",\"fields\":[{\"name\":\"msg\",\"type\":\"string\"}]}"}' \
+//        http://localhost:8081/subjects/demo-topic-value/versions
+//   2. Deed producer: Kafka tab {"valueFormat":"avro","schemaRegistry":{"url":"http://localhost:8081"}},
+//      Message value {"msg":"hi"} -> Send; cross-check with kafka-avro-console-consumer.
+//   3. Deed consumer with the same schemaRegistry block -> record shows decoded value +
+//      "valueEncoding": "avro (id N)"; stop SR mid-tail -> verbatim + "undecoded" note.
 #include <chrono>
 #include <cstdio>
 #include <cstring>

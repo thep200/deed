@@ -71,8 +71,19 @@ d::Auth resolveAuth(const d::Auth &a, const VarMap &v) {
     } else if constexpr (std::is_same_v<T, d::AuthBearer>) {
       auto r = d::Auth::bearer(rs(x.token, v));
       return r ? r.take() : a;
-    } else { // AuthBasic
+    } else if constexpr (std::is_same_v<T, d::AuthBasic>) {
       auto r = d::Auth::basic(rs(x.username, v), rs(x.password, v));
+      return r ? r.take() : a;
+    } else { // AuthOAuth2 — {{var}} may sit in ANY field (incl. the secret). Keep branches explicit;
+             // a trailing else here once silently coerced new alternatives to Basic.
+      d::AuthOAuth2 o = x;
+      o.tokenUrl = rs(o.tokenUrl, v);
+      o.clientId = rs(o.clientId, v);
+      o.clientSecret = rs(o.clientSecret, v);
+      o.scope = rs(o.scope, v);
+      o.username = rs(o.username, v);
+      o.password = rs(o.password, v);
+      auto r = d::Auth::oauth2(std::move(o));
       return r ? r.take() : a;
     }
   });
@@ -142,6 +153,9 @@ d::RequestModel::Payload resolvePayload(const d::RequestModel &m, const VarMap &
           for (const auto &h : spec.message.headers)
             hs.push_back({h.key, h.enabled ? rs(h.value, v) : h.value, h.enabled});
           out.message.headers = std::move(hs);
+          out.config.schemaRegistry.url = rs(spec.config.schemaRegistry.url, v);
+          out.config.schemaRegistry.username = rs(spec.config.schemaRegistry.username, v);
+          out.config.schemaRegistry.password = rs(spec.config.schemaRegistry.password, v);
           return out;
         } else {
           d::KafkaConsumeSpec out = spec;
@@ -153,6 +167,9 @@ d::RequestModel::Payload resolvePayload(const d::RequestModel &m, const VarMap &
           out.config.topics = std::move(topics);
           auto g = d::ConsumerGroup::create(rs(spec.config.group.value(), v));
           out.config.group = g ? g.take() : spec.config.group;
+          out.config.schemaRegistry.url = rs(spec.config.schemaRegistry.url, v);
+          out.config.schemaRegistry.username = rs(spec.config.schemaRegistry.username, v);
+          out.config.schemaRegistry.password = rs(spec.config.schemaRegistry.password, v);
           return out;
         }
       });

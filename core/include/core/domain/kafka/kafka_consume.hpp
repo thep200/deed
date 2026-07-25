@@ -66,33 +66,37 @@ struct KafkaConsumeConfig {
   std::optional<int> maxMessages; // nullopt = unbounded; >0 = stop after N
   std::chrono::milliseconds pollTimeout{kDefaultPollTimeout};
   std::string clientId = kDefaultConsumerClientId;
+  SchemaRegistryRef schemaRegistry; // set -> auto-detect + decode Confluent-Avro values for display
   std::vector<KafkaExtra> extra;
 
   bool operator==(const KafkaConsumeConfig &o) const {
     return topics == o.topics && partition == o.partition && group == o.group &&
            offsetReset == o.offsetReset && autoCommit == o.autoCommit && maxMessages == o.maxMessages &&
-           pollTimeout == o.pollTimeout && clientId == o.clientId && extra == o.extra;
+           pollTimeout == o.pollTimeout && clientId == o.clientId &&
+           schemaRegistry == o.schemaRegistry && extra == o.extra;
   }
   bool operator!=(const KafkaConsumeConfig &o) const { return !(*this == o); }
 };
 
-// One consumed record — OUTPUT THUẦN (spec §3/§6): verbatim bytes, no domain processing between receive and
-// display. Pretty-print/hex display is a UI-only concern built from `value`, never mutating it.
+// One consumed record — OUTPUT DTO (spec §3/§6): bytes as received, EXCEPT that infra may decode a
+// Confluent-Avro value to JSON text at emit time (then `valueEncoding` says so). The domain itself
+// never interprets the bytes; pretty-print/hex is a UI concern built from `value`.
 struct KafkaRecord {
   std::string topic;
   int partition = 0;
   std::int64_t offset = 0;
   std::optional<std::string> key; // nullopt if the key was null
-  std::string value;              // verbatim bytes; tombstone => empty + valueIsNull
+  std::string value;              // verbatim bytes, or decoded JSON when valueEncoding is set
   bool valueIsNull = false;
+  std::string valueEncoding;      // "" = plain; e.g. "avro (id 7)" / "avro (id 7, undecoded: ...)"
   std::vector<KafkaHeader> headers;
   std::int64_t timestampMs = 0;
   std::size_t size = 0;
 
   bool operator==(const KafkaRecord &o) const {
     return topic == o.topic && partition == o.partition && offset == o.offset && key == o.key &&
-           value == o.value && valueIsNull == o.valueIsNull && headers == o.headers &&
-           timestampMs == o.timestampMs && size == o.size;
+           value == o.value && valueIsNull == o.valueIsNull && valueEncoding == o.valueEncoding &&
+           headers == o.headers && timestampMs == o.timestampMs && size == o.size;
   }
 };
 
