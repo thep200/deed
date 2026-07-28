@@ -2,6 +2,10 @@
 
 #include <sstream>
 
+// BEFORE the avro headers: avro/Exception.hh calls fmt::format but only includes <fmt/core.h>, relying
+// on core.h transitively providing it — true for some fmt versions, not others (CI broke on this).
+#include <fmt/format.h>
+
 #include <avro/Compiler.hh>
 #include <avro/Decoder.hh>
 #include <avro/Encoder.hh>
