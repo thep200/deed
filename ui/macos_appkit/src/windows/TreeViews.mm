@@ -23,11 +23,13 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
         it.requestType = n.requestType;
         it.grpc = (n.requestType == core::RequestType::Grpc);
         it.badge = [NSString stringWithFormat:@"%s %s", core::toString(n.requestType).c_str(), n.methodOrType.c_str()];
-        // HTTP -> method name (GET/POST...); gRPC -> "gRPC"; WebSocket -> "WS"; GraphQL -> "GQL"; Kafka -> "KAFKA".
+        // HTTP -> method name (GET/POST...); gRPC -> "gRPC"; WebSocket -> "WS"; GraphQL -> "GQL";
+        // Kafka -> "KAFKA"; SOAP -> "SOAP" (methodOrType is empty for method-less types).
         it.mark = it.grpc ? @"gRPC"
                 : (n.requestType == core::RequestType::WebSocket) ? @"WS"
                 : (n.requestType == core::RequestType::GraphQl) ? @"GQL"
                 : (n.requestType == core::RequestType::Kafka) ? @"KAFKA"
+                : (n.requestType == core::RequestType::Soap) ? @"SOAP"
                 : N(n.methodOrType);
     }
     return it;

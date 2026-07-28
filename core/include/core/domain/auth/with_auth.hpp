@@ -17,7 +17,7 @@ inline const AuthOAuth2 *oauth2Of(const RequestModel &m) {
   m.match([&](auto &&p) {
     using T = std::decay_t<decltype(p)>;
     if constexpr (std::is_same_v<T, HttpRequest> || std::is_same_v<T, GraphQlRequest> ||
-                  std::is_same_v<T, WebSocketRequest>) {
+                  std::is_same_v<T, WebSocketRequest> || std::is_same_v<T, SoapRequest>) {
       p.auth().match([&](auto &&a) {
         if constexpr (std::is_same_v<std::decay_t<decltype(a)>, AuthOAuth2>) out = &a;
       });
@@ -45,6 +45,11 @@ inline RequestModel withAuth(const RequestModel &m, Auth auth) {
       WebSocketRequest::Parts wp{p.url(),         p.subprotocols(),  p.headers(),
                                  std::move(auth), p.onOpenSend(),    p.defaultSendKind()};
       auto r = WebSocketRequest::create(std::move(wp));
+      if (r.isOk()) payload = r.take();
+    } else if constexpr (std::is_same_v<T, SoapRequest>) {
+      SoapRequest::Parts sp{p.url(), p.action(), p.version(), p.envelope(), p.headers(),
+                            std::move(auth)};
+      auto r = SoapRequest::create(std::move(sp));
       if (r.isOk()) payload = r.take();
     }
   });

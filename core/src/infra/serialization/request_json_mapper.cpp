@@ -26,6 +26,7 @@ const char *typeStr(d::RequestType t) {
   case d::RequestType::GraphQl: return w::kGraphql;
   case d::RequestType::WebSocket: return w::kWs;
   case d::RequestType::Kafka: return w::kKafka;
+  case d::RequestType::Soap: return w::kSoap;
   }
   return w::kHttp;
 }
@@ -225,6 +226,15 @@ json gqlToJson(const d::GraphQlRequest &g) {
                                                             : "graphql-transport-ws"}};
 }
 
+json soapToJson(const d::SoapRequest &s) {
+  return json{{"url", s.url().raw()},
+              {"action", s.action()},
+              {"version", s.version() == d::SoapVersion::V1_2 ? "1.2" : "1.1"},
+              {"envelope", s.envelope()},
+              {"headers", serialTo(core::serial::headersToJson(s.headers()))},
+              {"auth", serialTo(core::serial::authToJson(s.auth()))}};
+}
+
 // Per-type payload parsers — kept out of fromJson so it stays a flat dispatch (clang-tidy complexity).
 using Payload = d::RequestModel::Payload;
 
@@ -288,6 +298,22 @@ d::Result<Payload> parseGraphqlPayload(const json &b) {
   if (!a) return d::Result<Payload>::fail(a.error());
   p.auth = a.take();
   auto r = d::GraphQlRequest::create(std::move(p));
+  if (!r) return d::Result<Payload>::fail(r.error());
+  return d::Result<Payload>::ok(Payload{r.take()});
+}
+
+d::Result<Payload> parseSoapPayload(const json &b) {
+  d::SoapRequest::Parts p{d::Url::create(gs(b, "url")).take()};
+  p.action = gs(b, "action");
+  p.version = gs(b, "version", "1.1") == "1.2" ? d::SoapVersion::V1_2 : d::SoapVersion::V1_1;
+  p.envelope = gs(b, "envelope");
+  auto h = serialFrom<d::HeaderList>(b, "headers", core::serial::jsonToHeaders, "[]");
+  if (!h) return d::Result<Payload>::fail(h.error());
+  p.headers = h.take();
+  auto a = serialFrom<d::Auth>(b, "auth", core::serial::jsonToAuth, "{\"type\":\"none\"}");
+  if (!a) return d::Result<Payload>::fail(a.error());
+  p.auth = a.take();
+  auto r = d::SoapRequest::create(std::move(p));
   if (!r) return d::Result<Payload>::fail(r.error());
   return d::Result<Payload>::ok(Payload{r.take()});
 }
@@ -374,6 +400,7 @@ domain::Result<domain::RequestModel> RequestJsonMapper::fromJson(const std::stri
                             : type == w::kWs      ? parseWsPayload(j.value(w::kWs, json::object()))
                             : type == w::kGraphql ? parseGraphqlPayload(j.value(w::kGraphql, json::object()))
                             : type == w::kKafka   ? parseKafkaPayload(j.value(w::kKafka, json::object()))
+                            : type == w::kSoap    ? parseSoapPayload(j.value(w::kSoap, json::object()))
                                                   : parseHttpPayload(j.value(w::kHttp, json::object()));
     if (!pr) return d::Result<d::RequestModel>::fail(pr.error());
 
@@ -397,6 +424,7 @@ std::string RequestJsonMapper::toJson(const domain::RequestModel &m) const {
     else if constexpr (std::is_same_v<T, d::WebSocketRequest>) j[w::kWs] = wsToJson(payload);
     else if constexpr (std::is_same_v<T, d::GraphQlRequest>) j[w::kGraphql] = gqlToJson(payload);
     else if constexpr (std::is_same_v<T, d::KafkaRequest>) j[w::kKafka] = kafkaToJson(payload);
+    else if constexpr (std::is_same_v<T, d::SoapRequest>) j[w::kSoap] = soapToJson(payload);
   });
   return j.dump(2);
 }

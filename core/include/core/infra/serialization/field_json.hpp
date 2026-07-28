@@ -18,6 +18,7 @@
 #include "core/domain/kafka/kafka_produce.hpp"
 #include "core/domain/request/request_config.hpp"
 #include "core/domain/response/api_response.hpp"
+#include "core/domain/soap/soap_request.hpp"
 #include "core/domain/values/header.hpp"
 #include "core/domain/values/query_param.hpp"
 
@@ -84,7 +85,16 @@ std::string kafkaConsumeConfigToJson(const domain::KafkaConsumeConfig &);
 domain::Result<domain::KafkaConsumeConfig> jsonToKafkaConsumeConfig(const std::string &);
 
 // Generic JSON text helpers (no domain types): pretty/compact reformat; encode/decode a JSON string literal.
-std::string formatJson(const std::string &text, bool pretty); // unparseable -> returned verbatim
+// SOAP editor tab {action, version:"1.1"|"1.2"} (SPEC_soap §6). Editor-facing, not the request file.
+struct SoapConfig {
+  std::string action;
+  domain::SoapVersion version = domain::SoapVersion::V1_1;
+};
+std::string soapConfigToJson(const domain::SoapRequest &);
+domain::Result<SoapConfig> jsonToSoapConfig(const std::string &);
+
+std::string formatJson(const std::string &text, bool pretty); // unparseable -> XML indent if XML-ish (pretty), else verbatim
+std::string formatXml(const std::string &text); // conservative indenter; anything unusual -> verbatim
 std::string jsonEncodeString(const std::string &text);        // text -> "\"...\""
 std::string jsonDecodeString(const std::string &text);        // "\"...\"" -> inner; else verbatim
 

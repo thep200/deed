@@ -23,6 +23,7 @@
 #include "infra/auth/oauth2_token_provider.hpp"          // OAuth2 token fetch + cache (ITokenProvider)
 #include "infra/transport/graphql/gql_introspection.hpp" // native introspection (introspectGraphQl)
 #include "infra/transport/grpc/grpc_method_listing.hpp" // native gRPC reflection (listGrpcMethods)
+#include "infra/transport/soap/native_soap_sender.hpp"  // SOAP over HTTP (SPEC_soap)
 
 #include <chrono>
 #include <functional>
@@ -286,6 +287,7 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
   c->senders_.push_back(std::make_unique<infra::NativeGraphQlSender>());
   c->senders_.push_back(std::make_unique<infra::WsSenderAdapter>(buildWsConfig(cfg)));
   c->senders_.push_back(std::make_unique<infra::KafkaSender>());
+  c->senders_.push_back(std::make_unique<infra::NativeSoapSender>());
 
   std::vector<d::IRequestSender *> ptrs;
   for (auto &s : c->senders_) ptrs.push_back(s.get());
@@ -449,6 +451,12 @@ core::domain::RequestModel CoreApiClient::aliasifyModel(const core::domain::Requ
       });
       auto r = d::KafkaRequest::create(newBrokers, p.security(), std::move(mode));
       return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
+    } else if constexpr (std::is_same_v<T, d::SoapRequest>) {
+      // Alias url + action + headers + auth; the envelope is body-like -> untouched.
+      d::SoapRequest::Parts sp{aliasUrl(p.url()), whole(p.action()), p.version(), p.envelope(),
+                               aliasHeaders(p.headers()), aliasAuth(p.auth())};
+      auto r = d::SoapRequest::create(std::move(sp));
+      return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
     } else { // GraphQlRequest — alias url + headers + auth only (query/variables untouched)
       d::GraphQlRequest::Parts gp{aliasUrl(p.url()), p.op(), aliasHeaders(p.headers()), aliasAuth(p.auth()),
                                   p.subTransport(), p.wsProtocol()};
@@ -492,6 +500,8 @@ core::InteractionKind CoreApiClient::interactionOf(const core::domain::RequestMo
     default: return core::InteractionKind::Unary;
     }
   }
+  case d::RequestType::Soap:
+    return core::InteractionKind::Unary; // one envelope in, one envelope out — plain HTTP POST
   case d::RequestType::Kafka: {
     // Producer = unary (one delivery report); Consumer = server-stream (inbound-only records, no push —
     // unlike WS's Duplex, cancel()/Stop is the only client->server signal, same shape as gRPC ServerStream).

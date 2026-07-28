@@ -535,12 +535,84 @@ d::Result<d::KafkaConsumeConfig> jsonToKafkaConsumeConfig(const std::string &tex
   }
 }
 
+// ---- SOAP editor tab (SPEC_soap §6) ----
+std::string soapConfigToJson(const d::SoapRequest &s) {
+  json j{{"action", s.action()},
+        {"version", s.version() == d::SoapVersion::V1_2 ? "1.2" : "1.1"}};
+  return j.dump(2);
+}
+d::Result<SoapConfig> jsonToSoapConfig(const std::string &text) {
+  try {
+    auto j = parseGuarded(text, "{}");
+    SoapConfig c;
+    c.action = gs(j, "action");
+    std::string v = gs(j, "version", "1.1");
+    if (v == "1.2") c.version = d::SoapVersion::V1_2;
+    else if (v != "1.1") return parseErr<SoapConfig>("unknown soap version: " + v + " (want 1.1 or 1.2)");
+    return d::Result<SoapConfig>::ok(std::move(c));
+  } catch (const std::exception &e) {
+    return parseErr<SoapConfig>(e.what());
+  }
+}
+
 // ---- Generic JSON text helpers ----
+
+// Conservative hand-rolled XML indenter (SPEC_soap §5): tag-level tokenizer, no parser, no deps.
+// Anything unusual (CDATA/comments/DOCTYPE/mismatched nesting) -> return the input VERBATIM — this
+// is a display aid and must never corrupt what the server actually sent.
+std::string formatXml(const std::string &text) {
+  auto first = text.find_first_not_of(" \t\r\n");
+  if (first == std::string::npos || text[first] != '<') return text;
+  if (text.find("<![CDATA[") != std::string::npos || text.find("<!--") != std::string::npos ||
+      text.find("<!DOCTYPE") != std::string::npos)
+    return text;
+
+  std::string out;
+  out.reserve(text.size() + text.size() / 4);
+  int depth = 0;
+  std::size_t i = first;
+  auto indent = [&](int d) {
+    out += '\n';
+    for (int k = 0; k < d; ++k) out += "  ";
+  };
+  bool firstTag = true;
+  while (i < text.size()) {
+    std::size_t lt = text.find('<', i);
+    if (lt == std::string::npos) break;
+    // Inter-tag text: keep non-whitespace content INLINE with its element (no reformat).
+    std::string between = text.substr(i, lt - i);
+    bool textContent = between.find_first_not_of(" \t\r\n") != std::string::npos;
+    if (textContent) out += between;
+    std::size_t gt = text.find('>', lt);
+    if (gt == std::string::npos) return text; // malformed -> verbatim
+    std::string tag = text.substr(lt, gt - lt + 1);
+    bool closing = tag.size() > 1 && tag[1] == '/';
+    bool selfClose = tag.size() > 1 && tag[tag.size() - 2] == '/';
+    bool decl = tag.size() > 1 && (tag[1] == '?' || tag[1] == '!');
+    if (closing) {
+      --depth;
+      if (depth < 0) return text; // mismatch -> verbatim
+      if (!textContent) indent(depth);
+      out += tag;
+    } else {
+      if (!firstTag && !textContent) indent(depth);
+      out += tag;
+      if (!decl && !selfClose) ++depth;
+    }
+    firstTag = false;
+    i = gt + 1;
+  }
+  if (depth != 0) return text; // unbalanced -> verbatim
+  return out.substr(out.size() > 0 && out[0] == '\n' ? 1 : 0);
+}
+
 std::string formatJson(const std::string &text, bool pretty) {
   try {
     auto j = json::parse(text);
     return pretty ? j.dump(2) : j.dump();
   } catch (...) {
+    // Not JSON — an XML body (SOAP response, XML API) still deserves Pretty (SPEC_soap §5).
+    if (pretty) return formatXml(text);
     return text;
   }
 }

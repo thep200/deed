@@ -35,6 +35,8 @@ bool isLongLivedSend(const d::RequestModel &request) {
     return d::acceptsEventStream(std::get<d::HttpRequest>(request.payload()));
   case d::RequestType::Kafka:
     return std::get<d::KafkaRequest>(request.payload()).kind() == d::KafkaClientKind::Consumer;
+  case d::RequestType::Soap:
+    return false; // one bounded HTTP POST
   }
   return false;
 }

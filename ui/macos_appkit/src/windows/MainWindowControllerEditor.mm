@@ -179,6 +179,13 @@ static NSArray<NSString *> *BodyAllModes(void);
         [_reqBuffers addObject:N(core::serial::headersToJson(g.headers()))];   // 2 = Headers
         [_reqBuffers addObject:N(core::serial::authToJson(g.auth()))];         // 3 = Auth
         _urlField.stringValue = N(g.url().raw()); _urlPrevLen = _urlField.stringValue.length;
+    } else if (m.type() == d::RequestType::Soap) {
+        const auto &s = std::get<d::SoapRequest>(m.payload());
+        [_reqBuffers addObject:N(s.envelope())];                                // 0 = Envelope (raw XML)
+        [_reqBuffers addObject:N(core::serial::headersToJson(s.headers()))];    // 1 = Headers
+        [_reqBuffers addObject:N(core::serial::authToJson(s.auth()))];          // 2 = Auth
+        [_reqBuffers addObject:N(core::serial::soapConfigToJson(s))];           // 3 = Soap {action,version}
+        _urlField.stringValue = N(s.url().raw()); _urlPrevLen = _urlField.stringValue.length;
     } else if (m.type() == d::RequestType::Kafka) {
         const auto &k = std::get<d::KafkaRequest>(m.payload());
         // Producer: Message + Config tabs. Consumer: ONE Config tab (SPEC_kafka §2.2 — nothing to compose).
@@ -215,6 +222,7 @@ static NSArray<NSString *> *BodyAllModes(void);
     if (li >= (NSInteger)_reqBuffers.count) li = 0;
     _activeReqTab = li;
     _reqText.string = _reqBuffers.count ? _reqBuffers[li] : @"";
+    [self applyReqPaneLanguage];
     [self highlightActiveTab:_reqTabButtons active:li];}
 
 // Tab index by KEY (title) within the titles set; no-match/nil -> 0 (first tab of that type).
@@ -292,6 +300,18 @@ static NSArray<NSString *> *BodyAllModes(void);
         p.auth = ar.take();
         auto gr = d::GraphQlRequest::create(std::move(p)); if (!gr.isOk()) return fail(0, gr.error().message);
         payload = gr.take();
+    } else if (cur.type() == d::RequestType::Soap) {
+        d::SoapRequest::Parts p{d::Url::create(url).take()};   // Parts holds a Url -> brace-init
+        p.envelope = S(_reqBuffers[0]);                        // raw XML; emptiness checked at send time
+        auto hr = core::serial::jsonToHeaders(S(_reqBuffers[1])); if (!hr.isOk()) return fail(1, hr.error().message);
+        p.headers = hr.take();
+        auto ar = core::serial::jsonToAuth(S(_reqBuffers[2])); if (!ar.isOk()) return fail(2, ar.error().message);
+        p.auth = ar.take();
+        auto sc = core::serial::jsonToSoapConfig(S(_reqBuffers[3])); if (!sc.isOk()) return fail(3, sc.error().message);
+        p.action = sc.value().action;
+        p.version = sc.value().version;
+        auto sr = d::SoapRequest::create(std::move(p)); if (!sr.isOk()) return fail(0, sr.error().message);
+        payload = sr.take();
     } else if (cur.type() == d::RequestType::Kafka) {
         const auto &curK = std::get<d::KafkaRequest>(cur.payload());
         auto br = d::BrokerList::parse(url);
@@ -468,9 +488,24 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     _activeReqTab = bi;                          // activate + show body
     if (bi < (NSInteger)_reqTabTitles.count) _leftPaneActiveTabKey = _reqTabTitles[bi];
     _reqText.string = _reqBuffers[bi];
+    [self applyReqPaneLanguage];                 // body modes are all JSON-side (never the Envelope tab)
     [self highlightActiveTab:_reqTabButtons active:bi];}
 
 #pragma mark Tabs
+
+// Lexer per pane content (SPEC_soap highlight). Request side: language follows TAB SEMANTICS — only
+// the SOAP Envelope tab (index 0) is XML; every other tab of every type edits JSON. Response side:
+// content-sniff — an XML body can arrive on ANY type (SOAP, HTTP XML API), and the streaming "["-log
+// stays JSON. Both setters are idempotent inside SciTextView.
+- (void)applyReqPaneLanguage {
+    BOOL xml = ([self requestType] == core::RequestType::Soap && _activeReqTab == 0);
+    [_reqText setLanguage:(xml ? SciLanguageXml : SciLanguageJson)];
+}
+- (void)applyRespPaneLanguageFor:(NSString *)content {
+    NSCharacterSet *ws = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    NSString *t = [content ?: @"" stringByTrimmingCharactersInSet:ws];
+    [_respText setLanguage:([t hasPrefix:@"<"] ? SciLanguageXml : SciLanguageJson)];
+}
 
 - (void)reqTabClicked:(OS9BevelButton *)b { [self selectReqTab:b.tag]; }
 - (void)selectReqTab:(NSInteger)tab {
@@ -479,6 +514,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     _activeReqTab = tab;
     if (tab < (NSInteger)_reqTabTitles.count) _leftPaneActiveTabKey = _reqTabTitles[tab];  // remember left pane
     _reqText.string = _reqBuffers[tab];
+    [self applyReqPaneLanguage];
     [self highlightActiveTab:_reqTabButtons active:tab];}
 
 - (void)respTabClicked:(OS9BevelButton *)b {
@@ -498,6 +534,7 @@ static NSArray<NSDictionary *> *BodyModeTable(void) {
     _activeRespTab = tab;
     if (tab < (NSInteger)_respTabTitles.count) _rightPaneActiveTabKey = _respTabTitles[tab];  // remember right pane
     _respText.string = _respBuffers[tab];
+    [self applyRespPaneLanguageFor:_respBuffers[tab]];
     [self highlightActiveTab:_respTabButtons active:tab];
 }
 - (void)highlightActiveTab:(NSArray<OS9BevelButton *> *)buttons active:(NSInteger)active {

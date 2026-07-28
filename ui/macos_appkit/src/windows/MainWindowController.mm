@@ -442,7 +442,8 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     BOOL grpc = (_t == core::RequestType::Grpc);
     BOOL kafka = (_t == core::RequestType::Kafka);
     BOOL noPopup = (_t == core::RequestType::WebSocket || _t == core::RequestType::GraphQl ||
-                    kafka);   // WS/GraphQL/Kafka: no method/proto popup
+                    _t == core::RequestType::Soap ||
+                    kafka);   // WS/GraphQL/Kafka/SOAP: no method/proto popup
     _methodPopup.frame = NSMakeRect(x, ty, wMethod, btnH);
     _protoPopup.frame = NSMakeRect(x, ty, wProto, btnH);
     _methodPopup.hidden = grpc || noPopup;   // only HTTP shows the method popup
@@ -656,6 +657,7 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
     using namespace core::domain;
     switch (t) {
     case RequestType::Grpc: return defaultPayloadFor(RequestType::Grpc); // shared factory: message "{}" + example metadata hints
+    case RequestType::Soap: return defaultPayloadFor(RequestType::Soap); // shared factory: starter 1.1 envelope
     case RequestType::WebSocket:
         return WebSocketRequest::create({Url::create("").take(), {}, {}, Auth::none(), {}, WsSendKind::Text})
             .take();
@@ -717,6 +719,12 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
         // only cover the first two titles, and the applyResponseBuffers clamp falls back to Response.
         _reqTabTitles = @[ StrTabGqlQuery, StrTabVariables, StrTabHeaders, StrTabAuth, StrTabConfig ];
         _respTabTitles = @[ StrTabResponse, StrTabRequest, StrTabSchema ];
+    } else if (t == core::domain::RequestType::Soap) {
+        // SOAP: full XML envelope + Headers + Auth + Soap ({action, version}) + shared Config last.
+        // Response pane: body + response headers (Content-Type tells the negotiated SOAP dialect and
+        // separates a real <soap:Fault> from a proxy/gateway error page). No Request tab.
+        _reqTabTitles = @[ StrTabEnvelope, StrTabHeaders, StrTabAuth, StrTabSoap, StrTabConfig ];
+        _respTabTitles = @[ StrTabResponse, StrTabHeaders ];
     } else if (t == core::domain::RequestType::Kafka) {
         // Producer: Message (key/value/headers) + Kafka (topic/ack/compression/...). Consumer:
         // ONE Kafka tab (topics/group/offset-reset/...) — no Message tab (nothing to compose, SPEC_kafka §2.2).

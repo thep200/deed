@@ -50,6 +50,7 @@ add_library(core STATIC
   src/infra/auth/oauth2_token_provider.cpp
   src/infra/transport/graphql/gql_introspection.cpp
   src/infra/transport/http/blocking_fetch.cpp
+  src/infra/transport/soap/native_soap_sender.cpp
   src/infra/transport/kafka/avro_serde.cpp
   src/infra/transport/kafka/schema_registry_client.cpp
   src/infra/transport/graphql/gql_operation.cpp

@@ -20,6 +20,7 @@
     CGFloat _fontPt;      // Scintilla font size
     BOOL _streaming;      // streaming-write mode (SPEC_grpc_streaming §7)
     BOOL _followTail;     // auto-scroll to the end as chunks arrive (paused if the user scrolls up)
+    SciLanguage _language; // active lexer/style set (default Json — the historical behavior)
 }
 
 - (instancetype)initEditable:(BOOL)editable {
@@ -53,7 +54,8 @@
 - (void)dealloc { [self teardown]; }
 
 - (void)configure {
-    // JSON lexer + line-number margin + idle styling (cost ~ visible area).
+    // Default lexer (JSON) + line-number margin + idle styling (cost ~ visible area).
+    _language = SciLanguageJson;
     [self msg:SCI_SETILEXER w:0 l:(sptr_t)DeedCreateJSONLexer()];
     [self msg:SCI_SETWRAPMODE w:SC_WRAP_NONE l:0];
     [self msg:SCI_SETIDLESTYLING w:SC_IDLESTYLING_ALL l:0];
@@ -113,7 +115,17 @@
     [_sci setColorProperty:SCI_STYLESETBACK parameter:STYLE_LINENUMBER value:[OS9Theme buttonFace]];
     [_sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_LINENUMBER value:[NSColor colorWithCalibratedWhite:0.4 alpha:1]];
 
-    // JSON syntax colors
+    // Language-specific syntax colors. SCE_JSON_* and SCE_H_* SHARE style ids 0-13 -> apply ONLY the
+    // active language's block (setting both would cross-color the other lexer's styles).
+    if (_language == SciLanguageXml) [self applyXmlStyles];
+    else [self applyJsonStyles];
+
+    // caret + selection
+    [_sci setColorProperty:SCI_SETCARETFORE parameter:0 value:[NSColor blackColor]];
+    [_sci setColorProperty:SCI_SETSELBACK parameter:1 value:[NSColor colorWithCalibratedRed:0.78 green:0.82 blue:0.95 alpha:1]];
+}
+
+- (void)applyJsonStyles {
     NSColor *green = [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1];
     NSColor *blue = [NSColor colorWithCalibratedRed:0.1 green:0.2 blue:0.8 alpha:1];
     NSColor *purple = [NSColor colorWithCalibratedRed:0.45 green:0.1 blue:0.5 alpha:1];
@@ -123,10 +135,38 @@
     [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_PROPERTYNAME value:purple];
     [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_KEYWORD value:blue];
     [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_JSON_OPERATOR value:[NSColor blackColor]];
+}
 
-    // caret + selection
-    [_sci setColorProperty:SCI_SETCARETFORE parameter:0 value:[NSColor blackColor]];
-    [_sci setColorProperty:SCI_SETSELBACK parameter:1 value:[NSColor colorWithCalibratedRed:0.78 green:0.82 blue:0.95 alpha:1]];
+- (void)applyXmlStyles {
+    // Same palette family as JSON: tags purple (like property names), attributes blue, strings green.
+    NSColor *green = [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1];
+    NSColor *blue = [NSColor colorWithCalibratedRed:0.1 green:0.2 blue:0.8 alpha:1];
+    NSColor *purple = [NSColor colorWithCalibratedRed:0.45 green:0.1 blue:0.5 alpha:1];
+    NSColor *gray = [NSColor colorWithCalibratedWhite:0.45 alpha:1];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_TAG value:purple];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_TAGUNKNOWN value:purple];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_TAGEND value:purple];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_XMLSTART value:gray];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_XMLEND value:gray];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_QUESTION value:gray];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_ATTRIBUTE value:blue];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_ATTRIBUTEUNKNOWN value:blue];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_DOUBLESTRING value:green];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_SINGLESTRING value:green];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_NUMBER value:blue];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_ENTITY value:blue];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_COMMENT value:gray];
+    [_sci setColorProperty:SCI_STYLESETFORE parameter:SCE_H_CDATA value:gray];
+}
+
+- (void)setLanguage:(SciLanguage)lang {
+    if (lang == _language) return; // idempotent — call sites fire on every tab switch/content set
+    _language = lang;
+    void *lexer = (lang == SciLanguageXml) ? DeedCreateXMLLexer() : DeedCreateJSONLexer();
+    [self msg:SCI_SETILEXER w:0 l:(sptr_t)lexer]; // Scintilla releases the previous ILexer itself
+    [self applyPlatinumTheme];                    // STYLECLEARALL + the new language's style block
+    [_behavior applyHighlightStyles];             // brace-light styles were cleared -> re-set
+    [self msg:SCI_COLOURISE w:0 l:(sptr_t)-1];    // restyle the current text under the new lexer
 }
 
 - (void)setFontName:(NSString *)name size:(CGFloat)size {

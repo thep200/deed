@@ -97,6 +97,8 @@ extern NSString *const StrTabVariables;
 extern NSString *const StrTabMetadata;
 extern NSString *const StrTabConfig;
 extern NSString *const StrTabSchema; // GraphQL response pane: introspected server schema
+extern NSString *const StrTabEnvelope; // SOAP: full XML envelope editor
+extern NSString *const StrTabSoap;     // SOAP: {action, version} config
 
 #pragma mark - Kafka client-kind toggle (SPEC_kafka §2.0)
 extern NSString *const StrKafkaProducer;
@@ -123,6 +125,7 @@ extern NSString *const StrMenuNewGrpc;
 extern NSString *const StrMenuNewWs;
 extern NSString *const StrMenuNewGraphQl;
 extern NSString *const StrMenuNewKafka;
+extern NSString *const StrMenuNewSoap;
 extern NSString *const StrNewFolder;     // menu + default folder name
 extern NSString *const StrMenuCopyCurl;  // right-click: copy request as cURL/grpcurl
 extern NSString *const StrFmtDeleteItems;
@@ -133,6 +136,7 @@ extern NSString *const StrDefaultRpcName;
 extern NSString *const StrDefaultWsName;
 extern NSString *const StrDefaultGqlName;
 extern NSString *const StrDefaultKafkaName;
+extern NSString *const StrDefaultSoapName;
 extern NSString *const StrDefaultImportName;   // fallback when a name cannot be inferred
 extern NSString *const StrImportedGrpc;
 

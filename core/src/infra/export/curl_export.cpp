@@ -165,6 +165,24 @@ std::string curlWs(const d::WebSocketRequest& w) {
     return cmd;
 }
 
+// SOAP = HTTP POST of the envelope; mirror the sender's version-header policy (SPEC_soap §4).
+std::string curlSoap(const d::SoapRequest& s) {
+    std::string cmd = "curl -X POST " + shq(s.url().raw());
+    appendHeadersAndAuth(cmd, s.headers(), s.auth());
+    if (!headersHaveContentType(s.headers())) {
+        std::string ct = s.version() == d::SoapVersion::V1_2
+                             ? (s.action().empty()
+                                    ? std::string("application/soap+xml; charset=utf-8")
+                                    : "application/soap+xml; charset=utf-8; action=\"" + s.action() + "\"")
+                             : std::string("text/xml; charset=utf-8");
+        cmd += " \\\n  -H " + shq("Content-Type: " + ct);
+    }
+    if (s.version() == d::SoapVersion::V1_1)
+        cmd += " \\\n  -H " + shq("SOAPAction: \"" + s.action() + "\"");
+    cmd += " \\\n  --data " + shq(s.envelope());
+    return cmd;
+}
+
 } // namespace
 
 std::string toCurl(const d::RequestModel& m) {
@@ -176,6 +194,7 @@ std::string toCurl(const d::RequestModel& m) {
         else if constexpr (std::is_same_v<T, d::GrpcRequest>) out = curlGrpc(p, tlsOn);
         else if constexpr (std::is_same_v<T, d::GraphQlRequest>) out = curlGraphQl(p);
         else if constexpr (std::is_same_v<T, d::WebSocketRequest>) out = curlWs(p);
+        else if constexpr (std::is_same_v<T, d::SoapRequest>) out = curlSoap(p);
     });
     return out;
 }

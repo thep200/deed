@@ -88,6 +88,28 @@ static void test_graphql() {
   roundtrip(m.value(), "graphql roundtrip");
 }
 
+static void test_soap() {
+  SoapRequest::Parts p{Url::create("http://svc.test/calc").take()};
+  p.envelope = "<soapenv:Envelope><soapenv:Body/></soapenv:Envelope>";
+  auto m1 = RequestModel::create(RequestId("req_soap_1"), "Calc", 9, cfg(),
+                                 SoapRequest::create(std::move(p)).take());
+  roundtrip(m1.value(), "soap 1.1 (empty action) roundtrip");
+
+  SoapRequest::Parts p2{Url::create("https://svc.test/v2").take()};
+  p2.action = "urn:GetUser";
+  p2.version = SoapVersion::V1_2;
+  p2.envelope = "<Envelope/>";
+  std::vector<Header> hs;
+  hs.push_back(Header::create("X-Trace", "1", true).take());
+  p2.headers = HeaderList(std::move(hs));
+  AuthOAuth2 o;
+  o.tokenUrl = "https://idp/token"; o.clientId = "cid";
+  p2.auth = Auth::oauth2(std::move(o)).take();
+  auto m2 = RequestModel::create(RequestId("req_soap_2"), "GetUser", 10, cfg(),
+                                 SoapRequest::create(std::move(p2)).take());
+  roundtrip(m2.value(), "soap 1.2 + oauth2 + headers roundtrip");
+}
+
 static void test_kafka_producer() {
   auto brokers = BrokerList::parse("localhost:9092").take();
   KafkaProduceConfig pcfg{KafkaTopic::create("demo-topic").take()};
@@ -283,6 +305,7 @@ int run_mapper_roundtrip_tests() {
   test_grpc();
   test_ws();
   test_graphql();
+  test_soap();
   test_kafka_producer();
   test_kafka_consumer();
   test_kafka_inactive_draft();

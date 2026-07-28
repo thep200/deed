@@ -45,6 +45,7 @@ int run_field_json_tests();
 int run_gql_introspection_tests();
 int run_oauth2_provider_tests();
 int run_avro_serde_tests();
+int run_soap_tests();
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -1000,14 +1001,15 @@ int main() {
     int introFail = run_gql_introspection_tests(); // GraphQL introspection SDL printer (Schema tab)
     int oauthFail = run_oauth2_provider_tests();   // OAuth2 token provider (pure pieces, no network)
     int avroFail = run_avro_serde_tests();         // Kafka Avro framing/serde + SR response parsing
+    int soapFail = run_soap_tests();               // SOAP HTTP packaging + fault extract + XML pretty
 
     fs::remove_all(root);
 
-    std::printf("\n==== %d passed, %d failed (+%d stream, +%d ws, +%d sse, +%d gql, +%d mapper, +%d saga, +%d repo, +%d import, +%d prepo, +%d field, +%d intro, +%d oauth, +%d avro) ====\n",
-                g_pass, g_fail, streamFail, wsFail, sseFail, gqlFail, mapFail, sagaFail, repoFail, importFail, prepoFail, fieldFail, introFail, oauthFail, avroFail);
+    std::printf("\n==== %d passed, %d failed (+%d stream, +%d ws, +%d sse, +%d gql, +%d mapper, +%d saga, +%d repo, +%d import, +%d prepo, +%d field, +%d intro, +%d oauth, +%d avro, +%d soap) ====\n",
+                g_pass, g_fail, streamFail, wsFail, sseFail, gqlFail, mapFail, sagaFail, repoFail, importFail, prepoFail, fieldFail, introFail, oauthFail, avroFail, soapFail);
     return (g_fail == 0 && streamFail == 0 && wsFail == 0 && sseFail == 0 && gqlFail == 0 &&
             mapFail == 0 && sagaFail == 0 && repoFail == 0 && importFail == 0 && prepoFail == 0 &&
-            fieldFail == 0 && introFail == 0 && oauthFail == 0 && avroFail == 0)
+            fieldFail == 0 && introFail == 0 && oauthFail == 0 && avroFail == 0 && soapFail == 0)
                ? 0
                : 1;
 }

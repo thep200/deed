@@ -36,6 +36,16 @@ inline RequestModel::Payload defaultPayloadFor(RequestType type) {
                       .take();
     return GrpcRequest::create(std::move(gp)).take();
   }
+  case RequestType::Soap: {
+    // Starter envelope (1.1 skeleton) — same convention as GraphQL's starter document.
+    SoapRequest::Parts sp{Url::create("").take()}; // Parts holds a Url (no default ctor) -> brace-init
+    sp.envelope = "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\">\n"
+                  "  <soapenv:Header/>\n"
+                  "  <soapenv:Body>\n"
+                  "  </soapenv:Body>\n"
+                  "</soapenv:Envelope>";
+    return SoapRequest::create(std::move(sp)).take();
+  }
   case RequestType::Kafka: {
     // BrokerList/KafkaTopic reject empty (SPEC_kafka §3 invariants) -> seed a placeholder, same convention
     // GraphQL uses for its non-empty-query invariant (not an "always-empty-ok" draft like url/target).

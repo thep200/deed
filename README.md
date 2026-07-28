@@ -30,6 +30,7 @@
   - [gRPC](#grpc)
   - [Websocket](#websocket)
   - [GraphQL](#graphql)
+  - [SOAP](#soap)
   - [Kafka](#kafka)
     - [Producer](#producer)
     - [Consumer](#consumer)
@@ -45,6 +46,7 @@ Supports:
 - gRPC (unary, server-streaming, client-streaming, bidi)
 - WebSocket
 - GraphQL (query, mutation, subscription, schema introspection)
+- SOAP (1.1 & 1.2)
 - Kafka (producer & consumer, Avro via Schema Registry)
 
 # Installation
@@ -63,11 +65,12 @@ Currently, I'm still shipping deed files as `.app`. Please download the latest v
 - gRPC
 - WebSocket
 - GraphQL (incl. schema introspection — Schema tab)
+- SOAP 1.1 / 1.2 (XML pretty-print, fault-aware)
 - Kafka (incl. Avro values via Confluent Schema Registry)
 - Auth: Basic, Bearer, OAuth2 (client credentials / password, token fetched & cached automatically)
 - Lazy load collection tree
-- Request editor (JSON)
-- Response viewer (JSON)
+- Request editor (JSON / XML syntax highlight)
+- Response viewer (JSON / XML syntax highlight + pretty-print)
 - Environment & Alias
 - Import curl, gRPC
 
@@ -368,6 +371,32 @@ Queries and mutations are sent over HTTP and show one response. A **subscription
 **Schema (introspection)** — the right pane has a **Schema** tab. First click POSTs the standard introspection query to the endpoint (with the request's headers/auth) and renders the server schema as SDL; the **Pretty/Raw** button toggles between SDL and the raw introspection JSON. The result is cached per request and refetched after you edit the URL, switch requests, or a send fails — just click the tab again. Servers with introspection disabled show the error as a toast.
 
 ![GraphQL](assets/images/graphql.png)
+
+## SOAP
+
+**URL field** — the service endpoint (e.g. `http://www.dneonline.com/calculator.asmx`).
+
+**Tabs:**
+
+- **Envelope** — the full SOAP envelope as raw XML (nothing is wrapped or generated for you — what you type is what's POSTed).
+- **Headers / Auth** — same as HTTP (OAuth2 works too).
+- **Soap** — the protocol knobs:
+
+  ```json
+  {
+    "action": "http://tempuri.org/Add",
+    "version": "1.1"
+  }
+  ```
+
+  | version | Content-Type | action |
+  |---|---|---|
+  | `"1.1"` | `text/xml; charset=utf-8` | `SOAPAction: "<action>"` header (always sent, even empty) |
+  | `"1.2"` | `application/soap+xml; charset=utf-8` | `action="<action>"` inside the Content-Type |
+
+  Setting your own `Content-Type` or `SOAPAction` in the **Headers** tab overrides Deed's.
+
+**Send** POSTs the envelope and shows the response. The Envelope tab and any XML response are syntax-highlighted (tags/attributes/values); press **Pretty** to indent the XML. A SOAP Fault usually arrives as HTTP 500 with a `<soap:Fault>` body; the response is shown as-is. WSDL browsing isn't supported yet — grab the operation's action/namespace from your service's WSDL by hand.
 
 ## Kafka
 

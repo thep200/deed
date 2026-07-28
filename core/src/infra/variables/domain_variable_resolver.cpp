@@ -138,6 +138,16 @@ d::RequestModel::Payload resolvePayload(const d::RequestModel &m, const VarMap &
                                   resolveAuth(p.auth(), v), p.subTransport(), p.wsProtocol()};
       auto r = d::GraphQlRequest::create(std::move(gp));
       return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
+    } else if constexpr (std::is_same_v<T, d::SoapRequest>) {
+      // url/action/envelope/headers/auth templated; version passes through.
+      d::SoapRequest::Parts p2{d::Url::create(rs(p.url().raw(), v)).take()};
+      p2.action = rs(p.action(), v);
+      p2.version = p.version();
+      p2.envelope = rs(p.envelope(), v);
+      p2.headers = resolveHeaders(p.headers(), v);
+      p2.auth = resolveAuth(p.auth(), v);
+      auto r = d::SoapRequest::create(std::move(p2));
+      return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
     } else { // KafkaRequest — brokers/topic(s)/group/key/value/headers templated (SPEC_kafka §9)
       auto brokers = d::BrokerList::parse(rs(p.brokers().toBootstrapServers(), v));
       d::BrokerList newBrokers = brokers ? brokers.take() : p.brokers();

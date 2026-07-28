@@ -126,6 +126,7 @@ const char *typeLabel(d::RequestType t) {
   case d::RequestType::GraphQl: return "graphql";
   case d::RequestType::WebSocket: return "ws";
   case d::RequestType::Kafka: return "kafka";
+  case d::RequestType::Soap: return "soap";
   }
   return "http";
 }

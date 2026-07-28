@@ -15,6 +15,8 @@
 #include "core/domain/grpc/grpc_request.hpp"
 #include "core/domain/http/http_request.hpp"
 #include "core/domain/kafka/kafka_request.hpp"
+#include "core/domain/request/request_type.hpp"
+#include "core/domain/soap/soap_request.hpp"
 #include "core/domain/values/header.hpp"
 #include "core/domain/values/http_method.hpp"
 #include "core/domain/values/json_text.hpp"
@@ -104,6 +106,16 @@ static void test_auth() {
     CHECK(!Auth::oauth2(o).isOk(), "oauth2 password grant needs credentials");
     o.username = "u"; o.password = "p";
     CHECK(Auth::oauth2(o).isOk(), "oauth2 password grant ok");
+  }
+  {
+    // SOAP: lenient draft (empty url/envelope OK), version defaults 1.1, type token round-trips.
+    SoapRequest::Parts sp{Url::create("").take()};
+    auto s = SoapRequest::create(std::move(sp));
+    CHECK(s.isOk(), "soap draft creates");
+    CHECK(s.value().version() == SoapVersion::V1_1, "soap version defaults 1.1");
+    CHECK(core::toString(core::RequestType::Soap) == "soap", "soap type token");
+    core::RequestType rt;
+    CHECK(core::parseRequestType("soap", rt) && rt == core::RequestType::Soap, "soap type parses");
   }
   auto bearer = Auth::bearer("tok").value();
   CHECK(bearer == Auth::bearer("tok").value(), "auth value equality");

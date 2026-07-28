@@ -171,6 +171,7 @@
     // Show the streaming text in the body tab (tab 0) and select it.
     _activeRespTab = 0;
     [self highlightActiveTab:_respTabButtons active:0];
+    [_respText setLanguage:SciLanguageJson]; // stream log is a JSON array, whatever was shown before
     [_respText beginStreaming];   // seeds "[\n]" -> the response is a valid JSON array from the start
     [self liveTick];              // paint the live status (elapsed | size | events) immediately
 }
@@ -389,6 +390,9 @@
             [ck appendFormat:@"%s=%s  (domain=%s path=%s expires=%s)\n", c.name.c_str(), c.value.c_str(),
                              c.domain.c_str(), c.path.c_str(), c.expires.c_str()];
         [bufs addObject:(ck.length ? ck : StrNoSetCookie)];
+    } else if (type == RequestType::Soap) {
+        // SOAP: body + response headers; no Request tab (buffer order matches the 2 titles).
+        [bufs addObject:N(core::serial::responseHeadersToJson(r.headers))];
     } else if (type != RequestType::Kafka) {
         [bufs addObject:@""];   // Request tab (resolved request) — see note above
     }
@@ -415,6 +419,7 @@
     if (ri >= (NSInteger)_respBuffers.count) ri = 0;
     _activeRespTab = ri;
     _respText.string = _respBuffers.count ? _respBuffers[ri] : @"";
+    [self applyRespPaneLanguageFor:(_respBuffers.count ? _respBuffers[ri] : @"")];
     [self highlightActiveTab:_respTabButtons active:ri];
 }
 

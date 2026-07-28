@@ -362,6 +362,8 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)applyGrpcMethods:(const std::vector<core::domain::GrpcMethodDescriptor> &)methods error:(NSString *)err                 openMenu:(BOOL)openMenu;
 - (void)serviceMethodChanged:(id)sender;
 - (void)applySelectedGrpcMethod:(NSInteger)idx;
+- (void)applyReqPaneLanguage;                       // XML for the SOAP Envelope tab, JSON otherwise
+- (void)applyRespPaneLanguageFor:(NSString *)content; // content-sniff: leading '<' -> XML
 - (void)invalidateGqlSchema;
 - (BOOL)respActiveTabIsSchema;
 - (void)displayGqlSchemaPane;
@@ -377,6 +379,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)newWs:(id)s;
 - (void)newGraphQl:(id)s;
 - (void)newKafka:(id)s;
+- (void)newSoap:(id)s;
 - (void)wsSendOrConnect;
 - (void)createRequest:(core::RequestType)t name:(NSString *)name;
 - (void)newFolder:(id)s;

@@ -27,10 +27,11 @@ bool parseTypeRest(const std::string& rest, ParsedRequestName& out) {
     std::size_t sep = rest.find('_');
     if (sep == std::string::npos) return false;
     std::string type = rest.substr(0, sep);
-    if (type == "grpc" || type == "ws" || type == "gql" || type == "kafka") {
+    if (type == "grpc" || type == "ws" || type == "gql" || type == "kafka" || type == "soap") {
         out.type = (type == "ws")   ? RequestType::WebSocket
                  : (type == "gql")  ? RequestType::GraphQl
                  : (type == "kafka") ? RequestType::Kafka
+                 : (type == "soap")  ? RequestType::Soap
                                      : RequestType::Grpc;
         out.slug = rest.substr(sep + 1);            // everything left = slug
         out.method.clear();
@@ -84,6 +85,7 @@ std::string encodeRequestFilename(const std::string& id, RequestType type,
     if (type == RequestType::WebSocket) return prefix + "ws_" + slug + ".json"; // NO method
     if (type == RequestType::GraphQl) return prefix + "gql_" + slug + ".json";  // NO method
     if (type == RequestType::Kafka) return prefix + "kafka_" + slug + ".json";  // NO method
+    if (type == RequestType::Soap) return prefix + "soap_" + slug + ".json";    // NO method
     std::string m;
     for (unsigned char c : method) m += static_cast<char>(std::tolower(c));
     if (m.empty()) m = "get";

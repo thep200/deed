@@ -82,6 +82,8 @@ NSString *const StrTabVariables = @"Vars";
 NSString *const StrTabMetadata = @"Metadata";
 NSString *const StrTabConfig = @"Config";
 NSString *const StrTabSchema = @"Schema";
+NSString *const StrTabEnvelope = @"Envelope";
+NSString *const StrTabSoap = @"Soap";
 
 #pragma mark - Kafka client-kind toggle
 NSString *const StrKafkaProducer = @"Prod";
@@ -105,6 +107,7 @@ NSString *const StrMenuNewGrpc = @"New gRPC Request";
 NSString *const StrMenuNewWs = @"New WebSocket";
 NSString *const StrMenuNewGraphQl = @"New GraphQL";
 NSString *const StrMenuNewKafka = @"New Kafka";
+NSString *const StrMenuNewSoap = @"New SOAP";
 NSString *const StrNewFolder = @"New Folder";
 NSString *const StrMenuCopyCurl = @"Copy as cURL";
 NSString *const StrFmtDeleteItems = @"Delete %lu items";
@@ -115,6 +118,7 @@ NSString *const StrDefaultRpcName = @"New RPC";
 NSString *const StrDefaultWsName = @"New Socket";
 NSString *const StrDefaultGqlName = @"New GraphQL";
 NSString *const StrDefaultKafkaName = @"New Kafka";
+NSString *const StrDefaultSoapName = @"New SOAP";
 NSString *const StrDefaultImportName = @"request";
 NSString *const StrImportedGrpc = @"Imported gRPC";
 

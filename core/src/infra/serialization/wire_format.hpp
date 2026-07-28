@@ -11,6 +11,7 @@ inline constexpr const char *kGrpc = "grpc";
 inline constexpr const char *kWs = "ws";
 inline constexpr const char *kGraphql = "graphql";
 inline constexpr const char *kKafka = "kafka";
+inline constexpr const char *kSoap = "soap";
 
 // Body "mode" token (HTTP body discriminant).
 inline constexpr const char *kBodyNone = "none";

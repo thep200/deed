@@ -35,7 +35,9 @@ add_library(scintilla STATIC
   ${SCI_COCOA}
   ${LEX_LEXLIB}
   ${LEX}/lexers/LexJSON.cxx
-  ${CMAKE_CURRENT_SOURCE_DIR}/lexilla_json.cxx)
+  ${LEX}/lexers/LexHTML.cxx
+  ${CMAKE_CURRENT_SOURCE_DIR}/lexilla_json.cxx
+  ${CMAKE_CURRENT_SOURCE_DIR}/lexilla_xml.cxx)
 
 target_include_directories(scintilla PUBLIC
   ${SCI}/include ${SCI}/cocoa ${LEX}/include ${CMAKE_CURRENT_SOURCE_DIR})
