@@ -1,10 +1,12 @@
 #include <algorithm>
 #include <filesystem>
 #include <stdexcept>
+#include <unordered_map>
 
 #include <nlohmann/json.hpp>
 
 #include "core/infra/persistence/stores.hpp"
+#include "infra/persistence/env_crypto.hpp"
 #include "infra/platform/fs_util.hpp"
 #include "infra/serialization/json_codec.hpp"
 
@@ -35,7 +37,10 @@ std::vector<std::string> EnvironmentStore::list() const {
         if (ec) break;
         if (!e.is_regular_file()) continue;
         const auto& p = e.path();
-        if (p.extension() == ".json") out.push_back(p.stem().string());
+        if (p.extension() != ".json") continue;
+        std::string name = p.stem().string();
+        if (name == kGlobalEnvName) continue; // reserved base — never listed
+        out.push_back(std::move(name));
     }
     std::sort(out.begin(), out.end());
     return out;
@@ -47,12 +52,55 @@ Environment EnvironmentStore::load(const std::string& name) const {
         throw std::runtime_error("env not found: " + name);
     Environment e = codec::envFromJson(codec::parseGuarded(txt));
     e.name = name;   // the env name IS the filename (authoritative) — ignore any stale "name" inside the JSON
+    if (appCfg_) {
+        AppConfig cfg = appCfg_->load();
+        if (!cfg.encryptionKey.empty())
+            for (auto& k : e.keys)
+                if (envcrypto::isEncrypted(k.value))
+                    if (auto p = envcrypto::decrypt(k.value, cfg.encryptionKey)) k.value = *p;
+        // wrong/missing key -> value stays "enc:v1:..." (visible, not lost)
+    }
     return e;
+}
+
+bool EnvironmentStore::isEncryptedValue(const std::string& value) { return envcrypto::isEncrypted(value); }
+
+Environment EnvironmentStore::encryptedForDisk(const Environment& e) const {
+    if (!appCfg_) return e;
+    AppConfig cfg = appCfg_->load();
+    if (cfg.encryptionKey.empty()) return e;
+    for (const auto& n : cfg.encryptionExclude)
+        if (n == e.name) return e; // excluded env -> plaintext
+    // Stored ciphertext reused when the plaintext is unchanged -> only actually-changed keys re-encrypt
+    // (no nonce re-roll, byte-stable files).
+    std::unordered_map<std::string, std::string> stored;
+    {
+        std::string txt;
+        if (fsutil::readFile(envFile(root_, e.name), txt)) {
+            try {
+                Environment prev = codec::envFromJson(codec::parseGuarded(txt));
+                for (auto& k : prev.keys)
+                    if (envcrypto::isEncrypted(k.value)) stored.emplace(k.key, std::move(k.value));
+            } catch (...) {}
+        }
+    }
+    Environment out = e;
+    for (auto& k : out.keys) {
+        if (!k.secret || k.value.empty() || envcrypto::isEncrypted(k.value)) continue;
+        if (auto it = stored.find(k.key); it != stored.end()) {
+            if (auto p = envcrypto::decrypt(it->second, cfg.encryptionKey); p && *p == k.value) {
+                k.value = it->second;   // unchanged -> keep stored bytes
+                continue;
+            }
+        }
+        k.value = envcrypto::encrypt(k.value, cfg.encryptionKey);
+    }
+    return out;
 }
 
 void EnvironmentStore::save(const Environment& e) {
     if (e.name.empty()) throw std::runtime_error("env must have a name");
-    fsutil::writeFileAtomic(envFile(root_, e.name), codec::toJson(e).dump(2));
+    fsutil::writeFileAtomic(envFile(root_, e.name), codec::toJson(encryptedForDisk(e)).dump(2));
     epoch_.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -62,40 +110,7 @@ void EnvironmentStore::remove(const std::string& name) {
     epoch_.fetch_add(1, std::memory_order_relaxed);
 }
 
-bool EnvironmentStore::renameEnv(const std::string& oldName, const std::string& newName) {
-    if (newName.empty() || oldName.empty()) return false;
-    if (oldName == newName) return true;
-    std::error_code ec;
-    // Collides with another env name -> reject.
-    if (fs::exists(fs::path(envFile(root_, newName)), ec)) return false;
-    fs::path src(envFile(root_, oldName));
-    if (!fs::exists(src, ec)) return false;
-    // Read, rename inside content, atomically write the new file, then delete the old one.
-    Environment e = load(oldName);
-    e.name = newName;
-    fsutil::writeFileAtomic(envFile(root_, newName), codec::toJson(e).dump(2));
-    fs::remove(src, ec);
-    epoch_.fetch_add(1, std::memory_order_relaxed);
-    return true;
-}
-
 namespace {
-// True if renaming oldAlias->newAlias inside `e` would collide (both keys already present).
-bool aliasRenameCollides(const Environment& e, const std::string& oldAlias, const std::string& newAlias) {
-    bool hasOld = false, hasNew = false;
-    for (const auto& k : e.keys) {
-        if (k.key == oldAlias) hasOld = true;
-        if (k.key == newAlias) hasNew = true;
-    }
-    return hasOld && hasNew;
-}
-// Rename every oldAlias key to newAlias in `e`; returns true if any key changed.
-bool renameAliasInEnv(Environment& e, const std::string& oldAlias, const std::string& newAlias) {
-    bool changed = false;
-    for (auto& k : e.keys)
-        if (k.key == oldAlias) { k.key = newAlias; changed = true; }
-    return changed;
-}
 // Set key=val in `e` (update in place if present, else append).
 void upsertEnvKey(Environment& e, const std::string& key, const std::string& val) {
     for (auto& ek : e.keys)
@@ -111,30 +126,6 @@ void migrateLegacyEnv(EnvironmentStore& store, const std::string& envName, const
     if (!e.name.empty()) store.save(e);
 }
 } // namespace
-
-bool EnvironmentStore::renameAlias(const std::string& oldAlias, const std::string& newAlias) {
-    if (newAlias.empty() || oldAlias.empty()) return false;
-    if (oldAlias == newAlias) return true;
-    // Cross-env: check for collisions across ALL envs first, then write (logically atomic).
-    std::vector<Environment> envs;
-    for (const auto& n : list()) {
-        Environment e;
-        try { e = load(n); } catch (...) { continue; }
-        if (aliasRenameCollides(e, oldAlias, newAlias)) return false; // duplicate key -> reject
-        envs.push_back(std::move(e));
-    }
-    // M16: write directly (no per-env epoch bump) so a rename touching K envs does K writes but only
-    // ONE epoch bump + cache invalidation at the end, instead of K.
-    bool changedAny = false;
-    for (auto& e : envs) {
-        if (renameAliasInEnv(e, oldAlias, newAlias)) {
-            fsutil::writeFileAtomic(envFile(root_, e.name), codec::toJson(e).dump(2));
-            changedAny = true;
-        }
-    }
-    if (changedAny) epoch_.fetch_add(1, std::memory_order_relaxed);
-    return changedAny;
-}
 
 void EnvironmentStore::migrateLegacySecrets() {
     fs::path secretsDir = fs::path(root_) / ".secrets";

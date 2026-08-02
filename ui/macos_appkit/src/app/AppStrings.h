@@ -44,8 +44,7 @@ extern NSString *const StrOpenFolder;   // File menu + open-folder button
 extern NSString *const StrOpenCollection;   // button prompt in NSOpenPanel
 extern NSString *const StrSave;
 extern NSString *const StrBtnBack;
-extern NSString *const StrEnvLocal;      // base environment column/variable label
-extern NSString *const StrEnvManage;
+extern NSString *const StrBtnManageEnv;  // Settings screen: opens the Environments screen (next to Back)
 
 #pragma mark - Tooltip
 extern NSString *const StrTipSettings;
@@ -177,6 +176,7 @@ extern NSString *const StrFmtEnvExists;     // duplicate-env dialog (with name)
 
 #pragma mark - Toast / status
 extern NSString *const StrToastOpenFolderFirst;
+extern NSString *const StrToastNoEnvs;      // env dropdown with zero envs (manage moved to Settings)
 extern NSString *const StrToastUnaryOnly;
 extern NSString *const StrToastWsEmptyFrame;
 extern NSString *const StrToastWsQueueFull;
@@ -185,6 +185,7 @@ extern NSString *const StrToastSaved;
 extern NSString *const StrToastRenamed;
 extern NSString *const StrToastDuplicated;
 extern NSString *const StrToastInvalidSettings;
+extern NSString *const StrToastEncKeyInvalid;   // env value stayed ciphertext -> wrong/missing key
 extern NSString *const StrToastAutosaveFailed;
 extern NSString *const StrToastRequestGone;
 extern NSString *const StrToastEnterGrpcHost;

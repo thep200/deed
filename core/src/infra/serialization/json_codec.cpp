@@ -80,7 +80,9 @@ json toJson(const AppConfig& c) {
                 {"font_name", c.fontName},
                 {"font_size", c.fontSize},
                 {"ram_cache_size", c.ramCacheSizeMb},
-                {"disk_cache_size", c.diskCacheSizeMb}};
+                {"disk_cache_size", c.diskCacheSizeMb},
+                {"encryption_key", c.encryptionKey},
+                {"encryption_exclude", c.encryptionExclude}};
 }
 AppConfig appConfigFromJson(const json& j) { return appConfigFromJson(j, AppConfig{}); }
 
@@ -91,6 +93,12 @@ AppConfig appConfigFromJson(const json& j, const AppConfig& def) {
     c.fontSize = getIntCompat(j, "font_size", "fontSize", def.fontSize);
     c.ramCacheSizeMb = getIntCompat(j, "ram_cache_size", "ramCacheSizeMb", def.ramCacheSizeMb);
     c.diskCacheSizeMb = getIntCompat(j, "disk_cache_size", "diskCacheSizeMb", def.diskCacheSizeMb);
+    c.encryptionKey = getStrCompat(j, "encryption_key", "encryptionKey", def.encryptionKey);
+    if (auto it = j.find("encryption_exclude"); it != j.end() && it->is_array()) {
+        c.encryptionExclude.clear();
+        for (const auto& v : *it)
+            if (v.is_string()) c.encryptionExclude.push_back(v.get<std::string>());
+    }
     // cacheResponses/cachePersist no longer in user config -> keep the struct's default true.
     return c;
 }

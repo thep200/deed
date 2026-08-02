@@ -22,8 +22,8 @@ public:
     // --- Reverse substitution: rewrite a literal value back to {{alias}} (README §9.5). ---
     // Used to proactively replace hardcoded values that match the active env with an alias.
 
-    // `vars` is (key,value) in ENV DEFINITION ORDER (Global first, then the active env). When two
-    // keys share a value, the FIRST entry wins -> the alias is the first-defined key.
+    // `vars` order: active env pairs first, then non-shadowed Global pairs (mergedVars). On duplicate
+    // values the FIRST entry wins.
 
     // Whole-value match: if `value` exactly equals some vars[key].value (non-empty), set `out` to
     // "{{key}}" and return true. For headers/query/auth/metadata, where the field holds the bare

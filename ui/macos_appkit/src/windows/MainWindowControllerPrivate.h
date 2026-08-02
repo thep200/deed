@@ -180,7 +180,9 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 
     // config screen (2 separate screens: Environments / Settings) — title shown in the title bar
     OS9BevelButton *_backButton;
-    NSInteger _configKind; // 0 = Environments, 1 = Settings
+    OS9BevelButton *_manageEnvButton; // Settings only: opens Environments screen
+    NSInteger _configKind;       // 0 = Environments, 1 = Settings
+    NSInteger _configReturnKind; // 1 = env entered from Settings -> Back returns there (0 = to main)
     EnvWindowController *_envVC;
     OS9SerratedInset *_settingInset;   // serrated border around the Settings editor (like the other panes)
     SciTextView *_settingEditor;   // JSON editor for Settings (Scintilla — JSON lexer + Platinum theme)
@@ -369,7 +371,9 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)displayGqlSchemaPane;
 - (void)fetchGqlSchema;
 - (void)applyGqlSchema:(NSString *)sdl json:(NSString *)json error:(NSString *)err;
-- (void)manageEnv:(id)sender;
+- (void)manageEnvClicked:(id)sender;
+- (void)refreshVarsForSend;
+- (BOOL)saveSettingsFromEditor;
 - (void)showContextMenuForRow:(NSInteger)row atWindowPoint:(NSPoint)pt;
 - (void)purgeCacheAtRel:(NSString *)rel isFolder:(BOOL)isFolder;
 - (void)deleteSelectedMulti:(id)sender;

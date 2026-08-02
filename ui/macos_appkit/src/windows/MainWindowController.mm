@@ -7,6 +7,9 @@
 // The remaining groups are split into categories: +Tree / +Editor / +Send / +Config / +Stress.
 // Shared ivars + imports live in MainWindowControllerPrivate.h.
 
+static const CGFloat kTitleH = 21;        // §2 spec: title bar fixed at 21px tall (incl. border)
+static const CGFloat kToastTopGap = 10;   // toast top slot sits BELOW the title bar (clears zoom/hide)
+
 // Build a non-anti-aliased circular alpha mask of side (2*rpx+1) device pixels (SQUARE_CORNERS=2). Used as a
 // 9-slice CALayer mask: the 4 quarter-circle corners stay pixel-exact (chunky/retro, no smoothing) while the
 // 1px center cross stretches to fill the window on resize. Caller owns the returned image (CGImageRelease).
@@ -43,7 +46,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
       [OS9Theme setConfiguredFontName:N(c.fontName) size:c.fontSize]; }
     // Button style: new (btn-new.svg) by default, or classic (button.svg) via .env.
     [OS9Theme setButtonStyleName:[cfg stringFor:@"BUTTON_STYLE" def:@"new"]];
-    NSRect frame = NSMakeRect(0, 0, [cfg floatFor:@"WINDOW_WIDTH" def:1040], [cfg floatFor:@"WINDOW_HEIGHT" def:680]);
+    NSRect frame = NSMakeRect(0, 0, [cfg floatFor:@"WINDOW_WIDTH" def:1134], [cfg floatFor:@"WINDOW_HEIGHT" def:736]);
     // Window corners (SQUARE_CORNERS): 0 = system titled window (OS-rounded), 1 = borderless SQUARE (OS9
     // default), 2 = borderless + PIXEL-rounded corners (retro, non-AA 9-slice mask). 1 and 2 share the
     // borderless OS9Window; 2 additionally applies _cornerMask after the content view is set (below).
@@ -338,6 +341,10 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
 - (void)buildConfigPane {
     _backButton = [[OS9BevelButton alloc] initWithTitle:StrBtnBack target:self action:@selector(exitConfig:)];
     [_configPane addSubview:_backButton];   // screen title goes in the title bar (see updateTitle)
+    // Settings only: entry point to env editing.
+    _manageEnvButton = [[OS9BevelButton alloc] initWithTitle:StrBtnManageEnv target:self
+                                                      action:@selector(manageEnvClicked:)];
+    [_configPane addSubview:_manageEnvButton];
 
     _envVC = [[EnvWindowController alloc] initWithEnvRepo:nullptr session:nullptr]; // repos set on open
 
@@ -360,7 +367,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
         [CATransaction commit];
     }
     CGFloat W = cb.size.width, H = cb.size.height;
-    CGFloat titleH = 21;   // §2 spec: title bar fixed at 21px tall (incl. border)
+    CGFloat titleH = kTitleH;
     _titleBar.frame = NSMakeRect(0, 0, W, titleH);
     _mainPane.frame = NSMakeRect(0, titleH, W, H - titleH);
     _configPane.frame = NSMakeRect(0, titleH, W, H - titleH);
@@ -388,7 +395,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     if (_treeW < minTree) _treeW = minTree;
     if (_treeW > avail - minReq - minResp) _treeW = avail - minReq - minResp;
     CGFloat remain = avail - _treeW; // for req + resp
-    if (_reqW <= 0) _reqW = remain / 3;   // default: left (request) pane = half the right (response) pane (1:2)
+    if (_reqW <= 0) _reqW = remain * 3 / 7;   // default: left (request) : right (response) = 3:4
     if (_reqW < minReq) _reqW = minReq;
     if (_reqW > remain - minResp) _reqW = remain - minResp;
     CGFloat respW = remain - _reqW;
@@ -399,8 +406,10 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     CGFloat divRespX = reqX + _reqW;
     CGFloat respX = divRespX + dw;
 
-    // (1) Open + (2) tree (CRUD via right-click, no more ⋯ button) — wrapped in serrated border
-    _openButton.frame = NSMakeRect(treeX, top, _treeW, tabH);
+    // (1) gear + Open (collection path) + (2) tree (CRUD via right-click) — wrapped in serrated border
+    CGFloat wGear = [cfg floatFor:@"BTN_SETTING_W" def:26];
+    _settingButton.frame = NSMakeRect(treeX, top, wGear, tabH);
+    _openButton.frame = NSMakeRect(treeX + wGear + 4, top, _treeW - wGear - 4, tabH);
     _treeInset.frame = NSMakeRect(treeX, statusY, _treeW, panesBottom - statusY);
     _treeScroll.frame = NSInsetRect(_treeInset.bounds, 2, 2);
 
@@ -425,10 +434,10 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _statusBar.frame = NSMakeRect(slX, statusY, slW, statusH);
     _statusLabel.frame = NSMakeRect(slX + 8, statusY + 1, slW - 16, statusH - 2);
 
-    // toolbar (1 row): Setting | ENV | Method/Proto | URL (stretches) | Cancel(when sending) | Send
+    // toolbar (1 row): ENV | Method/Proto | URL (stretches) | Cancel(when sending) | Send
+    // (gear moved to the tree header, left of the collection-path button)
     CGFloat ty = MH - toolH + (toolH - btnH) / 2;
     CGFloat x = side;
-    CGFloat wSetting = [cfg floatFor:@"BTN_SETTING_W" def:26];   // icon-only, compact -> gear hugs left edge
     CGFloat wEnv = [cfg floatFor:@"BTN_ENV_W" def:120];
     CGFloat wMethod = [cfg floatFor:@"BTN_METHOD_W" def:92];
     CGFloat wProto = [cfg floatFor:@"BTN_PROTO_W" def:104];   // just wider than "Reflection"
@@ -436,7 +445,6 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     CGFloat wSend = [cfg floatFor:@"BTN_SEND_W" def:54];
     CGFloat wCancel = [cfg floatFor:@"BTN_CANCEL_W" def:64];
 
-    _settingButton.frame = NSMakeRect(x, ty, wSetting, btnH); x += wSetting + 6;
     _envButton.frame = NSMakeRect(x, ty, wEnv, btnH); x += wEnv + 6;
     core::RequestType _t = [self requestType];
     BOOL grpc = (_t == core::RequestType::Grpc);
@@ -497,6 +505,8 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     CGFloat side = [OS9TitleBar iconSideInset];   // align L/R margins with the title-bar close/hide icons
     CGFloat btnH = [cfg floatFor:@"BUTTON_HEIGHT" def:22];
     _backButton.frame = NSMakeRect(side, pad, 90, btnH);             // ← Back (top-left); title in the title bar
+    _manageEnvButton.frame = NSMakeRect(side + 90 + 6, pad, 110, btnH);   // next to Back (6pt toolbar gap)
+    _manageEnvButton.hidden = (_configKind != 1);                    // Settings only
 
     CGFloat top = pad + btnH + pad;
     NSRect body = NSMakeRect(side, top, W - 2 * side, H - top - pad);
@@ -885,7 +895,7 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
     OS9Toast *t = [[OS9Toast alloc] initWithMessage:msg kind:kind];
     NSSize sz = [OS9Toast sizeForMessage:msg];
     // start off-screen to the right, in the top slot -> reflow slides it in.
-    t.frame = NSMakeRect(cv.bounds.size.width, 14, sz.width, sz.height);
+    t.frame = NSMakeRect(cv.bounds.size.width, kTitleH + kToastTopGap, sz.width, sz.height);
     __weak MainWindowController *ws = self;
     __weak OS9Toast *wt = t;
     t.onClose = ^{ [ws dismissToast:wt]; };
@@ -911,11 +921,12 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
 }
 
 // Stack toasts from the top-RIGHT downward: newest (end of array) on top (content flipped: small y = top).
+// Top slot starts under the title bar so a toast never covers the zoom/hide buttons.
 - (void)reflowToasts {
     NSView *cv = _window.contentView;
     CGFloat W = cv.bounds.size.width;
     const CGFloat margin = 14, gap = 8;
-    CGFloat top = margin;
+    CGFloat top = kTitleH + kToastTopGap;
     for (NSInteger i = (NSInteger)_toasts.count - 1; i >= 0; i--) {
         OS9Toast *t = _toasts[i];
         CGFloat tw = t.frame.size.width, th = t.frame.size.height;

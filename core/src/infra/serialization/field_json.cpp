@@ -573,7 +573,7 @@ std::string formatXml(const std::string &text) {
   std::size_t i = first;
   auto indent = [&](int d) {
     out += '\n';
-    for (int k = 0; k < d; ++k) out += "  ";
+    out.append(static_cast<std::size_t>(d) * 2, ' ');   // one append, not one += per level
   };
   bool firstTag = true;
   while (i < text.size()) {

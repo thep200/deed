@@ -29,8 +29,7 @@ NSString *const StrOpenFolder = @"Open Folder…";
 NSString *const StrOpenCollection = @"Open Collection";
 NSString *const StrSave = @"Save";
 NSString *const StrBtnBack = @"Back";
-NSString *const StrEnvLocal = @"Local";
-NSString *const StrEnvManage = @"Manage…";
+NSString *const StrBtnManageEnv = @"Environments";
 
 #pragma mark - Tooltip
 NSString *const StrTipSettings = @"Settings";
@@ -159,6 +158,7 @@ NSString *const StrFmtEnvExists = @"Environment \"%@\" already exists.";
 
 #pragma mark - Toast / status
 NSString *const StrToastOpenFolderFirst = @"Open a collection folder first";
+NSString *const StrToastNoEnvs = @"No environments yet — add one in Settings → Environments";
 NSString *const StrToastUnaryOnly = @"POC supports unary gRPC only";
 NSString *const StrToastWsEmptyFrame = @"Type a message to send";
 NSString *const StrToastWsQueueFull = @"WebSocket send queue is full";
@@ -167,6 +167,7 @@ NSString *const StrToastSaved = @"Saved";
 NSString *const StrToastRenamed = @"Renamed";
 NSString *const StrToastDuplicated = @"Duplicated";
 NSString *const StrToastInvalidSettings = @"Invalid settings JSON — skipped";
+NSString *const StrToastEncKeyInvalid = @"Encryption key invalid — encrypted values unreadable";
 NSString *const StrToastAutosaveFailed = @"Autosave failed: invalid JSON";
 NSString *const StrToastRequestGone = @"Request no longer exists";
 NSString *const StrToastEnterGrpcHost = @"Enter gRPC host first (e.g. localhost:50051)";

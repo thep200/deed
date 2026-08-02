@@ -10,6 +10,8 @@
 #import <Cocoa/Cocoa.h>
 
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <string>
 
 #include "bridge/CoreBridge.h" // CoreResponseSink + legacy DTOs + StreamStatus
@@ -44,14 +46,14 @@ public:
       bool first = (count_ == 0);
       ++count_;
       std::string chunk = (first ? std::string("\n  ") : std::string(",\n  ")) + m->payload;
-      deliverChunk(chunk, count_);
+      enqueueChunk(std::move(chunk), count_);
     } else if (const auto *r = ev.get<EvKafkaRecord>()) {
       if (!opened_) openStream();
       bool first = (count_ == 0);
       ++count_;
       std::string chunk =
           (first ? std::string("\n  ") : std::string(",\n  ")) + core::serial::kafkaRecordToDisplayJson(r->record);
-      deliverChunk(chunk, count_);
+      enqueueChunk(std::move(chunk), count_);
     } else if (const auto *c = ev.get<EvCompleted>()) {
       if (!opened_) openStream();
       deliverClose(core::StreamStatus::Ok, 0, "", count_, (long long)c->summary.elapsed.count());
@@ -79,25 +81,64 @@ private:
       if (s) [s onStreamOpenTransport:t token:tok];
     });
   }
-  void deliverChunk(const std::string &chunk, std::uint64_t count) {
-    // stringWithUTF8String returns nil on invalid UTF-8 -> keep the stream framing alive with a marker.
-    NSString *c = [NSString stringWithUTF8String:chunk.c_str()] ?: @"\n  \"<non-UTF-8 chunk dropped>\"";
+  // Chunk coalescing: records append to guarded buffer, max ONE drain block queued on main. Main busy ->
+  // buffer accumulates -> backlog lands as few big appends, not thousands of tiny ones. shared_ptr so a
+  // drain queued at teardown never dangles.
+  struct Coalesce {
+    std::mutex mu;
+    std::string pending;
+    std::uint64_t count = 0;   // latest total event count
+    bool scheduled = false;    // drain block already queued
+  };
+  static NSString *chunkToNSString(const std::string &batch) {
+    // nil on invalid UTF-8 -> marker keeps stream framing alive
+    return [NSString stringWithUTF8String:batch.c_str()] ?: @"\n  \"<non-UTF-8 chunk dropped>\"";
+  }
+  void enqueueChunk(std::string fragment, std::uint64_t count) {
+    bool schedule = false;
+    {
+      std::lock_guard<std::mutex> lk(co_->mu);
+      co_->pending += fragment;
+      co_->count = count;
+      if (!co_->scheduled) co_->scheduled = schedule = true;
+    }
+    if (!schedule) return;   // queued drain picks this fragment up too
+    auto co = co_;
     const std::uint64_t tok = token_;
     __weak id<CoreResponseSink> ws = sink_;
     dispatch_async(dispatch_get_main_queue(), ^{
+      std::string batch;
+      std::uint64_t n = 0;
+      {
+        std::lock_guard<std::mutex> lk(co->mu);
+        batch.swap(co->pending);
+        n = co->count;
+        co->scheduled = false;
+      }
       id<CoreResponseSink> s = ws;
-      if (s) [s onStreamChunk:c events:count token:tok];
+      if (!s || batch.empty()) return;   // empty: close beat us to the flush
+      [s onStreamChunk:chunkToNSString(batch) events:n token:tok];
     });
   }
   void deliverClose(core::StreamStatus status, int code, const std::string &msg, std::uint64_t events,
                     long long elapsedMs) {
     NSString *m = [NSString stringWithUTF8String:msg.c_str()] ?: @"<non-UTF-8 message>";
     const std::uint64_t tok = token_;
+    auto co = co_;
     __weak id<CoreResponseSink> ws = sink_;
     dispatch_async(dispatch_get_main_queue(), ^{
       id<CoreResponseSink> s = ws;
-      if (s)
-        [s onStreamClose:status code:code message:m events:events elapsedMs:elapsedMs truncated:NO token:tok];
+      if (!s) return;
+      // Flush pending records FIRST — close ordering must hold even on cross-thread cancel race.
+      std::string batch;
+      std::uint64_t n = 0;
+      {
+        std::lock_guard<std::mutex> lk(co->mu);
+        batch.swap(co->pending);
+        n = co->count;
+      }
+      if (!batch.empty()) [s onStreamChunk:chunkToNSString(batch) events:n token:tok];
+      [s onStreamClose:status code:code message:m events:events elapsedMs:elapsedMs truncated:NO token:tok];
     });
   }
   void deliverResponse(const core::domain::ApiResponse &r) {
@@ -126,4 +167,5 @@ private:
   bool streaming_ = false;
   bool opened_ = false;
   std::uint64_t count_ = 0;
+  std::shared_ptr<Coalesce> co_ = std::make_shared<Coalesce>();
 };

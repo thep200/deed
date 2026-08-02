@@ -39,6 +39,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(gRPC CONFIG REQUIRED)
 find_package(protobuf CONFIG REQUIRED)
 find_package(RdKafka CONFIG REQUIRED)       # Kafka producer+consumer (SPEC_kafka §1) — PLAINTEXT only, ssl/sasl off
+find_package(OpenSSL REQUIRED)              # env-value encrypt-at-rest (already in tree via curl/grpc)
 # Kafka Avro value serde (SPEC_kafka Avro v1) — confined to src/infra/transport/kafka.
 # NOT find_package(avro-cpp): the port's config unconditionally aliases the SHARED target
 # (avro-cpp::avrocpp), which a static triplet doesn't export -> hard CMake error. Include the

@@ -38,6 +38,14 @@ int run_persistence_repo_tests() {
   envs.remove("staging");
   PR_CHECK(envs.list().empty(), "env repo remove");
 
+  // reserved Global: save/load OK, list() hides.
+  core::Environment g;
+  g.name = core::kGlobalEnvName;
+  g.keys.push_back({"k", "v", true, false});
+  envs.save(g);
+  PR_CHECK(envs.list().empty(), "env repo list hides reserved Global");
+  PR_CHECK(envs.load(core::kGlobalEnvName).keys.size() == 1, "env repo load(Global) works");
+
   // Session
   core::SessionStore sessStore(root.string());
   SessionRepository sess(sessStore);
@@ -45,6 +53,8 @@ int run_persistence_repo_tests() {
   sess.setActiveEnv("prod");
   PR_CHECK(sess.loadLastOpened() == "folder/req.json", "session repo lastOpened round-trip");
   PR_CHECK(sess.getActiveEnv() == "prod", "session repo activeEnv round-trip");
+  sess.setActiveEnv(core::kGlobalEnvName);
+  PR_CHECK(sess.getActiveEnv() == "prod", "setActiveEnv(Global) ignored (reserved)");
 
   // App config
   core::AppConfigStore cfgStore((root / "config.json").string());

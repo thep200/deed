@@ -15,7 +15,7 @@ static const CGFloat kGlyph    = 13;    // × glyph hot-zone
 static const CGFloat kMinColW  = 60;    // minimum column width when dragging
 static const CGFloat kGrabW    = 5;     // grab zone for column resize (each side of divider)
 static const CGFloat kToggleH  = 18;    // secret OS9Toggle height (fits the label)
-static NSString *const kSecretLabel = @"Hid";   // short label carried on the secret toggle's knob
+static NSString *const kSecretLabel = @"Enc";   // encrypt-at-rest toggle label (EnvKey.secret)
 
 typedef NS_ENUM(NSInteger, EnvZone) {
     EnvZoneNone = 0,
@@ -168,7 +168,6 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
 
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
-        _baseDisplayName = StrEnvLocal;
         _selectedRow = -1;
         _hoverRow = -1;
         _hoverEnvCol = -1;
@@ -414,7 +413,7 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         NSRect r = [self envRectAtIndex:e height:kHeaderH];
         r.origin.x += dx;
         [self drawVDivAt:NSMaxX(r) height:kHeaderH];
-        BOOL showX = (e == _hoverEnvCol);   // × shows when hovering any column (all envs deletable)
+        BOOL showX = (e == _hoverEnvCol) && !(_protectedFirstColumn && e == 0);   // no × on protected col
         NSRect txt = r;
         if (showX) txt.size.width -= (kGlyph + 6);     // leave room for × on hover
         DrawCellText([self displayForEnv:e], txt, fg);
@@ -523,8 +522,9 @@ static void DrawCellText(NSString *s, NSRect cell, NSColor *fg) {
         NSRect r = [self envRectAtIndex:e height:kHeaderH];
         if (p.x < NSMinX(r) || p.x >= NSMaxX(r)) continue;
         h.col = e;
-        if (NSPointInRect(p, [self closeBoxInRect:r])) { h.zone = EnvZoneDeleteEnv; return h; }
-        h.zone = EnvZoneHeaderName;   // every column is deletable + renamable
+        BOOL protectedCol = (_protectedFirstColumn && e == 0);   // no × zone on protected col
+        if (!protectedCol && NSPointInRect(p, [self closeBoxInRect:r])) { h.zone = EnvZoneDeleteEnv; return h; }
+        h.zone = EnvZoneHeaderName;
         break;
     }
     return h;
@@ -675,8 +675,9 @@ static NSString *Trim(NSString *s) {
     if (nn && t.length && ![t isEqualToString:old]) [self.delegate envGrid:self renameAlias:old to:t];
 }
 
-// --- Rename env (block empty + duplicate) — any column is renamable ---
+// --- Rename env (block empty + duplicate) — any column except the protected base ---
 - (void)promptRenameEnvAtCol:(NSInteger)col {
+    if (_protectedFirstColumn && col == 0) return;   // reserved base keeps its name
     NSString *old = _envNames[col];
     NSString *nn = [self promptTitle:StrDlgRenameEnv default:old
                             validate:[self envNameValidatorExcluding:old]];
@@ -705,7 +706,8 @@ static NSString *Trim(NSString *s) {
     if (nn && t.length) [self.delegate envGrid:self addAliasNamed:t];
 }
 
-// Shared env-name validator for add/rename: non-empty + no duplicate of another env (no reserved names).
+// Env-name validator for add/rename: non-empty + no duplicate. Protected base name also rejected
+// case-insensitively (APFS filenames collide).
 - (NSString * (^)(NSString *))envNameValidatorExcluding:(NSString *)exclude {
     __weak OS9EnvGrid *ws = self;
     return ^NSString *(NSString *s) {
@@ -713,6 +715,9 @@ static NSString *Trim(NSString *s) {
         if (!t.length) return StrValNameEmpty;
         for (NSString *n in ws.envNames)
             if (![n isEqualToString:exclude] && [n isEqualToString:t]) return StrValEnvExists;
+        if (ws.protectedFirstColumn && ws.envNames.count &&
+            ![ws.envNames[0] isEqualToString:exclude] &&
+            [ws.envNames[0] caseInsensitiveCompare:t] == NSOrderedSame) return StrValEnvExists;
         return nil;
     };
 }

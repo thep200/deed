@@ -42,6 +42,7 @@ add_library(core STATIC
   src/infra/cache/cache_codec.cpp
   src/infra/persistence/session_store.cpp
   src/infra/persistence/environment_store.cpp
+  src/infra/persistence/env_crypto.cpp
   src/infra/persistence/app_config_store.cpp
   src/infra/transport/grpc/grpc_descriptors.cpp
   src/infra/transport/ws/ws_sender.cpp
@@ -82,6 +83,7 @@ target_link_libraries(core
     protobuf::libprotoc            # compiler::Importer / DiskSourceTree (load .proto at runtime)
     RdKafka::rdkafka++             # Kafka producer+consumer (SPEC_kafka §6) — confined to src/infra/transport/kafka
     avro-cpp::avrocpp              # Kafka Avro value serde (SPEC_kafka Avro v1) — confined to src/infra/transport/kafka
+    OpenSSL::Crypto                # env-value encrypt-at-rest (env_crypto.cpp)
 )
 
 target_compile_features(core PUBLIC cxx_std_17)

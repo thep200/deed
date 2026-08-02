@@ -28,7 +28,6 @@
 #include <chrono>
 #include <functional>
 #include <map>
-#include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -129,39 +128,39 @@ private:
   std::shared_ptr<core::ResponseCache> cache_;
 };
 
-// --- Native variable/classification helpers (no Engine): read the active env from the repos and reuse the
-// pure resolver/alias/classification functions, mirroring Engine::activeVars/resolveRequest/aliasify/interactionOf.
+// --- Merged-vars helpers (Global base <- active env; cached in CoreApiClient::mergedVars) ---
 
-// Active env vars (map). Active env name from session; keys from the env store. No "Global" base — matches
-// Engine::activeVarsSnapshot (vars come only from the active env). Empty on any miss.
-std::unordered_map<std::string, std::string> activeVarsMap(ISessionRepository *sess,
-                                                          IEnvironmentRepository *env) {
-  std::unordered_map<std::string, std::string> out;
-  if (!sess || !env) return out;
-  std::string active = sess->getActiveEnv();
-  if (active.empty()) return out;
+// Enabled keys of one env, definition order. Missing/corrupt file -> nothing.
+void appendEnabledKeys(IEnvironmentRepository *env, const std::string &name, std::vector<core::EnvKey> &out) {
   try {
-    core::Environment e = env->load(active);
-    for (const auto &k : e.keys)
-      if (k.enabled) out[k.key] = k.value;
+    core::Environment e = env->load(name);
+    for (auto &k : e.keys)
+      if (k.enabled) out.push_back(std::move(k));
   } catch (...) {
   }
-  return out;
 }
-// Same in env-definition order (aliasify: first-defined key wins on duplicate values).
-std::vector<std::pair<std::string, std::string>> activeVarsOrdered(ISessionRepository *sess,
-                                                                   IEnvironmentRepository *env) {
-  std::vector<std::pair<std::string, std::string>> out;
-  if (!sess || !env) return out;
-  std::string active = sess->getActiveEnv();
-  if (active.empty()) return out;
-  try {
-    core::Environment e = env->load(active);
-    for (const auto &k : e.keys)
-      if (k.enabled) out.emplace_back(k.key, k.value);
-  } catch (...) {
+// Map view: Global first, active wins per key. Empty active value never shadows non-empty Global
+// (grid saves "" for blank cells).
+void mergeVarsMap(const std::vector<core::EnvKey> &globalKeys, const std::vector<core::EnvKey> &activeKeys,
+                  std::unordered_map<std::string, std::string> &map) {
+  for (const auto &k : globalKeys) map[k.key] = k.value;
+  for (const auto &k : activeKeys) {
+    auto it = map.find(k.key);
+    if (it == map.end()) map.emplace(k.key, k.value);
+    else if (!k.value.empty()) it->second = k.value;
   }
-  return out;
+}
+// Ordered view (first-wins aliasify): active pairs first, then non-shadowed Global pairs.
+void mergeVarsOrdered(const std::vector<core::EnvKey> &globalKeys, const std::vector<core::EnvKey> &activeKeys,
+                      std::vector<std::pair<std::string, std::string>> &ordered) {
+  ordered.reserve(activeKeys.size() + globalKeys.size());
+  for (const auto &k : activeKeys) ordered.emplace_back(k.key, k.value);
+  for (const auto &k : globalKeys) {
+    bool shadowed = false;
+    for (const auto &a : activeKeys)
+      if (a.key == k.key && !a.value.empty()) { shadowed = true; break; }
+    if (!shadowed) ordered.emplace_back(k.key, k.value);
+  }
 }
 // Rebuild a domain GrpcRequest with its {{var}}-resolved target (immutable VO -> via Parts). Used by gRPC
 // reflection (resolve the host typed with {{vars}} before the descriptor pass).
@@ -269,6 +268,7 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
     c->ownAppConfig_ = cfg.appConfigPath.empty() ? std::make_unique<core::AppConfigStore>()
                                                  : std::make_unique<core::AppConfigStore>(cfg.appConfigPath);
     c->ownAppConfig_->setDefaults(cfg.appDefaults);
+    c->ownEnv_->attachAppConfig(c->ownAppConfig_.get()); // encrypt-at-rest key/exclude source
     c->ownCollection_->setRequestDefaults(cfg.defaultTimeoutMs, cfg.defaultVerifyTls); // new-request .env defaults
     c->ownEnv_->migrateLegacySecrets(); // SPEC §T5 (Engine ctor did this)
     c->ownCollection_->ensureGitignore();
@@ -316,10 +316,42 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
 
 void CoreApiClient::setVariableScope(d::VariableScope scope) { scope_ = std::move(scope); }
 
+std::shared_ptr<const CoreApiClient::VarsSnapshot> CoreApiClient::mergedVars() const {
+  // Epoch read BEFORE load: racing edit -> next call rebuilds (never fresh-epoch/stale-data).
+  const std::uint64_t epoch = ownEnv_ ? ownEnv_->epoch() : 0;
+  const std::string active = sessionRepo_ ? sessionRepo_->getActiveEnv() : std::string();
+  std::lock_guard<std::mutex> lk(varsMu_);
+  if (varsCache_ && varsCache_->epoch == epoch && varsCache_->activeEnv == active) return varsCache_;
+  auto snap = std::make_shared<VarsSnapshot>();
+  snap->epoch = epoch;
+  snap->activeEnv = active;
+  if (envRepo_) {
+    std::vector<core::EnvKey> globalKeys, activeKeys;
+    appendEnabledKeys(envRepo_.get(), core::kGlobalEnvName, globalKeys);
+    if (!active.empty() && active != core::kGlobalEnvName)
+      appendEnabledKeys(envRepo_.get(), active, activeKeys);
+    mergeVarsMap(globalKeys, activeKeys, snap->map);
+    mergeVarsOrdered(globalKeys, activeKeys, snap->ordered);
+    for (const auto &kv : snap->map)   // ciphertext left in scope -> the key can't read it
+      if (core::EnvironmentStore::isEncryptedValue(kv.second)) { snap->undecryptable = true; break; }
+  }
+  varsCache_ = snap;
+  return snap;
+}
+
 void CoreApiClient::refreshVariableScope() {
   d::VariableScope scope;
-  scope.values = activeVarsMap(sessionRepo_.get(), envRepo_.get()); // native: reads the env repo, no Engine
+  scope.values = mergedVars()->map;
   scope_ = std::move(scope);
+}
+
+bool CoreApiClient::hasUnreadableVars() const { return mergedVars()->undecryptable; }
+
+void CoreApiClient::reencryptEnvironments(const std::vector<std::string> &names) {
+  if (!envRepo_) return;
+  for (const auto &n : names) {
+    try { envRepo_->save(envRepo_->load(n)); } catch (...) {}   // load decrypts, save re-encrypts
+  }
 }
 
 std::string CoreApiClient::exportCurl(const core::domain::RequestModel &m) const {
@@ -327,18 +359,16 @@ std::string CoreApiClient::exportCurl(const core::domain::RequestModel &m) const
   // toCurl reads config().tlsEnabledDefault for the gRPC -plaintext decision, so no legacy bridge or
   // per-request-config replication is needed — domain end to end. No public ResolvedRequest type leaks out.
   d::VariableScope scope;
-  scope.values = activeVarsMap(sessionRepo_.get(), envRepo_.get());
+  scope.values = mergedVars()->map;
   auto r = resolver_->resolve(m, scope);
   return core::toCurl(r.isOk() ? r.value() : m);
 }
 
 core::domain::RequestModel CoreApiClient::aliasifyModel(const core::domain::RequestModel &model) const {
-  // Aliasify (literal -> {{alias}}) NATIVELY on the domain model: ordered active-env vars + the pure
-  // VariableResolver matchers (prefix for url/target, whole-value for enabled kv/auth values). Rebuilds the
-  // immutable VOs; a factory that would reject an aliased value falls back to the original. No bridge, no Engine.
-  // Mirrors DomainVariableResolver's walk but the INVERSE op, and only over the fields the legacy aliasify
-  // touched (url/target + kv + auth values — never body/query/message/onOpenSend).
-  auto vars = activeVarsOrdered(sessionRepo_.get(), envRepo_.get());
+  // Aliasify (literal -> {{alias}}) on the domain model: merged ordered vars + pure matchers (prefix for
+  // url/target, whole-value for kv/auth). Factory reject -> keep original. Never body/query/message.
+  auto snap = mergedVars();
+  const auto &vars = snap->ordered;
   auto whole = [&](const std::string &s) -> std::string {
     std::string out, key;
     return core::VariableResolver::valueToAlias(s, vars, out, &key) ? out : s;
@@ -470,8 +500,8 @@ core::domain::RequestModel CoreApiClient::aliasifyModel(const core::domain::Requ
 }
 
 std::string CoreApiClient::resolvePreview(const std::string &tpl) const {
-  auto um = activeVarsMap(sessionRepo_.get(), envRepo_.get());
-  std::map<std::string, std::string> vm(um.begin(), um.end());
+  auto snap = mergedVars();
+  std::map<std::string, std::string> vm(snap->map.begin(), snap->map.end());
   return core::VariableResolver::resolve(tpl, vm).text;
 }
 
@@ -549,7 +579,7 @@ d::Status CoreApiClient::validateJson(const d::JsonText &t) { return orchestrato
 d::Result<std::vector<d::GrpcMethodDescriptor>>
 CoreApiClient::listGrpcMethods(const d::GrpcRequest &g) {
   // Native reflection (no Engine): resolve {{var}} in the target, then run grpcdesc directly on domain types.
-  auto resolved = resolveGrpcTarget(g, activeVarsMap(sessionRepo_.get(), envRepo_.get()));
+  auto resolved = resolveGrpcTarget(g, mergedVars()->map);
   std::string err;
   std::vector<d::GrpcMethodDescriptor> descs = grpcdesc::listGrpcMethods(resolved, err);
   if (!err.empty())
@@ -563,7 +593,7 @@ d::Result<d::GqlSchema> CoreApiClient::introspectGraphQl(const d::RequestModel &
   // Resolve {{vars}} against the CURRENT active env (fresh read, like listGrpcMethods — the UI may call
   // this without a preceding refreshVariableScope). Resolver failure -> proceed unresolved, like send().
   d::VariableScope scope;
-  scope.values = activeVarsMap(sessionRepo_.get(), envRepo_.get());
+  scope.values = mergedVars()->map;
   d::RequestModel resolved = request;
   if (resolver_) {
     auto r = resolver_->resolve(request, scope);

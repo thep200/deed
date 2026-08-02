@@ -4,6 +4,13 @@
 
 #pragma mark Send / Cancel
 
+// Pull the active env's {{vars}} into the send scope. Lazy encryption check: a var still holding
+// ciphertext here means the configured key can't read it -> warn once per send, then send anyway.
+- (void)refreshVarsForSend {
+    _apiClient->refreshVariableScope();
+    if (_apiClient->hasUnreadableVars()) [self toastWarn:StrToastEncKeyInvalid];
+}
+
 - (void)sendRequest:(id)sender {
     // Hot path: do ONLY what's needed to send (no env reads / aliasify / persistence here —
     // alias substitution is an import-time concern, §9.5). Keep this lean for performance.
@@ -45,7 +52,7 @@
 // through IApiClient. A UiObserver translates the domain ResponseEvents back into the existing
 // onCoreResponse/onCoreError handlers (keyed by a synthesized handle so the stale-callback guard still works).
 - (void)sendViaApiClient {
-    _apiClient->refreshVariableScope();   // {{vars}} resolve against the current active environment
+    [self refreshVarsForSend];   // {{vars}} resolve against the current active environment
 
     uint64_t h = ++_apiHandleCounter;
     _currentHandle = h;                          // CoreResponseSink guards on this handle
@@ -67,7 +74,7 @@
 // Server-stream (gRPC server-streaming / HTTP SSE) via IApiClient. A streaming UiObserver maps the domain
 // ResponseEvents onto the existing onStreamOpenTransport/onStreamChunk/onStreamClose handlers.
 - (void)streamViaApiClient {
-    _apiClient->refreshVariableScope();   // {{vars}} resolve against the current active environment
+    [self refreshVarsForSend];   // {{vars}} resolve against the current active environment
 
     uint64_t token = ++_streamToken;
     int transport = ([self requestType] == core::RequestType::Http) ? 1 /*sse*/ : 0 /*grpc*/;
@@ -124,7 +131,7 @@
     [self relayout];
     [self updateStatus:@""];
 
-    _apiClient->refreshVariableScope();   // {{vars}} resolve against the current active environment
+    [self refreshVarsForSend];   // {{vars}} resolve against the current active environment
     if (!_model) { _sending = NO; [self toastWarn:@"no open request"]; [self relayout]; return; }
     uint64_t token = ++_streamToken;
     _apiObserver = std::make_shared<UiObserver>(self, token, 2 /*ws*/);

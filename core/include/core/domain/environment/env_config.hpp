@@ -22,6 +22,9 @@ struct Environment {
   std::vector<EnvKey> keys;
 };
 
+// Reserved base env: always merged under active env, hidden from selector, never selectable.
+inline constexpr char kGlobalEnvName[] = "Global";
+
 // ---- App-global config (README §12.1) ----
 // Built-in AppConfig defaults. The domain stays pure (never reads .env); the UI reads .env (FONT_SIZE,
 // RAM_CACHE_SIZE, DISK_CACHE_SIZE) and passes overrides in via CoreApiClient::Config::appDefaults —
@@ -41,13 +44,17 @@ struct AppConfig {
   int diskCacheSizeMb = kDefaultDiskCacheSizeMb;  // operating disk cache level
   bool cacheResponses = true; // enable/disable response cache
   bool cachePersist = true;   // keep cache across restart (off -> RAM only, no disk attached)
+
+  // --- Env-value encryption (grid "Enc" toggle) ---
+  std::string encryptionKey;                  // empty = off
+  std::vector<std::string> encryptionExclude; // env names saved plaintext (e.g. "Local")
 };
 
 // ---- Session app-state ----
 struct Session {
   int schemaVersion = 1;
   std::string lastOpenedFile; // relative
-  std::string activeEnv;   // empty = no env selected (no special base; all envs are equal)
+  std::string activeEnv;   // empty = no env selected ("Global" base still applies)
 };
 
 // ---- Collection tree (lazy, metadata only) ----

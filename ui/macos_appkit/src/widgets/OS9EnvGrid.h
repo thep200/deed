@@ -1,8 +1,8 @@
 // OS9EnvGrid — self-drawn Platinum-style Environment table (SPEC §T1/§T2/§T3).
-// Matrix: row = alias, col = env (col 0 = base "Local"). Self-draws header/zebra/grid/
-// selection; only the edit field uses a native NSTextField overlay when editing text.
-// Inline actions: × delete env in header (except Local col), + add env, "+ alias" row,
-// × delete alias at row start. Does not use NSTableView.
+// Matrix: row = alias, col = env. Self-draws header/zebra/grid/selection; only the edit
+// field uses a native NSTextField overlay when editing text. Inline actions: × delete env
+// in header (except a protected first column, see protectedFirstColumn), + add env,
+// "+ alias" row, × delete alias at row start. Does not use NSTableView.
 #import <Cocoa/Cocoa.h>
 
 @class OS9EnvGrid;
@@ -28,12 +28,12 @@
 
 @property(nonatomic, weak) id<OS9EnvGridDelegate> delegate;
 
-// Column order (index 0 = base env). Names here are the internal KEY (e.g. "Global").
+// Column order. Names here are the internal KEY (e.g. "Global").
 @property(nonatomic, copy) NSArray<NSString *> *envNames;
 // Row order (alias names).
 @property(nonatomic, copy) NSArray<NSString *> *aliases;
-// Display label for the base column (e.g. "Local"); internal key is still envNames[0].
-@property(nonatomic, copy) NSString *baseDisplayName;
+// YES: col 0 = reserved base env — no delete ×, no rename; validator rejects its name case-insensitively.
+@property(nonatomic) BOOL protectedFirstColumn;
 // Selected row (-1 = none).
 @property(nonatomic) NSInteger selectedRow;
 

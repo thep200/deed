@@ -252,23 +252,29 @@ CollectionStore::scanLevel(const std::string &dirRelPath) const {
   std::vector<TreeNode> out;
   fs::path dir = fs::path(fsutil::join(root_, dirRelPath));
   std::error_code ec;
-  std::vector<fs::directory_entry> entries;
+  // Cache isDir + name once — comparator runs O(n log n), filename().string() allocs per call.
+  struct Entry {
+    fs::directory_entry ent;
+    bool isDir;
+    std::string name;
+  };
+  std::vector<Entry> entries;
   for (const auto &e : fs::directory_iterator(dir, ec)) {
     // Do not follow symlinks (avoid recursion cycles — §10).
     if (e.is_symlink())
       continue;
-    entries.push_back(e);
+    entries.push_back({e, e.is_directory(), e.path().filename().string()});
   }
-  std::sort(entries.begin(), entries.end(), [](const auto &a, const auto &b) {
-    if (a.is_directory() != b.is_directory())
-      return a.is_directory(); // folders first
-    return a.path().filename().string() < b.path().filename().string();
+  std::sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
+    if (a.isDir != b.isDir)
+      return a.isDir; // folders first
+    return a.name < b.name;
   });
-  for (const auto &e : entries) {
-    std::string fname = e.path().filename().string();
+  for (const auto &en : entries) {
+    const std::string &fname = en.name;
     std::string childRel =
         dirRelPath.empty() ? fname : dirRelPath + "/" + fname;
-    if (e.is_directory()) {
+    if (en.isDir) {
       if (isReservedDir(fname) || isHidden(fname))
         continue;
       TreeNode folder;
@@ -276,12 +282,12 @@ CollectionStore::scanLevel(const std::string &dirRelPath) const {
       folder.relPath = childRel;
       folder.name = fname;              // folder: directory name (NO de-slug)
       out.push_back(std::move(folder)); // empty children -> lazy expand later
-    } else if (e.is_regular_file()) {
-      if (e.path().extension() != ".json")
+    } else if (en.ent.is_regular_file()) {
+      if (en.ent.path().extension() != ".json")
         continue;
       if (isConfigFile(fname) || isHidden(fname))
         continue;
-      out.push_back(buildRequestLeaf(e.path(), childRel));
+      out.push_back(buildRequestLeaf(en.ent.path(), childRel));
     }
   }
   return out;

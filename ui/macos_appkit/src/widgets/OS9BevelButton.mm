@@ -1,6 +1,21 @@
 #import "widgets/OS9BevelButton.h"
 #import "theme/OS9Theme.h"
 
+static const CGFloat kTitlePadX = 5;   // side inset so a truncated title never touches the bevel
+
+// Centered + tail-truncating: a title wider than the button renders as "long titl…".
+static NSParagraphStyle *CenteredTruncStyle(void) {
+    static NSParagraphStyle *ps;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableParagraphStyle *m = [[NSMutableParagraphStyle alloc] init];
+        m.lineBreakMode = NSLineBreakByTruncatingTail;
+        m.alignment = NSTextAlignmentCenter;
+        ps = [m copy];
+    });
+    return ps;
+}
+
 @implementation OS9BevelButton {
     BOOL _pressed;
 }
@@ -33,13 +48,14 @@
     }
     NSColor *fg = [OS9Theme buttonFGPressed:sunken enabled:_enabledState];
     NSDictionary *attrs = @{NSFontAttributeName : [OS9Theme uiFont],
-                            NSForegroundColorAttributeName : fg};
+                            NSForegroundColorAttributeName : fg,
+                            NSParagraphStyleAttributeName : CenteredTruncStyle()};
     NSString *title = _title ?: @"";
     NSSize sz = [title sizeWithAttributes:attrs];
     CGFloat cw = self.bounds.size.width - (_dropdown ? 16 : 0); // leave room for arrow
-    NSPoint pt = NSMakePoint(floor((cw - sz.width) / 2),
-                             floor((self.bounds.size.height - sz.height) / 2) + (sunken ? -1 : 0));
-    [title drawAtPoint:pt withAttributes:attrs];
+    NSRect tr = NSMakeRect(kTitlePadX, floor((self.bounds.size.height - sz.height) / 2) + (sunken ? -1 : 0),
+                           MAX(0, cw - 2 * kTitlePadX), sz.height);
+    [title drawInRect:tr withAttributes:attrs];   // rect draw -> centered, tail-truncated with "…"
     if (_dropdown) [OS9Theme drawDropdownArrowInRect:self.bounds];
 }
 

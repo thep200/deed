@@ -35,7 +35,9 @@ Session SessionStore::load() const {
     std::string txt;
     if (!fsutil::readFile(sessionPath(root_), txt)) return Session{};
     try {
-        return codec::sessionFromJson(codec::parseGuarded(txt));
+        Session s = codec::sessionFromJson(codec::parseGuarded(txt));
+        if (s.activeEnv == kGlobalEnvName) s.activeEnv.clear(); // stale pre-Global session
+        return s;
     } catch (...) {
         return Session{}; // corrupt file -> start clean
     }
@@ -106,6 +108,7 @@ std::string SessionStore::getActiveEnv() const {
 }
 
 void SessionStore::setActiveEnv(const std::string& name) {
+    if (name == kGlobalEnvName) return; // reserved base — never active
     std::lock_guard<std::mutex> lk(mu_);
     if (current_.activeEnv == name) return;            // unchanged -> no write
     current_.activeEnv = name;

@@ -10,17 +10,19 @@
 
 #include "core/app/persistence_repositories.hpp" // IEnvironmentRepository/ISessionRepository + Environment/EnvKey
 
-// No special base env any more: every environment is a normal, equal, deletable column (its name == file).
+// Col 0 = reserved "Global" base: editable here, hidden from dropdown, always merged under active env,
+// protected (no delete/rename). Other envs = normal deletable columns (name == file).
 static NSString *Key(NSString *env, NSString *alias) {
     return [NSString stringWithFormat:@"%@\t%@", env, alias];
 }
+static NSString *GlobalEnvName(void) { return @(core::kGlobalEnvName); }
 
 @implementation EnvWindowController {
     core::app::IEnvironmentRepository *_envRepo;     // not owned (lives in CoreApiClient)
     core::app::ISessionRepository *_sessionRepo;     // not owned
     OS9EnvGrid *_grid;
 
-    NSMutableArray<NSString *> *_envNames;  // index 0 = kBaseEnv
+    NSMutableArray<NSString *> *_envNames;  // index 0 = reserved "Global" (pinned, protected)
     NSMutableArray<NSString *> *_aliases;
     NSMutableDictionary<NSString *, NSString *> *_values; // Key(env,alias) -> value
     NSMutableSet<NSString *> *_dirtyEnvs;
@@ -47,6 +49,7 @@ static NSString *Key(NSString *env, NSString *alias) {
     if (_grid) return _grid;
     _grid = [[OS9EnvGrid alloc] initWithFrame:NSMakeRect(0, 0, 700, 360)];
     _grid.delegate = self;
+    _grid.protectedFirstColumn = YES;   // col 0 = reserved "Global"
     return _grid;
 }
 
@@ -74,6 +77,8 @@ static NSString *Key(NSString *env, NSString *alias) {
     [_secretAliases removeAllObjects];
     if (!_envRepo) return;
 
+    // Global pinned first (list() hides it); file created lazily on first dirty save.
+    [_envNames addObject:GlobalEnvName()];
     for (const auto &n : _envRepo->list())
         [_envNames addObject:[NSString stringWithUTF8String:n.c_str()]];
 
@@ -137,9 +142,10 @@ static NSString *Key(NSString *env, NSString *alias) {
 - (void)envGrid:(OS9EnvGrid *)g setSecret:(BOOL)secret forAlias:(NSString *)alias {
     if (secret) [_secretAliases addObject:alias];
     else [_secretAliases removeObject:alias];
-    // The flag is written into every env's copy of this key -> mark all (non-removed) envs dirty.
+    // Flag lives in every env's copy of this key -> mark all (non-removed) envs dirty.
     for (NSString *env in _envNames)
         if (![_removedEnvs containsObject:env]) [_dirtyEnvs addObject:env];
+    [self save];   // enc/de-enc this alias NOW, not on Back
 }
 
 - (void)envGrid:(OS9EnvGrid *)g renameAlias:(NSString *)oldAlias to:(NSString *)newAlias {
@@ -168,6 +174,7 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)envGrid:(OS9EnvGrid *)g renameEnv:(NSString *)oldEnv to:(NSString *)newEnv {
+    if ([oldEnv isEqualToString:GlobalEnvName()]) return;   // reserved base
     if ([_envNames containsObject:newEnv]) {
         [self errorDialog:[NSString stringWithFormat:StrFmtEnvExists, newEnv]];
         return;
@@ -199,6 +206,7 @@ static NSString *Key(NSString *env, NSString *alias) {
 }
 
 - (void)envGrid:(OS9EnvGrid *)g deleteEnv:(NSString *)env {
+    if ([env isEqualToString:GlobalEnvName()]) return;   // reserved base
     NSInteger r = [OS9Dialog confirmWithTitle:StrDlgDeleteEnv
                                       message:[NSString stringWithFormat:StrFmtConfirmDeleteEnv, env]
                                       buttons:@[ StrCancel, StrDelete ]
@@ -243,19 +251,22 @@ static NSString *Key(NSString *env, NSString *alias) {
                            icon:OS9AlertStop parent:_grid.window];
 }
 
+// SPEC §T3: renaming an alias does NOT auto-fix {{old}} in saved requests -> warn.
 - (void)warnVarRename:(NSString *)oldAlias {
-    // SPEC §T3: renaming an alias does NOT auto-fix {{old}} in saved requests -> warn.
+    [self showToast:[NSString stringWithFormat:StrFmtVarRenamed, oldAlias] kind:0];
+}
+
+- (void)showToast:(NSString *)msg kind:(NSInteger)kind {
     NSWindow *win = _grid.window;
     if (!win) return;
-    NSString *msg = [NSString stringWithFormat:StrFmtVarRenamed, oldAlias];
     NSView *cv = win.contentView;
     // L4: cap the toast stack — drop any existing toast before adding a new one (rapid alias renames must
     // not pile up dozens of overlapping subviews).
     for (NSView *sub in [cv.subviews copy])
         if ([sub isKindOfClass:[OS9Toast class]]) [sub removeFromSuperview];
-    OS9Toast *t = [[OS9Toast alloc] initWithMessage:msg kind:0];
+    OS9Toast *t = [[OS9Toast alloc] initWithMessage:msg kind:kind];
     NSSize sz = [OS9Toast sizeForMessage:msg];
-    t.frame = NSMakeRect((cv.bounds.size.width - sz.width) / 2, 24, sz.width, sz.height);
+    t.frame = NSMakeRect((cv.bounds.size.width - sz.width) / 2, 31, sz.width, sz.height);   // below title bar
     t.autoresizingMask = NSViewMinXMargin | NSViewMaxXMargin | NSViewMaxYMargin;
     __weak OS9Toast *wt = t;
     t.onClose = ^{ [wt removeFromSuperview]; };

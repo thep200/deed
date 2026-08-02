@@ -4,7 +4,8 @@
 #pragma mark - OS9Toast (flat retro, dashed border)
 
 static const CGFloat kToastBorder = 1;   // thin line border thickness
-static const CGFloat kToastH = 30;       // body height
+static const CGFloat kToastH = 30;       // body height (shadow sits below/right of it)
+static const CGFloat kToastShadow = 3;   // Platinum drop shadow depth (bottom + right)
 static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClose = 24, kToastMaxW = 380;
 
 @implementation OS9Toast
@@ -21,7 +22,13 @@ static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClo
     NSSize ts = [(msg ?: @"") sizeWithAttributes:@{NSFontAttributeName : [self textFont]}];
     CGFloat w = kToastPadL + kToastIcon + kToastGapL + ts.width + 8 + kToastClose;
     w = MAX(150, MIN(w, kToastMaxW));
-    return NSMakeSize(w, kToastH);
+    return NSMakeSize(w + kToastShadow, kToastH + kToastShadow);   // view holds body + shadow
+}
+
+// Body = bounds minus the shadow gutter on the bottom/right edges.
+- (NSRect)bodyRect {
+    NSRect b = self.bounds;
+    return NSMakeRect(0, 0, b.size.width - kToastShadow, b.size.height - kToastShadow);
 }
 
 // Background is ALWAYS gray (not colored by kind).
@@ -36,12 +43,24 @@ static const CGFloat kToastPadL = 12, kToastIcon = 16, kToastGapL = 8, kToastClo
 - (NSString *)glyph { return _kind == 1 ? @"✓" : (_kind == 2 ? @"!" : @"i"); }
 
 - (NSRect)closeRect {
-    return NSMakeRect(NSMaxX(self.bounds) - kToastClose, 0, kToastClose, self.bounds.size.height);
+    NSRect b = [self bodyRect];
+    return NSMakeRect(NSMaxX(b) - kToastClose, 0, kToastClose, b.size.height);
 }
 
 - (void)drawRect:(NSRect)dirty {
-    NSRect body = self.bounds;
-    // flat gray background (no drop shadow)
+    NSRect body = [self bodyRect];
+    // Platinum drop shadow: solid dark band under the bottom edge + a thinner one down the right,
+    // both inset by the shadow depth so the corner reads as a bevel, not a box.
+    [NSGraphicsContext saveGraphicsState];
+    [[NSGraphicsContext currentContext] setShouldAntialias:NO];
+    [[NSColor colorWithCalibratedWhite:0.0 alpha:0.28] set];
+    NSRectFillUsingOperation(NSMakeRect(kToastShadow, NSMaxY(body), body.size.width, kToastShadow),
+                             NSCompositingOperationSourceOver);
+    [[NSColor colorWithCalibratedWhite:0.0 alpha:0.18] set];
+    NSRectFillUsingOperation(NSMakeRect(NSMaxX(body), kToastShadow, kToastShadow, body.size.height - kToastShadow),
+                             NSCompositingOperationSourceOver);
+    [NSGraphicsContext restoreGraphicsState];
+    // flat gray background
     [[self fillColor] set];
     NSRectFill(body);
     // THIN LINE border colored by kind

@@ -133,37 +133,39 @@ private:
     static void writeSnapshot(const std::string& root, const Session& s);  // atomic write (outside lock)
 };
 
+class AppConfigStore;
+
 // EnvironmentStore — one file per env in environments/ (README §8.3).
-// Variable values stored plaintext in the env file itself (secret mechanism removed — SPEC §T5).
+// Values with EnvKey.secret ("Enc") are encrypted at rest when an encryption key is configured;
+// in-memory Environment is always plaintext.
 class EnvironmentStore {
 public:
     explicit EnvironmentStore(std::string root);
     void setRoot(std::string root);
+    // Source of encryption_key/encryption_exclude; null = plaintext (tests/legacy).
+    void attachAppConfig(const AppConfigStore* cfg) { appCfg_ = cfg; }
+    // True if a loaded value is still ciphertext -> the configured key can't read it (UI warns).
+    static bool isEncryptedValue(const std::string& value);
 
-    std::vector<std::string> list() const;          // env names (excluding the virtual "Global")
+    std::vector<std::string> list() const;          // env names (reserved "Global" excluded)
     Environment load(const std::string& name) const;
     void save(const Environment&);                   // atomic
     void remove(const std::string& name);
-
-    // Rename an env (atomic file rename). Returns false if empty/clashes with another env name.
-    bool renameEnv(const std::string& oldName, const std::string& newName);
-    // Rename a key alias across ALL envs at once (alias is the shared row key).
-    // Returns false if empty/clashes with another alias on any env.
-    bool renameAlias(const std::string& oldAlias, const std::string& newAlias);
+    // (env/alias rename = UI view-model save-new + delete-old)
 
     // One-time migration (SPEC §T5): fold values from .secrets/secrets.json (old
     // {env:{key:value}} format) back into the env file as normal vars, then delete .secrets/.
     // No-op if .secrets/ doesn't exist (already migrated or never had secrets).
     void migrateLegacySecrets();
 
-    // Epoch bumps EACH time env content changes (save/remove/rename/renameAlias/migrate/setRoot).
-    // Engine uses it to cache merged-vars: cache hit when (activeEnv, epoch) unchanged -> avoid re-reading
-    // disk on every send/resolve; any env edit bumps epoch -> cache self-invalidates (no stale vars).
+    // Bumps on every env change. mergedVars caches on (activeEnv, epoch) -> no disk read per send.
     std::uint64_t epoch() const { return epoch_.load(std::memory_order_relaxed); }
 
 private:
+    Environment encryptedForDisk(const Environment&) const; // Enc-flagged values -> ciphertext (unless excluded)
     std::string root_;
     std::atomic<std::uint64_t> epoch_{0};
+    const AppConfigStore* appCfg_ = nullptr;
 };
 
 // AppConfigStore — app-global in OS app-support, OUTSIDE the collection (README §12.1).

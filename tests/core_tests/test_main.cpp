@@ -430,7 +430,7 @@ static void test_session_store(const std::string& root) {
     }
 }
 
-// ---------------- Environment (plaintext) + rename + migration ----------------
+// ---------------- Environment (plaintext) + migration ----------------
 static void test_env_and_secret(const std::string& root) {
     std::printf("[environment]\n");
     EnvironmentStore env(root);
@@ -459,23 +459,7 @@ static void test_env_and_secret(const std::string& root) {
     if (f) { char buf[4096]; size_t n = std::fread(buf, 1, sizeof(buf), f); envFileTxt.assign(buf, n); std::fclose(f); }
     CHECK(envFileTxt.find("s3cr3t") != std::string::npos, "value written plaintext to env file");
     CHECK(!fs::exists(fs::path(root) / ".secrets"), "no .secrets/ created");
-
-    // renameEnv: rename file, content preserved.
-    CHECK(env.renameEnv("Dev", "Dev2"), "renameEnv succeeds");
-    CHECK(!fs::exists(ef), "old env file gone");
-    CHECK_EQ(env.load("Dev2").keys.size(), size_t(2), "new env keeps keys");
-    CHECK(!env.renameEnv("Dev2", ""), "empty renameEnv rejected");
-
-    // renameAlias: rename key across all envs.
-    Environment stg; stg.name = "Stg"; stg.keys.push_back({"baseUrl", "http://stg", true});
-    env.save(stg);
-    CHECK(env.renameAlias("baseUrl", "apiUrl"), "renameAlias succeeds");
-    bool found = false;
-    for (auto& k : env.load("Dev2").keys) if (k.key == "apiUrl") found = true;
-    CHECK(found, "alias renamed on Dev2");
-    found = false;
-    for (auto& k : env.load("Stg").keys) if (k.key == "apiUrl") found = true;
-    CHECK(found, "alias renamed on Stg simultaneously");
+    // (env/alias rename = UI view-model save-new + delete-old)
 }
 
 // ---------------- Migration secret -> plaintext (idempotent) ----------------
@@ -510,9 +494,9 @@ static void test_secret_migration(const std::string& root) {
 // ---------------- Engine resolve + validate ----------------
 static void test_engine(const std::string& root) {
     std::printf("[engine]\n");
-    // prepare env Global + active.
+    // prepare env Shared + active ("Global" reserved — see test_global_env).
     EnvironmentStore env(root);
-    Environment g; g.name = "Global"; g.keys.push_back({"baseUrl", "http://global", true});
+    Environment g; g.name = "Shared"; g.keys.push_back({"baseUrl", "http://global", true});
     g.keys.push_back({"wsBase", "ws://global", true}); // ws-scheme prefix (domain ws urls must be ws/wss)
     env.save(g);
     Environment d; d.name = "Stage"; d.keys.push_back({"baseUrl", "http://stage", true});
@@ -526,8 +510,8 @@ static void test_engine(const std::string& root) {
     client->session().setActiveEnv("Stage");
 
     CHECK_EQ(client->resolvePreview("{{baseUrl}}/x"), std::string("http://stage/x"), "active env Stage");
-    client->session().setActiveEnv("Global");
-    CHECK_EQ(client->resolvePreview("{{baseUrl}}/x"), std::string("http://global/x"), "active env Global");
+    client->session().setActiveEnv("Shared");
+    CHECK_EQ(client->resolvePreview("{{baseUrl}}/x"), std::string("http://global/x"), "active env Shared");
     CHECK_EQ(client->resolvePreview("{{missing}}"), std::string("{{missing}}"), "missing var keeps literal");
 
     CHECK(client->validateJson(core::domain::JsonText::of("{\"a\": 1}")).isOk(), "valid JSON");
@@ -552,7 +536,7 @@ static void test_engine(const std::string& root) {
     CHECK(curl.find("http://global/u") != std::string::npos, "exportCurl resolves url");
 
     // --- aliasifyModel: literal values matching the env are rewritten back to {{alias}} ---
-    // env "baseUrl" = http://global (active env is Global at this point).
+    // env "baseUrl" = http://global (active env is Shared at this point).
     d2::RequestModel ax =
         aliasify(mkHttp("http://global/users", {hdr("Host", "http://global"), hdr("X-Lit", "literal")}));
     CHECK_EQ(ts::http(ax).url().raw(), std::string("{{baseUrl}}/users"), "url prefix aliasified");
@@ -585,13 +569,13 @@ static void test_engine(const std::string& root) {
     CHECK_EQ(ts::gql(gqx).url().raw(), std::string("{{baseUrl}}/graphql"), "graphql url aliasified");
     CHECK_EQ(ts::gql(gqx).headers().items()[0].value(), std::string("{{baseUrl}}"), "graphql header aliasified");
 
-    // env definition order decides the alias on duplicate values: "zdup" is defined BEFORE "adup"
-    // (sorts later) -> the first-defined key wins, not the lexicographically smallest.
-    Environment go; go.name = "Global";
+    // duplicate values -> first-defined key wins ("zdup" before "adup"). Save via client repo -> epoch
+    // bump -> vars cache rebuilds.
+    Environment go; go.name = "Shared";
     go.keys.push_back({"zdup", "http://dup.host", true});
     go.keys.push_back({"adup", "http://dup.host", true});
-    env.save(go);
-    client->session().setActiveEnv("Global");
+    client->environments().save(go);
+    client->session().setActiveEnv("Shared");
     d2::RequestModel dupOut = aliasify(mkHttp("http://dup.host/p", {}));
     CHECK_EQ(ts::http(dupOut).url().raw(), std::string("{{zdup}}/p"), "duplicate value -> first-defined key wins");
 
@@ -611,6 +595,186 @@ static void test_engine(const std::string& root) {
           "client_streaming -> ClientStream");
     CHECK(io(mkGrpc(d2::GrpcMethodType::BidiStreaming)) == InteractionKind::BiDi, "bidi_streaming -> BiDi");
     CHECK(io(mkHttp("http://x", {})) == InteractionKind::Unary, "http -> Unary");
+}
+
+// ---------------- Reserved "Global" env (always-on base layer) ----------------
+static void test_global_env(const std::string& parentRoot) {
+    std::printf("[global_env]\n");
+    // isolated sub-root — earlier env files must not leak into the merge.
+    std::string root = (fs::path(parentRoot) / "globalenv").string();
+    fs::create_directories(root);
+
+    {
+        EnvironmentStore store(root);
+        Environment g; g.name = "Global";
+        g.keys.push_back({"baseUrl", "http://global", true});
+        g.keys.push_back({"gOnly", "http://gonly", true});
+        g.keys.push_back({"gOff", "nope", false});
+        store.save(g);
+        Environment d; d.name = "Dev";
+        d.keys.push_back({"baseUrl", "http://dev", true});
+        d.keys.push_back({"gOnly", "", true}); // blank cell — must NOT shadow Global
+        d.keys.push_back({"dOnly", "http://donly", true});
+        d.keys.push_back({"dEmpty", "", true});
+        store.save(d);
+
+        auto names = store.list();
+        CHECK(std::find(names.begin(), names.end(), "Global") == names.end(), "list() hides reserved Global");
+        CHECK(std::find(names.begin(), names.end(), "Dev") != names.end(), "list() still has ordinary envs");
+        CHECK_EQ(store.load("Global").keys.size(), size_t(3), "load(Global) still works");
+        std::uint64_t e0 = store.epoch();
+        (void)store.list();
+        CHECK_EQ(store.epoch(), e0, "list() does not bump epoch");
+        store.save(g);
+        CHECK(store.epoch() > e0, "save() bumps epoch");
+    }
+
+    auto client = core::app::CoreApiClient::create(
+        core::app::CoreApiClient::Config{root, (fs::path(root) / "appconfig.json").string()});
+
+    // always-on: no active env -> Global applies.
+    CHECK_EQ(client->session().getActiveEnv(), std::string(""), "no active env by default");
+    CHECK_EQ(client->resolvePreview("{{baseUrl}}/x"), std::string("http://global/x"),
+             "Global applies with no active env");
+
+    // reserved name never active.
+    client->session().setActiveEnv("Global");
+    CHECK_EQ(client->session().getActiveEnv(), std::string(""), "setActiveEnv(Global) is a no-op");
+
+    // layering: active wins per key; blank cell falls through; union of both.
+    client->session().setActiveEnv("Dev");
+    CHECK_EQ(client->resolvePreview("{{baseUrl}}"), std::string("http://dev"), "active env overrides Global");
+    CHECK_EQ(client->resolvePreview("{{gOnly}}"), std::string("http://gonly"),
+             "blank active cell does not shadow Global");
+    CHECK_EQ(client->resolvePreview("{{dOnly}}"), std::string("http://donly"), "active-only key resolves");
+    CHECK_EQ(client->resolvePreview("a{{dEmpty}}b"), std::string("ab"), "active-only empty key -> \"\"");
+    CHECK_EQ(client->resolvePreview("{{gOff}}"), std::string("{{gOff}}"), "disabled Global key ignored");
+
+    // repo save bumps epoch -> vars cache rebuilds.
+    Environment g2 = client->environments().load("Global");
+    for (auto& k : g2.keys) if (k.key == "gOnly") k.value = "http://gonly2";
+    client->environments().save(g2);
+    CHECK_EQ(client->resolvePreview("{{gOnly}}"), std::string("http://gonly2"),
+             "env edit invalidates the vars cache");
+
+    // aliasify: shadowed Global pair must not capture literals; non-shadowed still aliasifies.
+    namespace d2 = core::domain;
+    const d2::RequestConfig cfg{d2::Timeout::fromMillis(1800000).take(), true};
+    auto mkHttp = [&](const std::string& url) {
+        d2::HttpRequest::Parts hp{d2::HttpMethod::Get, d2::Url::create(url).take(), d2::PathVariableList{},
+                                  d2::QueryParamList{}, d2::HeaderList{}, d2::Body::none(), d2::Auth::none()};
+        return d2::RequestModel::create(d2::RequestId(""), "t", 0, cfg,
+                                        d2::HttpRequest::create(std::move(hp)).take())
+            .take();
+    };
+    auto shadowed = client->aliasifyModel(mkHttp("http://global/u"));
+    CHECK_EQ(ts::http(shadowed).url().raw(), std::string("http://global/u"),
+             "shadowed Global value not aliasified");
+    auto activeWin = client->aliasifyModel(mkHttp("http://dev/u"));
+    CHECK_EQ(ts::http(activeWin).url().raw(), std::string("{{baseUrl}}/u"), "active value aliasified");
+    auto globalWin = client->aliasifyModel(mkHttp("http://gonly2/u"));
+    CHECK_EQ(ts::http(globalWin).url().raw(), std::string("{{gOnly}}/u"), "Global-only value aliasified");
+
+    // stale session activeEnv=Global -> cleared on load.
+    {
+        std::string sroot = (fs::path(parentRoot) / "globalenv_session").string();
+        fs::create_directories(fs::path(sroot) / ".session");
+        std::ofstream f((fs::path(sroot) / ".session" / "session.json").string());
+        f << "{\"schemaVersion\":1,\"lastOpenedFile\":\"\",\"activeEnv\":\"Global\"}";
+        f.close();
+        SessionStore s(sroot);
+        CHECK_EQ(s.getActiveEnv(), std::string(""), "stale activeEnv=Global cleared on load");
+    }
+}
+
+// ---------------- Env-value encryption (Enc toggle + encryption_key) ----------------
+static void test_env_encryption(const std::string& parentRoot) {
+    std::printf("[env_encryption]\n");
+    std::string root = (fs::path(parentRoot) / "enc").string();
+    fs::create_directories(root);
+
+    AppConfigStore cfgStore((fs::path(root) / "config.json").string());
+    AppConfig ac;
+    ac.encryptionKey = "k1";
+    ac.encryptionExclude = {"Local"};
+    cfgStore.save(ac);
+
+    EnvironmentStore store(root);
+    store.attachAppConfig(&cfgStore);
+
+    auto rawFile = [&](const std::string& name) {
+        std::string txt;
+        fs::path p = fs::path(root) / "environments" / (name + ".json");
+        std::FILE* f = std::fopen(p.string().c_str(), "rb");
+        if (f) { char buf[8192]; size_t n = std::fread(buf, 1, sizeof(buf), f); txt.assign(buf, n); std::fclose(f); }
+        return txt;
+    };
+    auto valOf = [](const Environment& e, const char* key) {
+        for (const auto& k : e.keys) if (k.key == key) return k.value;
+        return std::string();
+    };
+
+    Environment prod; prod.name = "Prod";
+    prod.keys.push_back({"TOKEN", "hello-secret", true, true});   // Enc on
+    prod.keys.push_back({"PLAIN", "world", true, false});
+    store.save(prod);
+    std::string raw = rawFile("Prod");
+    CHECK(raw.find("hello-secret") == std::string::npos, "Enc value not plaintext on disk");
+    CHECK(raw.find("enc:v1:") != std::string::npos, "Enc value carries enc:v1 marker");
+    CHECK(raw.find("world") != std::string::npos, "non-Enc value stays plaintext");
+    CHECK_EQ(valOf(store.load("Prod"), "TOKEN"), std::string("hello-secret"), "decrypt round-trip");
+
+    // excluded env -> plaintext.
+    Environment loc; loc.name = "Local";
+    loc.keys.push_back({"TOKEN", "local-secret", true, true});
+    store.save(loc);
+    CHECK(rawFile("Local").find("local-secret") != std::string::npos, "excluded env stays plaintext");
+
+    // no key -> plaintext.
+    cfgStore.save(AppConfig{});
+    Environment nk; nk.name = "NoKey";
+    nk.keys.push_back({"TOKEN", "nokey-secret", true, true});
+    store.save(nk);
+    CHECK(rawFile("NoKey").find("nokey-secret") != std::string::npos, "no key -> plaintext");
+
+    // wrong key -> ciphertext kept (not lost, no crash).
+    AppConfig wrong; wrong.encryptionKey = "k2"; cfgStore.save(wrong);
+    CHECK(valOf(store.load("Prod"), "TOKEN").rfind("enc:v1:", 0) == 0, "wrong key -> ciphertext kept");
+
+    // right key again -> decrypts.
+    cfgStore.save(ac);
+    CHECK_EQ(valOf(store.load("Prod"), "TOKEN"), std::string("hello-secret"), "right key decrypts again");
+
+    // unchanged value re-saved -> stored ciphertext reused (no nonce re-roll, byte-stable file).
+    std::string before = rawFile("Prod");
+    store.save(store.load("Prod"));
+    CHECK_EQ(rawFile("Prod"), before, "unchanged save keeps ciphertext bytes");
+
+    // old plaintext + Enc flag: targeted re-save (the toggle/Back path) encrypts just that env.
+    store.save(store.load("NoKey"));
+    CHECK(rawFile("NoKey").find("nokey-secret") == std::string::npos, "targeted save encrypts old plaintext");
+    CHECK(rawFile("NoKey").find("enc:v1:") != std::string::npos, "targeted save adds marker");
+    CHECK_EQ(valOf(store.load("NoKey"), "TOKEN"), std::string("nokey-secret"), "and it decrypts back");
+    CHECK(rawFile("Local").find("local-secret") != std::string::npos, "excluded env untouched");
+
+    // env newly added to exclude -> targeted re-save de-encs it to plaintext.
+    AppConfig ex = ac; ex.encryptionExclude = {"Local", "Prod"};
+    cfgStore.save(ex);
+    store.save(store.load("Prod"));
+    CHECK(rawFile("Prod").find("hello-secret") != std::string::npos, "newly-excluded env de-encs");
+
+    // Key change needs no migration pass: the GCM tag makes a wrong key a hard failure (never garbage),
+    // so an undecryptable value is carried through verbatim and the original key still recovers it.
+    cfgStore.save(ac);                       // Prod off the exclude list again
+    store.save(store.load("Prod"));          // -> encrypted under k1
+    AppConfig k3 = ac; k3.encryptionKey = "k3";
+    cfgStore.save(k3);
+    Environment stale = store.load("Prod");
+    CHECK(valOf(stale, "TOKEN").rfind("enc:v1:", 0) == 0, "wrong key -> ciphertext, never garbage");
+    for (auto& k : stale.keys) if (k.key == "TOKEN") k.secret = false;   // Enc toggled OFF under wrong key
+    store.save(stale);
+    cfgStore.save(ac);
+    CHECK_EQ(valOf(store.load("Prod"), "TOKEN"), std::string("hello-secret"), "original key still recovers");
 }
 
 // ---------------- ResponseCache (RESPONSE_CACHE.md §10) ----------------
@@ -985,6 +1149,8 @@ int main() {
     test_env_and_secret(root);
     test_secret_migration(root);
     test_engine(root);
+    test_global_env(root);
+    test_env_encryption(root);
     test_importers();
     test_audit_fixes();
 

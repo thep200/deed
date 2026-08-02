@@ -2,11 +2,13 @@
 
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>   // UTType (NSOpenPanel.allowedContentTypes)
 
+#include <algorithm>
+#include <string>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
-// No special base env: the dropdown lists every environment by its own name; the title shows the active
-// env (or "ENV" when none is selected).
+// Dropdown lists selectable envs; reserved "Global" hidden + always applied. Edit via gear -> Manage env.
 static NSString *const kEnvNone = @"ENV";
 
 @implementation MainWindowController (Config)
@@ -17,13 +19,12 @@ static NSString *const kEnvNone = @"ENV";
     if (!_apiClient) { [self toastWarn:StrToastOpenFolderFirst]; return; }
     NSMutableArray<NSString *> *items = [NSMutableArray array];
     for (const auto &name : _apiClient->environments().list()) [items addObject:N(name)];
-    [items addObject:StrEnvManage];
+    if (!items.count) { [self toastWarn:StrToastNoEnvs]; return; }   // manage row moved to Settings
     NSString *active = N(_apiClient->session().getActiveEnv());
     NSInteger sel = [items indexOfObject:active]; if (sel == NSNotFound) sel = 0;
     __weak MainWindowController *ws = self;
     OS9ShowDropdown(items, sel, _envButton, ^(NSInteger idx) {
         MainWindowController *s = ws; if (!s) return;
-        if (idx == (NSInteger)items.count - 1) { [s manageEnv:nil]; return; }
         [s pickEnvNamed:items[idx]];
     });
 }
@@ -40,8 +41,57 @@ static NSString *const kEnvNone = @"ENV";
 
 #pragma mark Config screen (ENV + Setting)
 
-// Setting button -> Settings screen; ENV "Manage…" -> Environments screen (2 separate screens).
-- (void)settingClicked:(id)sender { [self enterConfig:1]; }
+// Gear -> Settings; its "Manage env" (next to Back) -> Environments. _configReturnKind: 1 = came from
+// Settings, Back returns there; 0 = Back exits to main.
+- (void)settingClicked:(id)sender {
+    _configReturnKind = 0;
+    [self enterConfig:1];
+}
+
+// Save Settings JSON (same as Back): parse -> save + cache/font apply. Invalid -> warn, NO.
+- (BOOL)saveSettingsFromEditor {
+    NSData *d = [_settingEditor.string dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+    if (!dict) { [self toastWarn:StrToastInvalidSettings]; return NO; }
+    core::AppConfig old = _apiClient->appConfig().load();
+    core::AppConfig c = old;
+    if (dict[@"font_name"]) c.fontName = [dict[@"font_name"] UTF8String];
+    if (dict[@"font_size"]) c.fontSize = [dict[@"font_size"] intValue];
+    if (dict[@"ram_cache_size"]) c.ramCacheSizeMb = [dict[@"ram_cache_size"] intValue];
+    if (dict[@"disk_cache_size"]) c.diskCacheSizeMb = [dict[@"disk_cache_size"] intValue];
+    if ([dict[@"encryption_key"] isKindOfClass:[NSString class]])
+        c.encryptionKey = [dict[@"encryption_key"] UTF8String];
+    if ([dict[@"encryption_exclude"] isKindOfClass:[NSArray class]]) {
+        c.encryptionExclude.clear();
+        for (id v in dict[@"encryption_exclude"])
+            if ([v isKindOfClass:[NSString class]]) c.encryptionExclude.push_back([v UTF8String]);
+    }
+    _apiClient->appConfig().save(c);
+    _apiClient->cache().reloadCacheConfig();   // apply new cap/threshold -> evict if smaller (§1.2)
+    // exclude delta -> re-save ONLY the added (de-enc) / removed (enc) envs. Key change alone touches
+    // nothing; user toggles Enc per alias to migrate old values.
+    std::vector<std::string> delta;
+    for (const auto &n : c.encryptionExclude)
+        if (std::find(old.encryptionExclude.begin(), old.encryptionExclude.end(), n) ==
+            old.encryptionExclude.end())
+            delta.push_back(n);
+    for (const auto &n : old.encryptionExclude)
+        if (std::find(c.encryptionExclude.begin(), c.encryptionExclude.end(), n) ==
+            c.encryptionExclude.end())
+            delta.push_back(n);
+    if (!delta.empty()) _apiClient->reencryptEnvironments(delta);
+    [self applyConfiguredFontAndRefresh];
+    return YES;
+}
+
+// "Manage env": save settings first, then switch to Environments; Back there returns to Settings.
+- (void)manageEnvClicked:(id)sender {
+    if (!_apiClient) return;
+    OS9SafeEndEditing(_window, nil);
+    [self saveSettingsFromEditor];
+    _configReturnKind = 1;
+    [self enterConfig:0];
+}
 
 - (void)enterConfig:(NSInteger)kind {
     if (!_apiClient) { [self toastWarn:StrToastOpenFolderFirst]; return; }
@@ -59,11 +109,16 @@ static NSString *const kEnvNone = @"ENV";
         if (_envVC.view) _envVC.view.hidden = YES;
         _settingInset.hidden = NO;
         core::AppConfig c = _apiClient->appConfig().load();
+        NSMutableString *excl = [NSMutableString string];
+        for (size_t i = 0; i < c.encryptionExclude.size(); ++i)
+            [excl appendFormat:@"%s\"%s\"", i ? ", " : "", c.encryptionExclude[i].c_str()];
         _settingEditor.string = [NSString stringWithFormat:
             @"{\n  \"font_name\": \"%s\",\n  \"font_size\": %d,\n"
-             "  \"ram_cache_size\": %d,\n  \"disk_cache_size\": %d\n}",
+             "  \"ram_cache_size\": %d,\n  \"disk_cache_size\": %d,\n"
+             "  \"encryption_key\": \"%s\",\n  \"encryption_exclude\": [%@]\n}",
             c.fontName.c_str(), c.fontSize,
-            c.ramCacheSizeMb, c.diskCacheSizeMb];
+            c.ramCacheSizeMb, c.diskCacheSizeMb,
+            c.encryptionKey.c_str(), excl];
     }
     _configMode = YES;
     _mainPane.hidden = YES;
@@ -80,21 +135,15 @@ static NSString *const kEnvNone = @"ENV";
     if (_apiClient) {
         if (_configKind == 0) {
             [_envVC save];
-        } else {
-            NSData *d = [_settingEditor.string dataUsingEncoding:NSUTF8StringEncoding];
-            NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
-            if (dict) {
-                core::AppConfig c = _apiClient->appConfig().load();
-                if (dict[@"font_name"]) c.fontName = [dict[@"font_name"] UTF8String];
-                if (dict[@"font_size"]) c.fontSize = [dict[@"font_size"] intValue];
-                if (dict[@"ram_cache_size"]) c.ramCacheSizeMb = [dict[@"ram_cache_size"] intValue];
-                if (dict[@"disk_cache_size"]) c.diskCacheSizeMb = [dict[@"disk_cache_size"] intValue];
-                _apiClient->appConfig().save(c);
-                _apiClient->cache().reloadCacheConfig();   // apply new cap/threshold -> evict if smaller (§1.2)
-                [self applyConfiguredFontAndRefresh];
-            } else {
-                [self toastWarn:StrToastInvalidSettings];
+            if (_configReturnKind == 1) {   // came from Settings -> Back returns there
+                _configReturnKind = 0;
+                [self refreshEnvButton];    // active env may have been renamed/deleted
+                [self toastOk:StrToastSaved];
+                [self enterConfig:1];
+                return;
             }
+        } else {
+            [self saveSettingsFromEditor];
         }
     }
     _configMode = NO;
@@ -345,6 +394,4 @@ static NSString *GrpcRpcLabel(const std::string &service, const std::string &met
     // Hovering the button shows the full RPC name (the button may have truncated it with "…").
     _servicePopup.toolTip = [NSString stringWithFormat:@"%s/%s", m.service.c_str(), m.method.c_str()];
 }
-
-- (void)manageEnv:(id)sender { [self enterConfig:0]; }
 @end

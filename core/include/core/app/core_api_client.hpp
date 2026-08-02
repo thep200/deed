@@ -5,9 +5,13 @@
 // knows them.
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "core/app/persistence_repositories.hpp" // env/session/app-config repository ports
@@ -72,13 +76,14 @@ public:
   listGrpcMethods(const domain::GrpcRequest &) override;
   domain::Result<domain::GqlSchema> introspectGraphQl(const domain::RequestModel &) override;
 
-  // Set the active environment's {{var}} bindings used to resolve requests before sending. The UI calls
-  // this when the active environment changes (mirrors Engine's active-env snapshot).
+  // Set the {{var}} bindings used to resolve requests before sending.
   void setVariableScope(domain::VariableScope scope);
-  // Pull the active env's merged vars (Global <- active) from the Engine into the send scope. The UI calls
-  // this right before a send so {{vars}} resolve against the current environment (replaces the UI reading
-  // Engine::activeVars() directly). No-op without an Engine.
+  // Pull merged vars (Global <- active env) into the send scope. UI calls before each send. Cached.
   void refreshVariableScope();
+  // True if a var in the send scope is still ciphertext -> the configured encryption key can't read it.
+  bool hasUnreadableVars() const;
+  // Re-save ONLY the named envs under the current encryption config (exclude-delta; never a full sweep).
+  void reencryptEnvironments(const std::vector<std::string> &names);
 
   // Request-services facade (variable resolution + RPC classification), domain-typed.
   // exportCurl resolves env + per-request config then renders a cURL/grpcurl command (legacy toCurl kept
@@ -129,6 +134,17 @@ private:
   std::unique_ptr<IAppConfigRepository> appConfigRepo_;
   std::unique_ptr<IResponseCacheRepository> cacheRepo_;
   domain::VariableScope scope_; // active env bindings ({{var}} resolution happens at send())
+  // Merged vars (Global <- active), cached per (epoch, activeEnv); env edit bumps epoch -> invalidate.
+  struct VarsSnapshot {
+    std::uint64_t epoch = 0;
+    bool undecryptable = false;   // some value stayed ciphertext (wrong/missing encryption key)
+    std::string activeEnv;
+    std::unordered_map<std::string, std::string> map;         // resolver view (active wins per key)
+    std::vector<std::pair<std::string, std::string>> ordered; // aliasify view (active first, then non-shadowed Global)
+  };
+  std::shared_ptr<const VarsSnapshot> mergedVars() const;
+  mutable std::mutex varsMu_;
+  mutable std::shared_ptr<const VarsSnapshot> varsCache_;
   std::unique_ptr<RequestOrchestrator> orchestrator_;
   // Declared LAST -> destroyed FIRST: joins/drains in-flight send tasks (which reference the
   // orchestrator/senders above) before those are torn down. Two pools (tech-debt fix, §Step1 bottleneck):
