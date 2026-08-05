@@ -61,8 +61,6 @@
     _openButton.title = [self abbreviatePath:path];
     _openButton.toolTip = path;
     [self setHasRequest:NO];
-    // One-time migrate: old files -> add id to filename (only touches files missing id). Before building tree.
-    try { _apiClient->collection().migrateAddIdToFilenames(); } catch (...) {}
     [self reloadTree];
     [self refreshEnvButton];
 
@@ -415,33 +413,120 @@
     [pb setString:t.relPath forType:kTreeDragType];
     return pb;
 }
+// Session teardown — fires however the drag ends (dropped, cancelled, released outside the window),
+// so the indicator can never be left behind.
+- (void)outlineView:(NSOutlineView *)ov draggingSession:(NSDraggingSession *)session
+       endedAtPoint:(NSPoint)pt operation:(NSDragOperation)op {
+    [(DeedOutlineView *)ov hideDropFeedback];
+}
+
+// Collect the relPaths being dragged (used to reject dropping a folder into its own subtree).
+- (NSArray<NSString *> *)draggedRelPathsFrom:(id<NSDraggingInfo>)info {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSPasteboardItem *pb in [[info draggingPasteboard] pasteboardItems]) {
+        NSString *src = [pb stringForType:kTreeDragType];
+        if (src.length) [out addObject:src];
+    }
+    return out;
+}
+// YES if destFolder is the dragged folder itself or lives inside it.
+- (BOOL)dropTarget:(NSString *)destFolder isInsideAnyOf:(NSArray<NSString *> *)sources {
+    for (NSString *src in sources) {
+        if ([destFolder isEqualToString:src]) return YES;
+        if ([destFolder hasPrefix:[src stringByAppendingString:@"/"]]) return YES;
+    }
+    return NO;
+}
+
+// Parent folder item of a relPath (nil = root level), among LOADED items.
+- (TreeItem *)parentFolderItemOf:(NSString *)rel {
+    NSString *parentRel = [rel stringByDeletingLastPathComponent];
+    return parentRel.length ? [self loadedFolderItemForRel:parentRel] : nil;
+}
+
 - (NSDragOperation)outlineView:(NSOutlineView *)ov validateDrop:(id<NSDraggingInfo>)info
                    proposedItem:(id)item proposedChildIndex:(NSInteger)idx {
     TreeItem *t = item;
-    if (item == nil || t.isFolder) {            // only drop onto a folder or root
+    // A request holds nothing, but AppKit proposes it as the parent whenever the cursor is over the
+    // MIDDLE of its row — most of the row's height. Rejecting that left only a hairline between rows
+    // as a valid target ("first drag does nothing"). Retarget onto the request's own parent, before
+    // or after it depending on which half the cursor is in.
+    if (t && !t.isFolder) {
+        BOOL below = NO;
+        NSPoint p = [ov convertPoint:[info draggingLocation] fromView:nil];
+        [(DeedOutlineView *)ov dropRowAtPoint:p belowMidline:&below];
+        TreeItem *parent = [self parentFolderItemOf:t.relPath];
+        NSArray<TreeItem *> *sibs = parent ? parent.children : _roots;
+        NSInteger at = [sibs indexOfObject:t];
+        if (at == NSNotFound) { [(DeedOutlineView *)ov hideDropFeedback]; return NSDragOperationNone; }
+        item = parent;
+        t = parent;
+        idx = at + (below ? 1 : 0);
+    }
+    NSString *destRel = t ? t.relPath : @"";
+    if ([self dropTarget:destRel isInsideAnyOf:[self draggedRelPathsFrom:info]]) {
+        [(DeedOutlineView *)ov hideDropFeedback];   // folder into itself / its own subtree
+        return NSDragOperationNone;
+    }
+    DeedOutlineView *dov = (DeedOutlineView *)ov;
+    if (idx == NSOutlineViewDropOnItemIndex) {      // hovering the folder body -> drop inside it
         [ov setDropItem:item dropChildIndex:NSOutlineViewDropOnItemIndex];
+        [dov showDropOnRow:[ov rowForItem:item]];
         return NSDragOperationMove;
     }
-    return NSDragOperationNone;
+    // Between two rows -> reorder at that exact slot.
+    [ov setDropItem:item dropChildIndex:idx];
+    NSInteger level = item ? [ov levelForItem:item] + 1 : 0;
+    NSInteger slotRow = item ? [ov rowForItem:item] + 1 : 0;   // first child row of `item`
+    for (NSInteger i = 0; i < idx; ++i) {                       // skip preceding siblings + subtrees
+        if (slotRow >= ov.numberOfRows) break;
+        id child = [ov itemAtRow:slotRow];
+        slotRow += 1 + (child ? [self visibleDescendantCountOf:child in:ov] : 0);
+    }
+    [dov showDropInsertAtRow:slotRow level:level];
+    return NSDragOperationMove;
+}
+
+// Rows occupied by an item's expanded descendants (0 when collapsed / not a folder).
+- (NSInteger)visibleDescendantCountOf:(id)item in:(NSOutlineView *)ov {
+    TreeItem *t = item;
+    if (!t.isFolder || ![ov isItemExpanded:t]) return 0;
+    NSInteger n = 0;
+    for (TreeItem *c in t.children) n += 1 + [self visibleDescendantCountOf:c in:ov];
+    return n;
 }
 - (BOOL)outlineView:(NSOutlineView *)ov acceptDrop:(id<NSDraggingInfo>)info item:(id)item childIndex:(NSInteger)idx {
+    [(DeedOutlineView *)ov hideDropFeedback];
     if (!_apiClient) return NO;
     TreeItem *dest = item;
     std::string destFolder = (dest && dest.isFolder) ? std::string(dest.relPath.UTF8String) : std::string();
     BOOL any = NO;
+    NSString *lastRel = nil;                                   // reselect the drop result afterwards
+    NSInteger slot = idx;                                      // insertion slot, advances per item
     NSMutableSet<NSString *> *affected = [NSMutableSet setWithObject:N(destFolder)];  // destination level
     for (NSPasteboardItem *pb in [[info draggingPasteboard] pasteboardItems]) {
         NSString *src = [pb stringForType:kTreeDragType];
         if (!src.length) continue;
         NSString *srcParent = [src stringByDeletingLastPathComponent];
         try {
-            std::string newRel = _apiClient->collection().move(src.UTF8String, destFolder);
+            // Between rows -> reorder (one rename, keeps the slot); onto a folder -> plain move.
+            std::string newRel = (idx == NSOutlineViewDropOnItemIndex)
+                                     ? _apiClient->collection().move(src.UTF8String, destFolder)
+                                     : _apiClient->collection().reorder(src.UTF8String, destFolder,
+                                                                        (int)slot++);
             [self remapExpandedFoldersFrom:src to:N(newRel)];  // folder: keep open (no-op for files)
             [affected addObject:srcParent];                    // source level also changes
+            lastRel = N(newRel);
             any = YES;
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
     }
-    if (any) for (NSString *p in affected) [self refreshTreeLevel:p];  // §T1: only the touched levels
+    if (any) {
+        // A first drop into a never-ordered level keys the whole level, so the OPEN request may have
+        // been renamed too — re-resolve it by id before anything writes to the old path.
+        [self resyncCurrentRelById];
+        for (NSString *p in affected) [self refreshTreeLevel:p];  // §T1: only the touched levels
+        if (lastRel.length) [self reselectTreeByRel:lastRel];     // reloadData drops the selection
+    }
     return any;
 }
 

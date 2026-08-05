@@ -206,7 +206,9 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _tree.doubleAction = @selector(treeDoubleClicked:); // dbl: empty area -> new HTTP; on a row -> rename
     _expandedFolders = [NSMutableSet set];
     _tree.backgroundColor = [NSColor whiteColor];
-    [_tree registerForDraggedTypes:@[ kTreeDragType ]]; // drag-and-drop move
+    [_tree registerForDraggedTypes:@[ kTreeDragType ]];
+    // Platinum feedback is drawn by DeedOutlineView; drop AppKit's blue Aqua insertion line.
+    _tree.draggingDestinationFeedbackStyle = NSTableViewDraggingDestinationFeedbackStyleNone; // drag-and-drop move
     __weak MainWindowController *weakSelf = self;
     _tree.contextHandler = ^(NSInteger row, NSPoint pt) { [weakSelf showContextMenuForRow:row atWindowPoint:pt]; };
     _treeScroll.documentView = _tree;

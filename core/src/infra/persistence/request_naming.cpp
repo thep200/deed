@@ -2,11 +2,16 @@
 
 #include <cctype>
 
+#include "core/infra/persistence/order_key.hpp"
 #include "infra/platform/fs_util.hpp"
 
 namespace core {
 
 namespace {
+
+// Separator between the order key and the rest of the name. MUST sort below every base62 digit
+// ('+' = 43 < '0' = 48) so a shorter key still compares before the keys that extend it.
+constexpr char kOrderSep = '+';
 
 // Strip a trailing ".json" extension (case-insensitive) if present.
 std::string stripJsonExt(const std::string& name) {
@@ -56,31 +61,38 @@ bool isValidFileId(const std::string& id) {
     return true;
 }
 
+SplitOrder splitOrderPrefix(const std::string& name) {
+    std::size_t plus = name.find(kOrderSep);
+    if (plus == std::string::npos || plus == 0) return {"", name};
+    std::string key = name.substr(0, plus);
+    if (!orderkey::isValid(key)) return {"", name};   // '+' from somewhere else -> not an order prefix
+    return {key, name.substr(plus + 1)};
+}
+
+std::string withOrderPrefix(const std::string& order, const std::string& rest) {
+    return order.empty() ? rest : order + kOrderSep + rest;
+}
+
 ParsedRequestName parseRequestFilename(const std::string& filename) {
     ParsedRequestName out;
-    std::string base = stripJsonExt(filename);
+    SplitOrder so = splitOrderPrefix(stripJsonExt(filename));
+    out.order = so.order;
+    const std::string& base = so.rest;
 
     std::size_t firstSep = base.find('_');
     if (firstSep == std::string::npos) return out;   // bad grammar -> ok=false
 
-    std::string firstTok = base.substr(0, firstSep);
-    // OLD form (no id): first token is the type -> empty id, parse the whole string by type.
-    if (firstTok == "http" || firstTok == "grpc" || firstTok == "ws" || firstTok == "gql") {
-        out.id.clear();
-        out.ok = parseTypeRest(base, out);
-        return out;
-    }
-    // NEW form: first token = id, the rest parsed by type.
-    out.id = firstTok;
+    out.id = base.substr(0, firstSep);               // first token = id
     std::string rest = base.substr(firstSep + 1);
     out.ok = isValidFileId(out.id) && parseTypeRest(rest, out);
     return out;
 }
 
 std::string encodeRequestFilename(const std::string& id, RequestType type,
-                                  const std::string& method, const std::string& displayName) {
+                                  const std::string& method, const std::string& displayName,
+                                  const std::string& order) {
     std::string slug = fsutil::slugify(displayName);   // [a-z0-9-], '-' replaces spaces
-    std::string prefix = id + "_";                     // id always first (caller guarantees a valid id)
+    std::string prefix = withOrderPrefix(order, id + "_");   // [order+]id, id always before the type
     if (type == RequestType::Grpc) return prefix + "grpc_" + slug + ".json";   // NO method
     if (type == RequestType::WebSocket) return prefix + "ws_" + slug + ".json"; // NO method
     if (type == RequestType::GraphQl) return prefix + "gql_" + slug + ".json";  // NO method

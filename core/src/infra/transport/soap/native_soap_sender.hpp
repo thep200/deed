@@ -22,9 +22,9 @@ std::string extractFaultString(const std::string &body);
 class NativeSoapSender final : public domain::IRequestSender {
 public:
   bool supports(domain::RequestType t) const override { return t == domain::RequestType::Soap; }
+  // Cancel rides the token straight through to the inner HTTP POST — no close() routing needed.
   domain::Status execute(const domain::RequestModel &resolved, domain::IResponseSink &sink,
                          const domain::ICancellationToken &cancel) override;
-  domain::Status close(int code, std::string reason) override { return http_.close(code, std::move(reason)); }
 
 private:
   NativeHttpSender http_;

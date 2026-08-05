@@ -46,8 +46,7 @@ struct AppConfig {
   bool cachePersist = true;   // keep cache across restart (off -> RAM only, no disk attached)
 
   // --- Env-value encryption (grid "Enc" toggle) ---
-  std::string encryptionKey;                  // empty = off
-  std::vector<std::string> encryptionExclude; // env names saved plaintext (e.g. "Local")
+  std::string encryptionKey; // empty = off. Applies to EVERY env — the toggle alone decides.
 };
 
 // ---- Session app-state ----

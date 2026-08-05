@@ -69,8 +69,6 @@ Environment EnvironmentStore::encryptedForDisk(const Environment& e) const {
     if (!appCfg_) return e;
     AppConfig cfg = appCfg_->load();
     if (cfg.encryptionKey.empty()) return e;
-    for (const auto& n : cfg.encryptionExclude)
-        if (n == e.name) return e; // excluded env -> plaintext
     // Stored ciphertext reused when the plaintext is unchanged -> only actually-changed keys re-encrypt
     // (no nonce re-roll, byte-stable files).
     std::unordered_map<std::string, std::string> stored;
@@ -108,42 +106,6 @@ void EnvironmentStore::remove(const std::string& name) {
     std::error_code ec;
     fs::remove(fs::path(envFile(root_, name)), ec);
     epoch_.fetch_add(1, std::memory_order_relaxed);
-}
-
-namespace {
-// Set key=val in `e` (update in place if present, else append).
-void upsertEnvKey(Environment& e, const std::string& key, const std::string& val) {
-    for (auto& ek : e.keys)
-        if (ek.key == key) { ek.value = val; return; }
-    e.keys.push_back(EnvKey{key, val, true});
-}
-// Merge one legacy { "<key>": "<value>" } object into env `envName` and save it.
-void migrateLegacyEnv(EnvironmentStore& store, const std::string& envName, const nlohmann::json& obj) {
-    Environment e;
-    try { e = store.load(envName); } catch (...) { e.name = envName; }
-    for (auto kit = obj.begin(); kit != obj.end(); ++kit)
-        if (kit->is_string()) upsertEnvKey(e, kit.key(), kit->get<std::string>());
-    if (!e.name.empty()) store.save(e);
-}
-} // namespace
-
-void EnvironmentStore::migrateLegacySecrets() {
-    fs::path secretsDir = fs::path(root_) / ".secrets";
-    fs::path secretsFile = secretsDir / "secrets.json";
-    std::error_code ec;
-    if (!fs::exists(secretsDir, ec)) return; // already migrated / never had secrets -> no-op
-
-    std::string txt;
-    if (fsutil::readFile(secretsFile.string(), txt)) {
-        try {
-            auto j = codec::parseGuarded(txt);
-            if (j.is_object())   // Old layout: { "<env>": { "<key>": "<value>" } }
-                for (auto it = j.begin(); it != j.end(); ++it)
-                    if (it->is_object()) migrateLegacyEnv(*this, it.key(), *it);
-        } catch (...) { /* corrupt .secrets -> skip, still allow opening the app (SPEC edge case) */ }
-    }
-    // Delete .secrets/ -> this also acts as the "migrated" flag (next time exists() == false -> no-op).
-    fs::remove_all(secretsDir, ec);
 }
 
 } // namespace core

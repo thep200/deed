@@ -46,6 +46,8 @@ int run_gql_introspection_tests();
 int run_oauth2_provider_tests();
 int run_avro_serde_tests();
 int run_soap_tests();
+// Defined in order_key_test.cpp — fractional index invariants (collection ordering). #failures.
+int run_order_key_tests();
 
 static int g_pass = 0;
 static int g_fail = 0;
@@ -161,10 +163,8 @@ static void test_request_naming() {
     CHECK_EQ(h.method, std::string("get"), "http method");
     CHECK_EQ(h.slug, std::string("get_list_user"), "http slug keeps '_'");
 
-    // BACK-COMPAT: OLD file with no id (first token = http/grpc) -> parses, id empty.
-    auto old = parseRequestFilename("http_get_tours-configs.json");
-    CHECK(old.ok && old.id.empty() && old.type == RequestType::Http, "old file: id empty, still parses");
-    CHECK_EQ(old.slug, std::string("tours-configs"), "old file slug correct");
+    // No back-compat: a name without an id is not our grammar -> rejected.
+    CHECK(!parseRequestFilename("http_get_tours-configs.json").ok, "id-less name -> ok=false");
 
     CHECK(!parseRequestFilename("collection.json").ok, "name not matching grammar -> ok=false");
     CHECK(!parseRequestFilename("README.md").ok, "no '_' -> ok=false");
@@ -195,31 +195,6 @@ static void test_request_naming() {
     CHECK(label.find("grpc") == std::string::npos && label.find("zz9") == std::string::npos,
           "label does NOT contain id/prefix");
     CHECK_EQ(label, std::string("Get list user"), "label = normalized name");
-}
-
-// Migration: OLD file (no id in name) -> add id to name (git mv), zero-read next time.
-static void test_filename_migration(const std::string& root) {
-    std::printf("[filename_migration]\n");
-    std::string mroot = (fs::path(root) / "migrate_root").string();
-    fs::create_directories(mroot);
-    CollectionStore store(mroot);
-
-    std::string oldName = "http_get_legacy-req.json";   // old form, legacy id in content
-    { std::ofstream o((fs::path(mroot) / oldName));
-      o << R"({"schemaVersion":1,"id":"req_OLD","name":"Legacy Req","type":"http","http":{"method":"GET","url":""}})"; }
-
-    int n = store.migrateAddIdToFilenames();
-    CHECK(n >= 1, "migrate renames >=1 old file");
-    CHECK(!fs::exists(fs::path(mroot) / oldName), "old name gone after migrate");
-
-    std::vector<TreeNode> lvl = store.scanLevel("");
-    bool ok = false; std::string newId;
-    for (auto& c : lvl)
-        if (!c.isFolder) { ok = !c.id.empty() && c.name == "Legacy req"; newId = c.id; }
-    CHECK(ok, "scanLevel: id from FILENAME (zero-read), name normalized");
-    CHECK(isValidFileId(newId), "new id valid [a-z0-9], no '_'");
-    CHECK_EQ(store.migrateAddIdToFilenames(), 0, "migrate 2nd time: 0 (already has id, no content read)");
-    CHECK(!store.findRelPathById(newId).empty(), "findRelPathById by id from filename");
 }
 
 // ---------------- Multi-mode HTTP body persistence ----------------
@@ -397,7 +372,8 @@ static void test_collection_store(const std::string& root) {
     std::string moved = store.move(toMove, folder);
     CHECK(!fs::exists(fs::path(root) / toMove), "old file gone after move");
     CHECK(fs::exists(fs::path(root) / moved), "new file exists in folder");
-    CHECK(moved.rfind("folder-a/", 0) == 0, "move places file into target folder");
+    // relPath keeps the on-disk folder name, which now carries an order prefix ("<key>+folder-a").
+    CHECK(moved.rfind(folder + "/", 0) == 0, "move places file into target folder");
 
     // duplicate + rename + remove.
     std::string dup = store.duplicate(rel);
@@ -412,6 +388,130 @@ static void test_collection_store(const std::string& root) {
     std::string gi;
     fs::path gip = fs::path(root) / ".gitignore";
     CHECK(fs::exists(gip), ".gitignore created");
+}
+
+// ---------------- Collection ordering (fractional index prefix in the filename) ----------------
+static void test_collection_ordering(const std::string& parentRoot) {
+    std::printf("[collection_ordering]\n");
+    std::string root = (fs::path(parentRoot) / "ordering").string();
+    fs::create_directories(root);
+    CollectionStore store(root);
+
+    // display order of one level
+    auto names = [&](const std::string& folderRel) {
+        std::vector<std::string> out;
+        for (const auto& n : store.scanLevel(folderRel)) out.push_back(n.name);
+        return out;
+    };
+    // on-disk filenames of one level (to count how many entries a single op renames)
+    auto files = [&](const std::string& folderRel) {
+        std::vector<std::string> out;
+        for (const auto& e : fs::directory_iterator(fs::path(root) / folderRel))
+            out.push_back(e.path().filename().string());
+        std::sort(out.begin(), out.end());
+        return out;
+    };
+    auto joined = [](const std::vector<std::string>& v) {
+        std::string s;
+        for (const auto& x : v) { if (!s.empty()) s += "|"; s += x; }
+        return s;
+    };
+
+    // Created requests land at the BOTTOM, in creation order (not alphabetical).
+    store.createRequest("", RequestType::Http, "Charlie");
+    store.createRequest("", RequestType::Http, "Alpha");
+    store.createRequest("", RequestType::Http, "Bravo");
+    CHECK_EQ(joined(names("")), std::string("Charlie|Alpha|Bravo"), "new requests append at the end");
+
+    // Drag "Bravo" to the top: index 0.
+    std::string bravoRel;
+    for (const auto& n : store.scanLevel("")) if (n.name == "Bravo") bravoRel = n.relPath;
+    std::vector<std::string> before = files("");
+    std::string movedRel = store.reorder(bravoRel, "", 0);
+    CHECK_EQ(joined(names("")), std::string("Bravo|Charlie|Alpha"), "reorder to index 0");
+    // Exactly ONE filename changed — the whole point of fractional indexing.
+    std::vector<std::string> after = files("");
+    int changed = 0;
+    for (const auto& f : after)
+        if (std::find(before.begin(), before.end(), f) == before.end()) ++changed;
+    CHECK_EQ(changed, 1, "reorder renames exactly one file");
+    CHECK(fs::exists(fs::path(root) / movedRel), "reorder returns the new relPath");
+
+    // Insert into the middle repeatedly — still one rename each time.
+    for (const auto& n : store.scanLevel("")) if (n.name == "Alpha") bravoRel = n.relPath;
+    store.reorder(bravoRel, "", 1);
+    CHECK_EQ(joined(names("")), std::string("Bravo|Alpha|Charlie"), "reorder into the middle");
+
+    // Dragging DOWN inside the same level: the index counts the list as the user sees it (with the
+    // dragged row still in it), so "drop at slot 2" of [Bravo,Alpha,Charlie] lands between Alpha and
+    // Charlie -> the row does not slide one slot too far.
+    std::string downRel;
+    for (const auto& n : store.scanLevel("")) if (n.name == "Bravo") downRel = n.relPath;
+    store.reorder(downRel, "", 2);
+    CHECK_EQ(joined(names("")), std::string("Alpha|Bravo|Charlie"), "drag down keeps the target slot");
+    for (const auto& n : store.scanLevel("")) if (n.name == "Alpha") downRel = n.relPath;
+    store.reorder(downRel, "", 3);   // to the very end
+    CHECK_EQ(joined(names("")), std::string("Bravo|Charlie|Alpha"), "drag to the end");
+
+    // Folders share the sequence with requests (free interleaving).
+    std::string fRel = store.createFolder("", "Zed");
+    CHECK_EQ(joined(names("")), std::string("Bravo|Charlie|Alpha|zed"), "new folder appends at the end");
+    fRel = store.reorder(fRel, "", 1);   // reorder renames the folder -> keep the new relPath
+    CHECK_EQ(joined(names("")), std::string("Bravo|zed|Charlie|Alpha"), "folder can sit between requests");
+
+    // Order survives a rename and a save (the key must not be dropped).
+    std::string alphaRel;
+    for (const auto& n : store.scanLevel("")) if (n.name == "Alpha") alphaRel = n.relPath;
+    store.rename(alphaRel, "Alpha Renamed");
+    CHECK_EQ(joined(names("")), std::string("Bravo|zed|Charlie|Alpha renamed"), "rename keeps the slot");
+    for (const auto& n : store.scanLevel("")) if (n.name == "Alpha renamed") alphaRel = n.relPath;
+    std::string savedRel = store.saveRequest(alphaRel, store.loadRequest(alphaRel));
+    CHECK_EQ(joined(names("")), std::string("Bravo|zed|Charlie|Alpha renamed"), "save keeps the slot");
+    (void)savedRel;
+
+    // Duplicate lands right below its original.
+    std::string charlieRel;
+    for (const auto& n : store.scanLevel("")) if (n.name == "Charlie") charlieRel = n.relPath;
+    store.reorder(charlieRel, "", 0);
+    for (const auto& n : store.scanLevel("")) if (n.name == "Charlie") charlieRel = n.relPath;
+    store.duplicate(charlieRel);
+    CHECK_EQ(joined(names("")), std::string("Charlie|Charlie copy|Bravo|zed|Alpha renamed"),
+             "duplicate sits under the original");
+    // Cross-level drop uses the plain index (nothing to exclude) — no off-by-one there either.
+    std::string intoFolder;
+    for (const auto& n : store.scanLevel("")) if (n.name == "Bravo") intoFolder = n.relPath;
+    store.reorder(intoFolder, fRel, 0);
+    CHECK_EQ(joined(names(fRel)), std::string("Bravo"), "reorder into another level");
+    CHECK_EQ(joined(names("")), std::string("Charlie|Charlie copy|zed|Alpha renamed"),
+             "source level closes the gap");
+
+    // move() (drop ONTO a folder, no slot) puts the entry at that folder's end, with a fresh key.
+    std::string copyRel;
+    for (const auto& n : store.scanLevel("")) if (n.name == "Charlie copy") copyRel = n.relPath;
+    std::string inFolder = store.move(copyRel, fRel);
+    CHECK(inFolder.rfind(fRel + "/", 0) == 0, "move into folder");
+    CHECK(!splitOrderPrefix(fs::path(inFolder).filename().string()).order.empty(),
+          "moved entry gets a key in its new level");
+
+    // A file dropped in from outside the app carries no key. It is shown FIRST (sorted by name) and
+    // must not break anything — the app ships without a migration path, so this is the only way an
+    // unkeyed entry can appear.
+    {
+        std::ofstream f((fs::path(root) / "zz9foreignid0_http_get_foreign.json").string());
+        f << "{\"id\":\"x\",\"name\":\"x\",\"type\":\"http\",\"http\":{\"method\":\"GET\",\"url\":\"\"}}";
+    }
+    CHECK_EQ(joined(names("")).rfind("Foreign|", 0), size_t(0), "unkeyed foreign file sorts first");
+    std::string alphaAgain;
+    for (const auto& n : store.scanLevel("")) if (n.name == "Alpha renamed") alphaAgain = n.relPath;
+    bool threw = false;
+    try { (void)store.reorder(alphaAgain, "", 0); } catch (...) { threw = true; }
+    CHECK(!threw, "reorder still works next to an unkeyed entry");
+    for (const auto& n : store.scanLevel("")) {
+        if (n.isFolder) continue;
+        bool loadOk = true;
+        try { (void)store.loadRequest(n.relPath); } catch (...) { loadOk = false; }
+        CHECK(loadOk, "every sibling still loadable after reorder");
+    }
 }
 
 // ---------------- SessionStore ----------------
@@ -460,35 +560,6 @@ static void test_env_and_secret(const std::string& root) {
     CHECK(envFileTxt.find("s3cr3t") != std::string::npos, "value written plaintext to env file");
     CHECK(!fs::exists(fs::path(root) / ".secrets"), "no .secrets/ created");
     // (env/alias rename = UI view-model save-new + delete-old)
-}
-
-// ---------------- Migration secret -> plaintext (idempotent) ----------------
-static void test_secret_migration(const std::string& root) {
-    std::printf("[secret migration]\n");
-    // Build OLD state: env file missing value + .secrets/secrets.json holds value.
-    fs::create_directories(fs::path(root) / "environments");
-    fs::create_directories(fs::path(root) / ".secrets");
-    {
-        std::FILE* f = std::fopen((fs::path(root) / "environments" / "Dev.json").string().c_str(), "wb");
-        const char* env = "{\"schemaVersion\":1,\"name\":\"Dev\",\"keys\":[{\"key\":\"token\",\"enabled\":true}]}";
-        std::fwrite(env, 1, std::strlen(env), f); std::fclose(f);
-    }
-    {
-        std::FILE* f = std::fopen((fs::path(root) / ".secrets" / "secrets.json").string().c_str(), "wb");
-        const char* sec = "{\"Dev\":{\"token\":\"s3cr3t\"}}";
-        std::fwrite(sec, 1, std::strlen(sec), f); std::fclose(f);
-    }
-    EnvironmentStore env(root);
-    env.migrateLegacySecrets();
-    std::string tokVal;
-    for (auto& k : env.load("Dev").keys) if (k.key == "token") tokVal = k.value;
-    CHECK_EQ(tokVal, std::string("s3cr3t"), "secret value merged back into env");
-    CHECK(!fs::exists(fs::path(root) / ".secrets"), ".secrets/ deleted after migrate");
-    // Idempotent: re-run does not throw, changes nothing.
-    env.migrateLegacySecrets();
-    tokVal.clear();
-    for (auto& k : env.load("Dev").keys) if (k.key == "token") tokVal = k.value;
-    CHECK_EQ(tokVal, std::string("s3cr3t"), "migrate 2nd time no-op");
 }
 
 // ---------------- Engine resolve + validate ----------------
@@ -675,16 +746,6 @@ static void test_global_env(const std::string& parentRoot) {
     auto globalWin = client->aliasifyModel(mkHttp("http://gonly2/u"));
     CHECK_EQ(ts::http(globalWin).url().raw(), std::string("{{gOnly}}/u"), "Global-only value aliasified");
 
-    // stale session activeEnv=Global -> cleared on load.
-    {
-        std::string sroot = (fs::path(parentRoot) / "globalenv_session").string();
-        fs::create_directories(fs::path(sroot) / ".session");
-        std::ofstream f((fs::path(sroot) / ".session" / "session.json").string());
-        f << "{\"schemaVersion\":1,\"lastOpenedFile\":\"\",\"activeEnv\":\"Global\"}";
-        f.close();
-        SessionStore s(sroot);
-        CHECK_EQ(s.getActiveEnv(), std::string(""), "stale activeEnv=Global cleared on load");
-    }
 }
 
 // ---------------- Env-value encryption (Enc toggle + encryption_key) ----------------
@@ -696,7 +757,6 @@ static void test_env_encryption(const std::string& parentRoot) {
     AppConfigStore cfgStore((fs::path(root) / "config.json").string());
     AppConfig ac;
     ac.encryptionKey = "k1";
-    ac.encryptionExclude = {"Local"};
     cfgStore.save(ac);
 
     EnvironmentStore store(root);
@@ -724,11 +784,12 @@ static void test_env_encryption(const std::string& parentRoot) {
     CHECK(raw.find("world") != std::string::npos, "non-Enc value stays plaintext");
     CHECK_EQ(valOf(store.load("Prod"), "TOKEN"), std::string("hello-secret"), "decrypt round-trip");
 
-    // excluded env -> plaintext.
+    // env name is irrelevant: any Enc-toggled value encrypts, "Local" included.
     Environment loc; loc.name = "Local";
     loc.keys.push_back({"TOKEN", "local-secret", true, true});
     store.save(loc);
-    CHECK(rawFile("Local").find("local-secret") != std::string::npos, "excluded env stays plaintext");
+    CHECK(rawFile("Local").find("local-secret") == std::string::npos, "Local env encrypts too");
+    CHECK(rawFile("Local").find("enc:v1:") != std::string::npos, "Local env carries enc:v1 marker");
 
     // no key -> plaintext.
     cfgStore.save(AppConfig{});
@@ -755,17 +816,10 @@ static void test_env_encryption(const std::string& parentRoot) {
     CHECK(rawFile("NoKey").find("nokey-secret") == std::string::npos, "targeted save encrypts old plaintext");
     CHECK(rawFile("NoKey").find("enc:v1:") != std::string::npos, "targeted save adds marker");
     CHECK_EQ(valOf(store.load("NoKey"), "TOKEN"), std::string("nokey-secret"), "and it decrypts back");
-    CHECK(rawFile("Local").find("local-secret") != std::string::npos, "excluded env untouched");
-
-    // env newly added to exclude -> targeted re-save de-encs it to plaintext.
-    AppConfig ex = ac; ex.encryptionExclude = {"Local", "Prod"};
-    cfgStore.save(ex);
-    store.save(store.load("Prod"));
-    CHECK(rawFile("Prod").find("hello-secret") != std::string::npos, "newly-excluded env de-encs");
 
     // Key change needs no migration pass: the GCM tag makes a wrong key a hard failure (never garbage),
     // so an undecryptable value is carried through verbatim and the original key still recovers it.
-    cfgStore.save(ac);                       // Prod off the exclude list again
+    cfgStore.save(ac);
     store.save(store.load("Prod"));          // -> encrypted under k1
     AppConfig k3 = ac; k3.encryptionKey = "k3";
     cfgStore.save(k3);
@@ -1138,16 +1192,15 @@ int main() {
     test_alias_inversion();
     test_curl_export();
     test_request_naming();
-    test_filename_migration(root);
     test_response_cache(root);
     test_cache_durability(root);
     test_cache_config_clamp(root);
     test_app_config_defaults(root);
     test_collection_store(root);
     test_body_singlemode_roundtrip(root);
+    test_collection_ordering(root);
     test_session_store(root);
     test_env_and_secret(root);
-    test_secret_migration(root);
     test_engine(root);
     test_global_env(root);
     test_env_encryption(root);
@@ -1168,14 +1221,16 @@ int main() {
     int oauthFail = run_oauth2_provider_tests();   // OAuth2 token provider (pure pieces, no network)
     int avroFail = run_avro_serde_tests();         // Kafka Avro framing/serde + SR response parsing
     int soapFail = run_soap_tests();               // SOAP HTTP packaging + fault extract + XML pretty
+    int orderFail = run_order_key_tests();         // fractional index keys (collection ordering)
 
     fs::remove_all(root);
 
-    std::printf("\n==== %d passed, %d failed (+%d stream, +%d ws, +%d sse, +%d gql, +%d mapper, +%d saga, +%d repo, +%d import, +%d prepo, +%d field, +%d intro, +%d oauth, +%d avro, +%d soap) ====\n",
-                g_pass, g_fail, streamFail, wsFail, sseFail, gqlFail, mapFail, sagaFail, repoFail, importFail, prepoFail, fieldFail, introFail, oauthFail, avroFail, soapFail);
+    std::printf("\n==== %d passed, %d failed (+%d stream, +%d ws, +%d sse, +%d gql, +%d mapper, +%d saga, +%d repo, +%d import, +%d prepo, +%d field, +%d intro, +%d oauth, +%d avro, +%d soap, +%d order) ====\n",
+                g_pass, g_fail, streamFail, wsFail, sseFail, gqlFail, mapFail, sagaFail, repoFail, importFail, prepoFail, fieldFail, introFail, oauthFail, avroFail, soapFail, orderFail);
     return (g_fail == 0 && streamFail == 0 && wsFail == 0 && sseFail == 0 && gqlFail == 0 &&
             mapFail == 0 && sagaFail == 0 && repoFail == 0 && importFail == 0 && prepoFail == 0 &&
-            fieldFail == 0 && introFail == 0 && oauthFail == 0 && avroFail == 0 && soapFail == 0)
+            fieldFail == 0 && introFail == 0 && oauthFail == 0 && avroFail == 0 && soapFail == 0 &&
+            orderFail == 0)
                ? 0
                : 1;
 }

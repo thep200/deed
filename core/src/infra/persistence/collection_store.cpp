@@ -13,6 +13,7 @@
 #include "infra/serialization/json_codec.hpp"                       // parseGuarded (depth guard) for lightweight metadata reads
 #include "core/domain/request/request_defaults.hpp"
 #include "core/infra/persistence/request_naming.hpp"
+#include "core/infra/persistence/order_key.hpp"
 #include "core/infra/persistence/stores.hpp"
 #include "infra/platform/fs_util.hpp"
 #include "infra/serialization/request_json_mapper.hpp" // NATIVE JSON <-> domain RequestModel (REFACTOR_SPEC D)
@@ -95,10 +96,64 @@ std::string genId() {
   return s;
 }
 
-// id usable in a filename? (legacy "req_..." contains '_' -> invalid -> must
-// regenerate on migrate).
-std::string ensureFileId(const std::string &id) {
-  return isValidFileId(id) ? id : genId();
+// ---- Ordering prefix helpers (order_key.hpp) ----------------------------------------------------
+// Order lives in the filename prefix "<key>+..." -> tree sorts straight off readdir (zero-read).
+
+// Order key of a directory entry, "" when it has none.
+std::string orderOf(const std::string &filename) {
+  return splitOrderPrefix(filename).order;
+}
+
+// Every valid order key in `dir`, ascending. One readdir, no content reads.
+std::vector<std::string> sortedOrderKeys(const fs::path &dir) {
+  std::vector<std::string> keys;
+  std::error_code ec;
+  for (const auto &e : fs::directory_iterator(dir, ec)) {
+    if (e.is_symlink()) continue;
+    std::string fname = e.path().filename().string();
+    if (isHidden(fname) || (e.is_directory() && isReservedDir(fname))) continue;
+    if (e.is_regular_file() && (e.path().extension() != ".json" || isConfigFile(fname))) continue;
+    std::string k = orderOf(fname);
+    if (!k.empty()) keys.push_back(std::move(k));
+  }
+  std::sort(keys.begin(), keys.end());
+  return keys;
+}
+
+// Key that places an entry last in `dir`.
+std::string keyForEnd(const fs::path &dir) {
+  auto keys = sortedOrderKeys(dir);
+  return orderkey::between(keys.empty() ? std::string() : keys.back(), std::string());
+}
+
+// True if `dir` already holds an entry whose name matches `name` ignoring case (APFS is
+// case-insensitive, so two keys differing only in case would collide on disk). `self` is skipped.
+bool clashesIgnoringCase(const fs::path &dir, const std::string &name, const std::string &self) {
+  auto lower = [](std::string s) {
+    for (auto &c : s) c = static_cast<char>(std::tolower((unsigned char)c));
+    return s;
+  };
+  std::string want = lower(name);
+  std::error_code ec;
+  for (const auto &e : fs::directory_iterator(dir, ec)) {
+    std::string fname = e.path().filename().string();
+    if (fname == self) continue;
+    if (lower(fname) == want) return true;
+  }
+  return false;
+}
+
+// Pick a key in (prev, next) whose resulting filename does not collide case-insensitively.
+// Each retry squeezes the key further down, which changes its characters -> converges immediately
+// in practice (the key space is unbounded).
+std::string pickKeyBetween(const fs::path &dir, const std::string &prev, const std::string &next,
+                           const std::string &rest, const std::string &self) {
+  std::string key = orderkey::between(prev, next);
+  for (int i = 0; i < 8; ++i) {
+    if (!clashesIgnoringCase(dir, withOrderPrefix(key, rest), self)) return key;
+    key = orderkey::between(prev, key);
+  }
+  throw std::runtime_error("could not find a non-clashing order key in: " + dir.string());
 }
 
 std::string uniquePath(const fs::path &dir, const std::string &slug,
@@ -114,43 +169,24 @@ std::string uniquePath(const fs::path &dir, const std::string &slug,
   throw std::runtime_error("could not find a unique filename for: " + slug);
 }
 
-// Find a unique filename per the encoded grammar (<id>_type_..., id first).
+// Find a unique filename per the encoded grammar ([order+]<id>_type_..., id first).
 // Unique ids almost never collide; still keep a slug-suffix loop to be safe.
 // Returns FILENAME (no directory).
 std::string uniqueEncodedName(const fs::path &dir, const std::string &id,
                               RequestType type, const std::string &method,
-                              const std::string &displayName) {
-  std::string first = encodeRequestFilename(id, type, method, displayName);
+                              const std::string &displayName,
+                              const std::string &order = "") {
+  std::string first = encodeRequestFilename(id, type, method, displayName, order);
   if (!fs::exists(dir / first))
     return first;
   for (int i = 2; i < 10000; ++i) {
     std::string cand = encodeRequestFilename(
-        id, type, method, displayName + " " + std::to_string(i));
+        id, type, method, displayName + " " + std::to_string(i), order);
     if (!fs::exists(dir / cand))
       return cand;
   }
   throw std::runtime_error("could not find a unique filename for: " +
                            displayName);
-}
-
-// Read one request file's content `id` (empty if unreadable / not JSON / no
-// id).
-std::string idFromContent(const fs::path &fullPath) {
-  std::string txt;
-  if (fsutil::readFile(fullPath.string(), txt)) {
-    try {
-      return codec::parseGuarded(txt).value("id", std::string());
-    } catch (...) {
-    }
-  }
-  return "";
-}
-
-// id preferred FROM FILENAME (zero-read); read content only for a legacy file
-// with no id in its name.
-std::string requestIdFromFile(const fs::path &fullPath) {
-  ParsedRequestName p = parseRequestFilename(fullPath.filename().string());
-  return p.id.empty() ? idFromContent(fullPath) : p.id;
 }
 
 // Recursively collect the relPaths of every non-hidden request .json file under
@@ -179,32 +215,8 @@ void collectRequestFiles(const std::string &root, const std::string &rel,
   }
 }
 
-// Fallback when the filename violates the grammar: read the file once for the
-// real type/method/name/id.
-void fillLeafFromContent(TreeNode &leaf, const fs::path &fullPath) {
-  leaf.name = fullPath.stem().string(); // at minimum: filename (without .json)
-  std::string txt;
-  if (!fsutil::readFile(fullPath.string(), txt))
-    return;
-  try {
-    auto j = codec::parseGuarded(txt);
-    if (j.contains("name") && j["name"].is_string())
-      leaf.name = j["name"].get<std::string>();
-    leaf.id = j.value("id", std::string());
-    std::string t = j.value("type", "http");
-    parseRequestType(t, leaf.requestType);
-    if (leaf.requestType == RequestType::Http)
-      leaf.methodOrType =
-          j.value("http", codec::json::object()).value("method", "GET");
-    else
-      leaf.methodOrType.clear();
-  } catch (...) { /* bad file -> still show the filename */
-  }
-}
-
-// Build metadata leaf for one request file — does NOT read content when the
-// filename is valid (§2). Only falls back to a single read if the filename
-// violates the grammar (§5).
+// Metadata leaf from the FILENAME only — never reads content (§2). A file the app did not write
+// (bad grammar) still shows up, under its raw filename.
 TreeNode buildRequestLeaf(const fs::path &fullPath,
                           const std::string &relPath) {
   TreeNode leaf;
@@ -212,8 +224,8 @@ TreeNode buildRequestLeaf(const fs::path &fullPath,
   leaf.relPath = relPath;
 
   ParsedRequestName p = parseRequestFilename(fullPath.filename().string());
-  if (!p.ok) { // grammar violated -> fall back to a single content read
-    fillLeafFromContent(leaf, fullPath);
+  if (!p.ok) {
+    leaf.name = fullPath.stem().string();
     return leaf;
   }
   leaf.requestType = p.type;
@@ -226,9 +238,7 @@ TreeNode buildRequestLeaf(const fs::path &fullPath,
   } else {
     leaf.methodOrType.clear(); // gRPC: UI does not show a method type
   }
-  // id READ FROM FILENAME (zero-read); only an OLD file with no id in its name
-  // needs one content read.
-  leaf.id = p.id.empty() ? idFromContent(fullPath) : p.id;
+  leaf.id = p.id;
   return leaf;
 }
 
@@ -257,18 +267,31 @@ CollectionStore::scanLevel(const std::string &dirRelPath) const {
     fs::directory_entry ent;
     bool isDir;
     std::string name;
+    std::string order;    // fractional-index prefix ("" = not ordered yet)
+    std::string sortName; // display name, used only for unordered entries
   };
   std::vector<Entry> entries;
   for (const auto &e : fs::directory_iterator(dir, ec)) {
     // Do not follow symlinks (avoid recursion cycles — §10).
     if (e.is_symlink())
       continue;
-    entries.push_back({e, e.is_directory(), e.path().filename().string()});
+    Entry en{e, e.is_directory(), e.path().filename().string(), "", ""};
+    SplitOrder so = splitOrderPrefix(en.name);
+    en.order = so.order;
+    // Foreign entries (no key) fall back to DISPLAY name — the raw filename leads with a random id.
+    en.sortName = en.isDir ? so.rest : normalizeDisplayName(parseRequestFilename(so.rest).slug);
+    if (en.sortName.empty()) en.sortName = so.rest;
+    entries.push_back(std::move(en));
   }
-  std::sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
-    if (a.isDir != b.isDir)
-      return a.isDir; // folders first
-    return a.name < b.name;
+  // Keyed entries sort by key; folders and requests share ONE sequence (free interleaving).
+  // Keyless = foreign file -> first, so it is visible and new requests still land last.
+  std::stable_sort(entries.begin(), entries.end(), [](const Entry &a, const Entry &b) {
+    bool ka = !a.order.empty(), kb = !b.order.empty();
+    if (ka != kb)
+      return !ka; // keyless first
+    if (!ka)
+      return a.sortName < b.sortName;
+    return a.order < b.order;
   });
   for (const auto &en : entries) {
     const std::string &fname = en.name;
@@ -280,7 +303,7 @@ CollectionStore::scanLevel(const std::string &dirRelPath) const {
       TreeNode folder;
       folder.isFolder = true;
       folder.relPath = childRel;
-      folder.name = fname;              // folder: directory name (NO de-slug)
+      folder.name = splitOrderPrefix(fname).rest; // strip the order prefix (NO de-slug)
       out.push_back(std::move(folder)); // empty children -> lazy expand later
     } else if (en.ent.is_regular_file()) {
       if (en.ent.path().extension() != ".json")
@@ -299,8 +322,9 @@ TreeNode CollectionStore::scanTree() const {
     TreeNode node;
     node.isFolder = true;
     node.relPath = rel;
-    node.name = rel.empty() ? fs::path(root_).filename().string()
-                            : fs::path(rel).filename().string();
+    node.name = rel.empty()
+                    ? fs::path(root_).filename().string()
+                    : splitOrderPrefix(fs::path(rel).filename().string()).rest; // strip order prefix
     for (auto &child : scanLevel(rel)) {
       if (child.isFolder)
         node.children.push_back(walk(child.relPath));
@@ -317,26 +341,19 @@ core::domain::RequestModel CollectionStore::loadRequest(const std::string &relPa
   if (!fsutil::readFile(fsutil::join(root_, relPath), txt))
     throw std::runtime_error("cannot read request: " + relPath);
   core::domain::RequestModel m = requestFromText(txt);
-  // id must be valid to embed in the FILENAME ([a-z0-9], no '_'). Empty/legacy "req_..." content
-  // -> do NOT write to disk here (loadRequest is a pure READ — avoid write-storm on open/browse). Prefer the
-  // id FROM THE FILENAME (stable after migrateAddIdToFilenames); only generate a temp one if the filename
-  // also lacks an id. Content rewrites are owned by saveRequest/migrateAddIdToFilenames.
-  if (!isValidFileId(m.id().get())) {
-    ParsedRequestName p = parseRequestFilename(fs::path(relPath).filename().string());
-    std::string id = (p.ok && isValidFileId(p.id)) ? p.id : genId();
-    m = withIdName(m, std::move(id), m.name());
-  }
+  // id must be filename-safe. Pure READ: no write here, saveRequest owns rewrites.
+  if (!isValidFileId(m.id().get()))
+    m = withIdName(m, genId(), m.name());
   return m;
 }
 
-// Build idIndex_ in one pass: id preferred FROM FILENAME (zero-read), read
-// content only for legacy files.
+// Build idIndex_ in one pass — ids come FROM THE FILENAME (zero-read).
 void CollectionStore::buildIdIndexLocked() const {
   idIndex_.clear();
   std::vector<std::string> files;
   collectRequestFiles(root_, "", files);
   for (const auto &childRel : files) {
-    std::string id = requestIdFromFile(fs::path(fsutil::join(root_, childRel)));
+    std::string id = parseRequestFilename(fs::path(childRel).filename().string()).id;
     if (!id.empty())
       idIndex_.emplace(id, childRel); // first id wins (stable)
   }
@@ -365,46 +382,6 @@ std::string CollectionStore::findRelPathById(const std::string &id) const {
   buildIdIndexLocked();
   auto it2 = idIndex_.find(id);
   return it2 != idIndex_.end() ? it2->second : "";
-}
-
-// Rename one legacy file to embed its id (the <id>_type_... grammar). Returns
-// true if a rename happened.
-bool CollectionStore::migrateOneFile(const std::string &childRel) const {
-  try {
-    core::domain::RequestModel m =
-        loadRequest(childRel); // ensure a clean id (generate if legacy/empty)
-    std::string method = httpMethodOf(m);
-    fs::path src = fs::path(fsutil::join(root_, childRel));
-    std::string newName =
-        uniqueEncodedName(src.parent_path(), m.id().get(), m.type(), method, m.name());
-    if (newName == src.filename().string())
-      return false;
-    std::error_code ec;
-    fs::rename(src, src.parent_path() / newName, ec);
-    return !ec;
-  } catch (...) {
-    return false; // bad file -> skip, do not block migrating the rest
-  }
-}
-
-int CollectionStore::migrateAddIdToFilenames() const {
-  // Collect all request files FIRST (full traversal completes before any rename
-  // — safe to mutate dirs).
-  std::vector<std::string> files;
-  collectRequestFiles(root_, "", files);
-  int migrated = 0;
-  for (const auto &childRel : files) {
-    ParsedRequestName p =
-        parseRequestFilename(fs::path(childRel).filename().string());
-    if (p.ok && !p.id.empty())
-      continue; // already has id in name -> do NOT read content
-    if (migrateOneFile(childRel))
-      ++migrated;
-  }
-  if (migrated)
-    invalidateIdIndex(); // renamed files -> idIndex_ (keyed by relPath) is now
-                         // stale
-  return migrated;
 }
 
 std::map<std::string, std::string> CollectionStore::loadBodyDrafts(const std::string &relPath) const {
@@ -436,10 +413,11 @@ std::string CollectionStore::saveRequest(const std::string &relPath, const core:
   // Write content first (source of truth), then sync the filename = derived
   // cache (§4). UI body drafts ride along under "_uiBodyDrafts" (domain ignores them).
   fsutil::writeFileAtomic(cur.string(), injectBodyDrafts(requestToText(m), bodyDrafts));
-  std::string desired = encodeRequestFilename(m.id().get(), m.type(), method, m.name());
+  std::string order = orderOf(cur.filename().string()); // renaming must not drop the sibling order
+  std::string desired = encodeRequestFilename(m.id().get(), m.type(), method, m.name(), order);
   if (cur.filename().string() == desired)
     return relPath; // name already matches -> done
-  std::string newName = uniqueEncodedName(dir, m.id().get(), m.type(), method, m.name());
+  std::string newName = uniqueEncodedName(dir, m.id().get(), m.type(), method, m.name(), order);
   fs::path dst = dir / newName;
   std::error_code ec;
   fs::rename(cur, dst, ec); // git detects rename via unchanged content
@@ -465,7 +443,8 @@ std::string CollectionStore::createRequest(const std::string &folderRel,
       core::domain::RequestId(id), name, 0, cfg, core::domain::defaultPayloadFor(type))
       .take();
   std::string method = httpMethodOf(m);
-  fs::path full = dir / uniqueEncodedName(dir, id, type, method, name);
+  // New requests go to the BOTTOM of their level (one readdir for the current max key).
+  fs::path full = dir / uniqueEncodedName(dir, id, type, method, name, keyForEnd(dir));
   fsutil::writeFileAtomic(full.string(), requestToText(m));
   return fs::relative(full, fs::path(root_)).generic_string();
 }
@@ -480,7 +459,8 @@ CollectionStore::createRequestFromModel(const std::string &folderRel,
   std::string id = genId(); // new id, independent of the import source
   m = withIdName(m, id, name);
   std::string method = httpMethodOf(m);
-  fs::path full = dir / uniqueEncodedName(dir, id, m.type(), method, name);
+  // Imported requests land at the BOTTOM, same as freshly created ones.
+  fs::path full = dir / uniqueEncodedName(dir, id, m.type(), method, name, keyForEnd(dir));
   fsutil::writeFileAtomic(full.string(), requestToText(m));
   return fs::relative(full, fs::path(root_)).generic_string();
 }
@@ -489,7 +469,14 @@ std::string CollectionStore::createFolder(const std::string &parentRel,
                                           const std::string &name) const {
   invalidateIdIndex();
   std::string slug = fsutil::slugify(name);
-  fs::path dir = fs::path(fsutil::join(fsutil::join(root_, parentRel), slug));
+  fs::path parent = fs::path(fsutil::join(root_, parentRel));
+  fs::create_directories(parent);
+  // New folders go to the BOTTOM of their level, like new requests. pickKeyBetween also guards the
+  // case-insensitive clash two folders with the same slug could otherwise hit on APFS.
+  auto keys = sortedOrderKeys(parent);
+  std::string key = pickKeyBetween(parent, keys.empty() ? std::string() : keys.back(),
+                                   std::string(), slug, "");
+  fs::path dir = parent / withOrderPrefix(key, slug);
   fs::create_directories(dir);
   return fs::relative(dir, fs::path(root_)).generic_string();
 }
@@ -501,7 +488,9 @@ std::string CollectionStore::rename(const std::string &relPath,
   if (!fs::exists(src))
     throw std::runtime_error("does not exist: " + relPath);
   if (fs::is_directory(src)) {
-    fs::path dst = src.parent_path() / fsutil::slugify(newName);
+    // Keep the order prefix — renaming a folder must not move it in the level.
+    std::string order = orderOf(src.filename().string());
+    fs::path dst = src.parent_path() / withOrderPrefix(order, fsutil::slugify(newName));
     fs::rename(src, dst);
     return fs::relative(dst, fs::path(root_)).generic_string();
   }
@@ -511,14 +500,15 @@ std::string CollectionStore::rename(const std::string &relPath,
   m = withIdName(m, m.id().get(), newName); // keep id, change name (immutable update)
   std::string method = httpMethodOf(m);
   std::string text = injectBodyDrafts(requestToText(m), loadBodyDrafts(relPath));
-  std::string desired = encodeRequestFilename(m.id().get(), m.type(), method, newName);
+  std::string order = orderOf(src.filename().string()); // keep the sibling order across a rename
+  std::string desired = encodeRequestFilename(m.id().get(), m.type(), method, newName, order);
   if (src.filename().string() == desired) {
     fsutil::writeFileAtomic(src.string(), text); // name already matches -> no rename
     return relPath;
   }
   fs::path newFull =
       src.parent_path() /
-      uniqueEncodedName(src.parent_path(), m.id().get(), m.type(), method, newName);
+      uniqueEncodedName(src.parent_path(), m.id().get(), m.type(), method, newName, order);
   fsutil::writeFileAtomic(newFull.string(), text);
   fs::remove(src);
   return fs::relative(newFull, fs::path(root_)).generic_string();
@@ -529,8 +519,17 @@ std::string CollectionStore::duplicate(const std::string &relPath) const {
   fs::path src = fs::path(fsutil::join(root_, relPath));
   if (!fs::exists(src))
     throw std::runtime_error("does not exist: " + relPath);
+  // The copy sits immediately BELOW the original: a key between it and its next sibling.
+  std::string origKey = orderOf(src.filename().string());
+  auto keyAfterOriginal = [&](const std::string &rest) {
+    auto keys = sortedOrderKeys(src.parent_path());
+    auto it = std::upper_bound(keys.begin(), keys.end(), origKey);
+    std::string next = it == keys.end() ? std::string() : *it;
+    return pickKeyBetween(src.parent_path(), origKey, next, rest, "");
+  };
   if (fs::is_directory(src)) {
-    fs::path dst = src.parent_path() / (src.filename().string() + "-copy");
+    std::string slug = splitOrderPrefix(src.filename().string()).rest + "-copy";
+    fs::path dst = src.parent_path() / withOrderPrefix(keyAfterOriginal(slug), slug);
     std::error_code ec;
     fs::copy(src, dst, fs::copy_options::recursive, ec);
     if (ec)
@@ -540,11 +539,65 @@ std::string CollectionStore::duplicate(const std::string &relPath) const {
   core::domain::RequestModel m = loadRequest(relPath);
   m = withIdName(m, genId(), m.name() + " copy"); // new id to avoid collisions
   std::string method = httpMethodOf(m);
+  std::string dupKey =
+      origKey.empty() ? std::string() // original not ordered yet -> stay unordered too
+                      : keyAfterOriginal(encodeRequestFilename(m.id().get(), m.type(), method, m.name()));
   fs::path newFull =
       src.parent_path() /
-      uniqueEncodedName(src.parent_path(), m.id().get(), m.type(), method, m.name());
+      uniqueEncodedName(src.parent_path(), m.id().get(), m.type(), method, m.name(), dupKey);
   fsutil::writeFileAtomic(newFull.string(), injectBodyDrafts(requestToText(m), loadBodyDrafts(relPath)));
   return fs::relative(newFull, fs::path(root_)).generic_string();
+}
+
+std::string CollectionStore::reorder(const std::string &relPath,
+                                     const std::string &destFolderRel, int index) const {
+  fs::path src = fs::path(fsutil::join(root_, relPath));
+  if (!fs::exists(src))
+    throw std::runtime_error("does not exist: " + relPath);
+  fs::path destDir = fs::path(fsutil::join(root_, destFolderRel));
+  fs::create_directories(destDir);
+  // Block moving a folder into itself / its descendants (same guard as move()).
+  if (fs::is_directory(src)) {
+    auto s = fs::weakly_canonical(src);
+    auto d = fs::weakly_canonical(destDir);
+    auto mismatch = std::mismatch(s.begin(), s.end(), d.begin(), d.end());
+    if (mismatch.first == s.end())
+      throw std::runtime_error("cannot move a folder into itself");
+  }
+  invalidateIdIndex();
+
+  const std::string srcName = src.filename().string();
+  bool sameLevel = fs::equivalent(src.parent_path(), destDir);
+  // `index` is a slot in the level AS DISPLAYED — the dragged row still counted. Drop the entry from
+  // the neighbour list and, when it sat ABOVE the target slot, shift the slot down by one; otherwise
+  // dragging downwards would always land one position too far.
+  std::vector<std::string> keys;
+  int selfAt = -1;
+  for (const auto &n : scanLevel(destFolderRel)) {
+    std::string fname = fs::path(n.relPath).filename().string();
+    if (sameLevel && fname == srcName) {
+      selfAt = static_cast<int>(keys.size());
+      continue;
+    }
+    std::string k = orderOf(fname);
+    if (!k.empty())
+      keys.push_back(std::move(k));
+  }
+  int at = index < 0 ? 0 : index;
+  if (selfAt >= 0 && at > selfAt)
+    --at;
+  if (at > static_cast<int>(keys.size()))
+    at = static_cast<int>(keys.size());
+  std::string prev = at > 0 ? keys[static_cast<std::size_t>(at) - 1] : std::string();
+  std::string next = at < static_cast<int>(keys.size()) ? keys[static_cast<std::size_t>(at)] : std::string();
+
+  std::string rest = splitOrderPrefix(srcName).rest;
+  std::string key = pickKeyBetween(destDir, prev, next, rest, sameLevel ? srcName : std::string());
+  fs::path dest = destDir / withOrderPrefix(key, rest);
+  if (dest == src)
+    return relPath;
+  fs::rename(src, dest);
+  return fs::relative(dest, fs::path(root_)).generic_string();
 }
 
 std::string CollectionStore::move(const std::string &relPath,
@@ -568,11 +621,19 @@ std::string CollectionStore::move(const std::string &relPath,
   if (fs::equivalent(src.parent_path(), destDir))
     return relPath;
 
-  std::string stem = src.stem().string();
-  std::string ext = src.has_extension() ? src.extension().string() : "";
-  fs::path dest = fs::is_directory(src)
-                      ? (destDir / src.filename())
-                      : fs::path(uniquePath(destDir, stem, ext));
+  // Re-key for the destination level: the old key belongs to the source level's sequence and could
+  // even duplicate one already there. Landing at the bottom matches "dropped into this folder".
+  std::string rest = splitOrderPrefix(src.filename().string()).rest;
+  auto keys = sortedOrderKeys(destDir);
+  std::string newKey =
+      pickKeyBetween(destDir, keys.empty() ? std::string() : keys.back(), std::string(), rest, "");
+  std::string wanted = withOrderPrefix(newKey, rest);
+  fs::path dest = destDir / wanted;
+  if (!fs::is_directory(src) && fs::exists(dest)) {   // same id in the target -> keep the -2 fallback
+    fs::path w(wanted);
+    dest = fs::path(uniquePath(destDir, w.stem().string(),
+                               w.has_extension() ? w.extension().string() : ""));
+  }
   fs::rename(src, dest);
   return fs::relative(dest, fs::path(root_)).generic_string();
 }

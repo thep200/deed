@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -12,6 +14,7 @@
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
 
+#include "infra/transport/shared/socket_abort.hpp" // abort a connect (no callback runs there)
 #include "infra/transport/shared/sse_parser.hpp" // pure text/event-stream parser (no transport coupling)
 #include "infra/transport/shared/url_util.hpp"
 
@@ -144,6 +147,7 @@ cpr::Response runVerb(cpr::Session &s, d::HttpMethod m) {
 // are merged last (SSE adds Accept / Last-Event-ID). Cancellation is wired via the progress callback.
 void configureSession(cpr::Session &session, const d::HttpRequest &h, const d::RequestModel &model,
                       const std::shared_ptr<core::CancelToken> &token,
+                      const std::shared_ptr<core::SocketAbort> &abort,
                       const std::vector<std::pair<std::string, std::string>> &extraHeaders) {
   std::string url = applyPathVariables(h.url().raw(), h.pathVariables());
   std::vector<core::KeyValue> urlQuery;
@@ -170,6 +174,8 @@ void configureSession(cpr::Session &session, const d::HttpRequest &h, const d::R
       [token](cpr::cpr_off_t, cpr::cpr_off_t, cpr::cpr_off_t, cpr::cpr_off_t, intptr_t) -> bool {
         return !token->isCancelled();
       }});
+  // Progress covers the transfer; the socket hooks cover the connect, where no callback runs at all.
+  core::SocketAbort::install(session.GetCurlHolder()->handle, abort.get());
 }
 
 long long offsetMsFrom(std::chrono::steady_clock::time_point t0) {
@@ -189,8 +195,8 @@ void trimWs(std::string &x) {
 class SseStreamer {
 public:
   SseStreamer(const d::HttpRequest &h, const d::RequestModel &model, d::IResponseSink &sink,
-              std::shared_ptr<core::CancelToken> token)
-      : h_(h), model_(model), sink_(sink), token_(std::move(token)),
+              std::shared_ptr<core::CancelToken> token, std::shared_ptr<core::SocketAbort> abort)
+      : h_(h), model_(model), sink_(sink), token_(std::move(token)), abort_(std::move(abort)),
         t0_(std::chrono::steady_clock::now()) {}
 
   void run() {
@@ -313,7 +319,7 @@ private:
     std::vector<std::pair<std::string, std::string>> extra;
     extra.emplace_back("Accept", "text/event-stream");
     if (!lastEventId_.empty()) extra.emplace_back("Last-Event-ID", lastEventId_);
-    configureSession(session, h_, model_, token_, extra);
+    configureSession(session, h_, model_, token_, abort_, extra);
     session.SetAcceptEncoding(
         cpr::AcceptEncoding{{cpr::AcceptEncodingMethods::deflate, cpr::AcceptEncodingMethods::gzip}});
 
@@ -346,6 +352,7 @@ private:
   const d::RequestModel &model_;
   d::IResponseSink &sink_;
   std::shared_ptr<core::CancelToken> token_;
+  std::shared_ptr<core::SocketAbort> abort_;
   std::chrono::steady_clock::time_point t0_;
 
   bool opened_ = false;
@@ -365,26 +372,24 @@ d::Status NativeHttpSender::execute(const d::RequestModel &model, d::IResponseSi
                                     const d::ICancellationToken &cancel) {
   const d::HttpRequest &h = httpOf(model);
 
-  auto token = std::make_shared<core::CancelToken>();
-  if (cancel.cancelled()) token->cancel();
-  { std::lock_guard<std::mutex> lk(mu_); token_ = token; }
+  auto token = core::linkCancel(cancel);   // aborts the transfer through the progress callback
+  auto abort = std::make_shared<core::SocketAbort>();
+  cancel.onCancel([abort] { abort->abort(); }); // aborts a connect, where no callback ever runs
 
   // SSE: stream the response natively (no legacy HttpSender).
   if (d::acceptsEventStream(h)) {
-    SseStreamer(h, model, sink, token).run();
-    { std::lock_guard<std::mutex> lk(mu_); token_.reset(); }
+    SseStreamer(h, model, sink, token, abort).run();
     return d::ok();
   }
 
   // --- Unary, native on domain types via cpr ---
   cpr::Session session;
-  configureSession(session, h, model, token, {});
+  configureSession(session, h, model, token, abort, {});
 
   auto start = std::chrono::steady_clock::now();
   cpr::Response r = runVerb(session, h.method());
   auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                      std::chrono::steady_clock::now() - start);
-  { std::lock_guard<std::mutex> lk(mu_); token_.reset(); }
 
   if (token->isCancelled()) {
     sink.emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Cancelled, "Cancelled", {}}}));
@@ -409,12 +414,6 @@ d::Status NativeHttpSender::execute(const d::RequestModel &model, d::IResponseSi
     if (isSetCookie) resp.cookies.push_back(parseSetCookie(kv.second));
   }
   sink.emit(d::ResponseEvent(d::EvCompleted{std::move(resp)}));
-  return d::ok();
-}
-
-d::Status NativeHttpSender::close(int, std::string) {
-  std::lock_guard<std::mutex> lk(mu_);
-  if (token_) token_->cancel();
   return d::ok();
 }
 

@@ -68,6 +68,7 @@ public:
   domain::Result<domain::RequestExecutionId>
   send(const domain::RequestModel &request, std::shared_ptr<domain::IRequestObserver> observer) override;
   domain::Status cancel(domain::RequestExecutionId exec) override;
+  domain::Status cancelAll() override;
   domain::Status sendStreamMessage(domain::RequestExecutionId exec, domain::WsMessage msg) override;
   domain::Status halfClose(domain::RequestExecutionId exec) override;
   domain::Status closeStream(domain::RequestExecutionId exec, int code, std::string reason) override;
@@ -82,8 +83,6 @@ public:
   void refreshVariableScope();
   // True if a var in the send scope is still ciphertext -> the configured encryption key can't read it.
   bool hasUnreadableVars() const;
-  // Re-save ONLY the named envs under the current encryption config (exclude-delta; never a full sweep).
-  void reencryptEnvironments(const std::vector<std::string> &names);
 
   // Request-services facade (variable resolution + RPC classification), domain-typed.
   // exportCurl resolves env + per-request config then renders a cURL/grpcurl command (legacy toCurl kept

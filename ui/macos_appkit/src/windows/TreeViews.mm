@@ -35,7 +35,106 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
     return it;
 }
 
-@implementation DeedOutlineView
+#pragma mark - OS9DropIndicator (Platinum drop feedback, drawn above the rows)
+
+// A plain overlay subview: AppKit paints row views over the table's own drawRect, so the indicator
+// has to live on top of them. Insert mode = 2px bar with end caps; drop-on mode = 2px frame.
+@interface OS9DropIndicator : NSView
+@property(nonatomic) BOOL dropOn;   // NO = insertion bar, YES = frame around a folder row
+@end
+
+@implementation OS9DropIndicator
+- (instancetype)initWithFrame:(NSRect)f {
+    if ((self = [super initWithFrame:f])) {
+        // Layer z-order keeps it above the row views WITHOUT re-adding it as a subview on every
+        // dragging update — NSTableView owns its subview list and must not be churned mid-drag.
+        self.wantsLayer = YES;
+        self.layer.zPosition = 1000;
+    }
+    return self;
+}
+- (BOOL)isFlipped { return YES; }
+- (NSView *)hitTest:(NSPoint)p { return nil; }   // never steals the drag
+- (void)drawRect:(NSRect)dirty {
+    [NSGraphicsContext saveGraphicsState];
+    [[NSGraphicsContext currentContext] setShouldAntialias:NO];
+    [[OS9Theme frame] set];
+    NSRect b = self.bounds;
+    if (_dropOn) {
+        NSFrameRect(NSMakeRect(0, 0, b.size.width, b.size.height));
+        NSFrameRect(NSInsetRect(NSMakeRect(0, 0, b.size.width, b.size.height), 1, 1));
+    } else {
+        CGFloat y = floor((b.size.height - 2) / 2);
+        NSRectFill(NSMakeRect(3, y, b.size.width - 6, 2));           // the bar
+        NSRectFill(NSMakeRect(0, y - 2, 3, 6));                       // left cap
+        NSRectFill(NSMakeRect(b.size.width - 3, y - 2, 3, 6));        // right cap
+    }
+    [NSGraphicsContext restoreGraphicsState];
+}
+@end
+
+@implementation DeedOutlineView {
+    OS9DropIndicator *_dropIndicator;
+}
+
+- (OS9DropIndicator *)dropIndicator {
+    if (!_dropIndicator) {
+        _dropIndicator = [[OS9DropIndicator alloc] initWithFrame:NSZeroRect];
+        _dropIndicator.hidden = YES;
+        [self addSubview:_dropIndicator positioned:NSWindowAbove relativeTo:nil];
+    }
+    return _dropIndicator;
+}
+
+// row = insertion slot index (0 = above the first row, count = below the last one).
+- (void)showDropInsertAtRow:(NSInteger)row level:(NSInteger)level {
+    OS9DropIndicator *ind = [self dropIndicator];
+    NSInteger n = self.numberOfRows;
+    CGFloat y;
+    if (n == 0) y = 0;
+    else if (row >= n) y = NSMaxY([self rectOfRow:n - 1]);
+    else y = NSMinY([self rectOfRow:row]);
+    CGFloat x = self.indentationPerLevel * level;
+    ind.dropOn = NO;
+    ind.frame = NSMakeRect(x, y - 3, self.bounds.size.width - x, 6);
+    ind.hidden = NO;
+    [ind setNeedsDisplay:YES];
+}
+
+- (void)showDropOnRow:(NSInteger)row {
+    OS9DropIndicator *ind = [self dropIndicator];
+    if (row < 0 || row >= self.numberOfRows) { [self hideDropFeedback]; return; }
+    ind.dropOn = YES;
+    ind.frame = [self rectOfRow:row];
+    ind.hidden = NO;
+    [ind setNeedsDisplay:YES];
+}
+
+- (void)hideDropFeedback { _dropIndicator.hidden = YES; }
+
+- (NSInteger)dropRowAtPoint:(NSPoint)p belowMidline:(BOOL *)below {
+    NSInteger row = [self rowAtPoint:p];
+    if (below) {
+        NSRect r = row >= 0 ? [self rectOfRow:row] : NSZeroRect;
+        *below = row >= 0 && p.y > NSMidY(r);
+    }
+    return row;
+}
+
+// NSDraggingDestination methods are OPTIONAL: calling super blindly can hit a class that does not
+// implement them, and an exception thrown mid-teardown leaves the system drag session alive — which
+// also blocks trackpad gestures (Mission Control) until the app is restarted.
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+    [self hideDropFeedback];
+    if ([NSOutlineView instancesRespondToSelector:@selector(draggingExited:)])
+        [super draggingExited:sender];
+}
+- (void)concludeDragOperation:(id<NSDraggingInfo>)sender {
+    [self hideDropFeedback];
+    if ([NSOutlineView instancesRespondToSelector:@selector(concludeDragOperation:)])
+        [super concludeDragOperation:sender];
+}
+
 - (NSMenu *)menuForEvent:(NSEvent *)e {
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
     NSInteger row = [self rowAtPoint:p];

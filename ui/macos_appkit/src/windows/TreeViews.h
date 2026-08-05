@@ -32,6 +32,13 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n);
 // Right-click -> controller shows its own retro overlay menu (no system NSMenu). windowPoint is the
 // click location in window coords (for positioning the overlay).
 @property(nonatomic, copy) void (^contextHandler)(NSInteger clickedRow, NSPoint windowPoint);
+// Platinum drop feedback (AppKit's blue Aqua line is turned off): an insertion bar between rows, or
+// a frame around the folder being dropped ONTO. Driven from validateDrop:.
+- (void)showDropInsertAtRow:(NSInteger)row level:(NSInteger)level;
+- (void)showDropOnRow:(NSInteger)row;
+- (void)hideDropFeedback;
+// Row under a point in the view's own coords, and whether the point sits in its lower half.
+- (NSInteger)dropRowAtPoint:(NSPoint)p belowMidline:(BOOL *)below;
 @end
 
 #pragma mark - TreeCellView (self-drawn retro folder/doc icon)

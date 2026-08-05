@@ -211,8 +211,10 @@ public:
   std::string duplicate(const std::string &r) const override { return s_.duplicate(r); }
   void remove(const std::string &r) const override { s_.remove(r); }
   std::string move(const std::string &r, const std::string &d) const override { return s_.move(r, d); }
+  std::string reorder(const std::string &r, const std::string &d, int i) const override {
+    return s_.reorder(r, d, i);
+  }
   std::string findRelPathById(const std::string &id) const override { return s_.findRelPathById(id); }
-  int migrateAddIdToFilenames() const override { return s_.migrateAddIdToFilenames(); }
 
 private:
   core::CollectionStore &s_;
@@ -270,7 +272,6 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
     c->ownAppConfig_->setDefaults(cfg.appDefaults);
     c->ownEnv_->attachAppConfig(c->ownAppConfig_.get()); // encrypt-at-rest key/exclude source
     c->ownCollection_->setRequestDefaults(cfg.defaultTimeoutMs, cfg.defaultVerifyTls); // new-request .env defaults
-    c->ownEnv_->migrateLegacySecrets(); // SPEC §T5 (Engine ctor did this)
     c->ownCollection_->ensureGitignore();
 
     c->collectionRepo_ = std::make_unique<CollectionRepository>(*c->ownCollection_);
@@ -303,10 +304,12 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
                              c->tokenProvider_.get()};
   c->orchestrator_ = std::make_unique<RequestOrchestrator>(
       deps,
-      [pool](std::function<void()> job) {
-        // submit() takes the task BY VALUE -> pass a copy so `job` stays valid for the inline fallback
-        // when the pool rejects it (full/stopped). Moving here would leave `job` empty -> bad_function_call.
-        if (!pool->submit(job)) job();
+      [pool, streamPool](std::function<void()> job) {
+        // submit() takes the task BY VALUE -> pass a copy so `job` stays valid for the next fallback when
+        // a pool rejects it (full/stopped). Moving here would leave `job` empty -> bad_function_call.
+        // Falling back to streamPool (a fresh thread) before inline matters: inline means the UI thread
+        // runs the send, and a hung send there freezes the Cancel button along with everything else.
+        if (!pool->submit(job) && !streamPool->submit(job)) job();
       },
       [streamPool](std::function<void()> job) {
         if (!streamPool->submit(job)) job();
@@ -346,13 +349,6 @@ void CoreApiClient::refreshVariableScope() {
 }
 
 bool CoreApiClient::hasUnreadableVars() const { return mergedVars()->undecryptable; }
-
-void CoreApiClient::reencryptEnvironments(const std::vector<std::string> &names) {
-  if (!envRepo_) return;
-  for (const auto &n : names) {
-    try { envRepo_->save(envRepo_->load(n)); } catch (...) {}   // load decrypts, save re-encrypts
-  }
-}
 
 std::string CoreApiClient::exportCurl(const core::domain::RequestModel &m) const {
   // Resolve {{var}} on the domain model against the active env, then render the cURL/grpcurl command.
@@ -567,6 +563,7 @@ CoreApiClient::send(const d::RequestModel &request, std::shared_ptr<d::IRequestO
   return orchestrator_->send(request, std::move(observer));
 }
 d::Status CoreApiClient::cancel(d::RequestExecutionId exec) { return orchestrator_->cancel(exec); }
+d::Status CoreApiClient::cancelAll() { return orchestrator_->cancelAll(); }
 d::Status CoreApiClient::sendStreamMessage(d::RequestExecutionId exec, d::WsMessage msg) {
   return orchestrator_->sendStreamMessage(exec, std::move(msg));
 }
@@ -603,9 +600,7 @@ d::Result<d::GqlSchema> CoreApiClient::introspectGraphQl(const d::RequestModel &
   if (const auto *oauth = d::oauth2Of(resolved)) {
     if (!tokenProvider_)
       return d::Result<d::GqlSchema>::fail({d::ErrorCode::Unsupported, "oauth2 not configured", ""});
-    struct NeverCancel final : d::ICancellationToken {
-      bool cancelled() const noexcept override { return false; }
-    } cancel;
+    d::NoCancel cancel;
     auto tok = tokenProvider_->bearerFor(*oauth, resolved.config().timeout, cancel);
     if (!tok.isOk())
       return d::Result<d::GqlSchema>::fail(

@@ -76,8 +76,9 @@ d::Status NativeGraphQlSender::runSubscription(const d::RequestModel &resolved, 
   auto session = core::wsMakeSession(cfg);
   auto channel = core::wsMakeChannel(session);
 
-  auto token = std::make_shared<core::CancelToken>();
-  if (cancel.cancelled()) token->cancel();
+  auto token = core::linkCancel(cancel);
+  // Cancel must also break a subscription still stuck in the WS handshake -> ask the session to close.
+  cancel.onCancel([session] { core::wsRequestClose(session, 1000, "cancelled"); });
   {
     std::lock_guard<std::mutex> lk(mu_);
     wsSession_ = session;
@@ -129,8 +130,8 @@ d::Status NativeGraphQlSender::runSubscription(const d::RequestModel &resolved, 
   return d::ok();
 }
 
+// Only the subscription needs routing here; an HTTP query/mutation is cancelled through its own token.
 d::Status NativeGraphQlSender::close(int code, std::string reason) {
-  http_.close(code, reason); // cancel an in-flight HTTP query/mutation
   std::lock_guard<std::mutex> lk(mu_);
   if (wsToken_) wsToken_->cancel();
   if (wsSession_) core::wsRequestClose(wsSession_, code ? code : 1000, reason);

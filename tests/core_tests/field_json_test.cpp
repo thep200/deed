@@ -56,12 +56,10 @@ int run_field_json_tests() {
     check(serial::authToJson(basic).find("\"basic\": {") == std::string::npos &&
               serial::authToJson(basic).find("\"username\"") != std::string::npos,
           "auth json is flat (no nested sub-object)");
-    // Legacy nested shape (pre-flatten saved files) still READS.
-    auto lb = serial::jsonToAuth(R"({"type":"basic","basic":{"username":"u","password":"p"}})");
-    check(lb.isOk() && lb.value() == basic, "legacy nested basic still parses");
-    // Removed "apikey" type: saved files degrade to none instead of failing to load.
-    auto lk = serial::jsonToAuth(R"({"type":"apikey","key":"k","value":"v","in":"query"})");
-    check(lk.isOk() && lk.value() == Auth::none(), "legacy apikey degrades to none");
+    // Only the flat shape is read — no per-type sub-object, no removed types.
+    check(!serial::jsonToAuth(R"({"type":"basic","basic":{"username":"u","password":"p"}})").isOk(),
+          "nested auth shape rejected");
+    check(!serial::jsonToAuth(R"({"type":"apikey","key":"k"})").isOk(), "unknown auth type rejected");
 
     // OAuth2: both grants round-trip; defaults fill; unknown enum strings rejected.
     AuthOAuth2 occ;

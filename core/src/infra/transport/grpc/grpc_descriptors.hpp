@@ -18,6 +18,7 @@
 #include "core/domain/grpc/grpc_method.hpp"  // domain GrpcMethodDescriptor / GrpcMethodType
 #include "core/domain/grpc/grpc_request.hpp" // domain GrpcRequest payload
 #include "core/domain/values/tls_config.hpp" // domain TlsConfig
+#include "infra/transport/shared/cancel_token.hpp"
 
 namespace core::grpcdesc {
 
@@ -48,6 +49,8 @@ struct DescriptorContext {
     const gp::DescriptorPool* activePool = nullptr;
     std::vector<std::string> serviceNames; // full name of every discovered service
     std::string error;
+    // Optional. Reflection blocks on the network; without this Cancel waits out the 30s stream deadline.
+    std::shared_ptr<core::CancelToken> cancel;
 };
 
 // Create channel credentials (insecure / TLS).

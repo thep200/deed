@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstring>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -15,6 +16,8 @@
 #include <curl/websockets.h>
 
 #include <nlohmann/json.hpp>
+
+#include "infra/transport/shared/socket_abort.hpp" // connect phase: no callback runs, shutdown() the fd
 
 #ifndef _WIN32
 #include <sys/select.h>
@@ -82,6 +85,9 @@ struct WsSession {
     std::string closeReason;
     std::atomic<bool> open{false};
     std::atomic<bool> done{false};
+    // Handshake escape hatch: while curl_easy_perform is still connecting nothing polls wantClose, so a
+    // close/cancel request shuts the socket down instead. Owned here so any thread can reach it.
+    std::shared_ptr<SocketAbort> sockets = std::make_shared<SocketAbort>();
 };
 
 namespace {
@@ -146,10 +152,15 @@ std::shared_ptr<IStreamChannel> wsMakeChannel(const std::shared_ptr<WsSession>& 
 
 void wsRequestClose(const std::shared_ptr<WsSession>& session, int code, const std::string& reason) {
     if (!session) return;
-    std::lock_guard<std::mutex> lk(session->mu);
-    session->wantClose = true;
-    session->closeCode = code;
-    session->closeReason = reason;
+    {
+        std::lock_guard<std::mutex> lk(session->mu);
+        session->wantClose = true;
+        session->closeCode = code;
+        session->closeReason = reason;
+    }
+    // Not open yet == still in the handshake, where the pump's checks don't run. Pull the socket down.
+    // Once open, leave it alone: the pump owes the peer a graceful CLOSE frame.
+    if (!session->open.load()) session->sockets->abort();
 }
 
 namespace {
@@ -430,15 +441,43 @@ struct curl_slist* buildWsHandshakeHeaders(const d::WebSocketRequest& w) {
     return hdrs;
 }
 
+// Abort state for a handshake still in curl_easy_perform. The pump's cancel checks only run AFTER the
+// handshake returns, so without this a peer that accepts TCP then never answers the upgrade parks the
+// thread and Cancel does nothing.
+struct HandshakeAbort {
+    WsSession* session = nullptr;
+    CancelToken* cancel = nullptr;
+    bool tripped() {
+        if (cancel && cancel->cancelled()) return true;
+        if (!session) return false;
+        std::lock_guard<std::mutex> lk(session->mu);
+        return session->wantClose;
+    }
+};
+
+// Non-zero -> curl_easy_perform returns CURLE_ABORTED_BY_CALLBACK.
+int handshakeAbortCb(void* p, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    auto* a = static_cast<HandshakeAbort*>(p);
+    return (a && a->tripped()) ? 1 : 0;
+}
+
 // Apply the WebSocket handshake options to the easy handle (CONNECT_ONLY=2 -> handshake then hand back).
-void configureWsHandshake(CURL* curl, const d::WebSocketRequest& w, const WsConfig& cfg, struct curl_slist* hdrs) {
+void configureWsHandshake(CURL* curl, const d::WebSocketRequest& w, const WsConfig& cfg,
+                          struct curl_slist* hdrs, HandshakeAbort* abort, SocketAbort* sockets) {
     curl_easy_setopt(curl, CURLOPT_URL, w.url().raw().c_str());
     curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
     if (hdrs) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)cfg.connectTimeoutMs);
+    // Bound the WHOLE handshake, not just the TCP/TLS connect: a peer that stalls after the connect used
+    // to hold the thread forever (CONNECT_ONLY=2 returns as soon as the upgrade completes anyway).
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)cfg.connectTimeoutMs);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, cfg.verifyTls ? 1L : 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, cfg.verifyTls ? 2L : 0L);
     curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);   // small frames not held by Nagle (perf §11)
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, handshakeAbortCb);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, abort);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    SocketAbort::install(curl, sockets);
 }
 
 // Emit the terminal StreamEnd and mark the session closed/done (§3 close contract).
@@ -484,11 +523,17 @@ std::optional<WsResult> wsHandshakeAndPump(
     struct curl_slist* hdrs = buildWsHandshakeHeaders(w);   // auth + custom + Sec-WebSocket-Protocol
     // L13: guard owns the list now (curl_easy_setopt only borrows the pointer).
     std::unique_ptr<struct curl_slist, decltype(slistDel)> hdrsGuard(hdrs, slistDel);
-    configureWsHandshake(curl, w, session->cfg, hdrs);
+    HandshakeAbort abort{session.get(), io.cancel};   // outlives curl_easy_perform below
+    configureWsHandshake(curl, w, session->cfg, hdrs, &abort, session->sockets.get());
+    if (abort.tripped()) session->sockets->abort();   // cancelled before we even got here
 
     CURLcode rc = curl_easy_perform(curl);                        // handshake
     long httpCode = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+    if (rc == CURLE_ABORTED_BY_CALLBACK) {   // Cancel/Disconnect landed mid-handshake
+        onFail(StreamStatus::Cancelled, (int)httpCode, "cancelled");
+        return std::nullopt;
+    }
     if (rc != CURLE_OK) {
         std::string msg = std::string("WebSocket handshake failed: ") + curl_easy_strerror(rc);
         if (httpCode) msg += " (HTTP " + std::to_string(httpCode) + ")";
@@ -617,7 +662,9 @@ d::Status WsSenderAdapter::execute(const d::RequestModel &resolved, d::IResponse
     std::lock_guard<std::mutex> lk(mu_);
     channel_ = channel;
   }
-  if (cancel.cancelled()) channel->close(1000, "cancelled"); // pre-flight cancel
+  // Cancel from any thread -> close request the pump AND a stuck handshake both honor. Fires right away
+  // when the caller is already cancelled, so this covers the pre-flight case too.
+  cancel.onCancel([session] { wsRequestClose(session, 1000, "cancelled"); });
 
   WsInboundTranslator translator;
   translator.sink = &sink;

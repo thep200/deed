@@ -30,22 +30,6 @@ json parseGuarded(const std::string& text, int maxDepth) {
     return json::parse(text);
 }
 
-namespace {
-
-// Read int by snake_case key, fall back to the old camelCase key (compat with old config.json).
-int getIntCompat(const json& j, const char* snake, const char* camel, int def) {
-    if (j.find(snake) != j.end()) return getInt(j, snake, def);
-    return getInt(j, camel, def);
-}
-std::string getStrCompat(const json& j, const char* snake, const char* camel,
-                         const std::string& def = "") {
-    if (j.find(snake) != j.end()) return getStr(j, snake);
-    if (j.find(camel) != j.end()) return getStr(j, camel);
-    return def;
-}
-
-} // namespace
-
 json toJson(const Environment& e) {
     json keys = json::array();
     for (const auto& k : e.keys) {
@@ -64,8 +48,7 @@ Environment envFromJson(const json& j) {
         for (const auto& k : *it) {
             EnvKey ek;
             ek.key = getStr(k, "key");
-            ek.value = getStr(k, "value");   // old env files may lack value if it was once a secret;
-                                             // migrateLegacySecrets() already merged the value back in earlier.
+            ek.value = getStr(k, "value");   // "enc:v1:..." when encrypted at rest (env_crypto)
             ek.enabled = getBool(k, "enabled", true);
             ek.secret = getBool(k, "secret", false);
             e.keys.push_back(ek);
@@ -81,24 +64,18 @@ json toJson(const AppConfig& c) {
                 {"font_size", c.fontSize},
                 {"ram_cache_size", c.ramCacheSizeMb},
                 {"disk_cache_size", c.diskCacheSizeMb},
-                {"encryption_key", c.encryptionKey},
-                {"encryption_exclude", c.encryptionExclude}};
+                {"encryption_key", c.encryptionKey}};
 }
 AppConfig appConfigFromJson(const json& j) { return appConfigFromJson(j, AppConfig{}); }
 
 AppConfig appConfigFromJson(const json& j, const AppConfig& def) {
     AppConfig c = def;   // missing key -> keep the default value (from .env)
-    c.lastCollectionRoot = getStrCompat(j, "last_collection_root", "lastCollectionRoot", def.lastCollectionRoot);
-    c.fontName = getStrCompat(j, "font_name", "fontName", def.fontName);
-    c.fontSize = getIntCompat(j, "font_size", "fontSize", def.fontSize);
-    c.ramCacheSizeMb = getIntCompat(j, "ram_cache_size", "ramCacheSizeMb", def.ramCacheSizeMb);
-    c.diskCacheSizeMb = getIntCompat(j, "disk_cache_size", "diskCacheSizeMb", def.diskCacheSizeMb);
-    c.encryptionKey = getStrCompat(j, "encryption_key", "encryptionKey", def.encryptionKey);
-    if (auto it = j.find("encryption_exclude"); it != j.end() && it->is_array()) {
-        c.encryptionExclude.clear();
-        for (const auto& v : *it)
-            if (v.is_string()) c.encryptionExclude.push_back(v.get<std::string>());
-    }
+    if (j.find("last_collection_root") != j.end()) c.lastCollectionRoot = getStr(j, "last_collection_root");
+    if (j.find("font_name") != j.end()) c.fontName = getStr(j, "font_name");
+    c.fontSize = getInt(j, "font_size", def.fontSize);
+    c.ramCacheSizeMb = getInt(j, "ram_cache_size", def.ramCacheSizeMb);
+    c.diskCacheSizeMb = getInt(j, "disk_cache_size", def.diskCacheSizeMb);
+    if (j.find("encryption_key") != j.end()) c.encryptionKey = getStr(j, "encryption_key");
     // cacheResponses/cachePersist no longer in user config -> keep the struct's default true.
     return c;
 }

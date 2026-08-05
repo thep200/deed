@@ -43,6 +43,7 @@ add_library(core STATIC
   src/infra/persistence/session_store.cpp
   src/infra/persistence/environment_store.cpp
   src/infra/persistence/env_crypto.cpp
+  src/infra/persistence/order_key.cpp
   src/infra/persistence/app_config_store.cpp
   src/infra/transport/grpc/grpc_descriptors.cpp
   src/infra/transport/ws/ws_sender.cpp

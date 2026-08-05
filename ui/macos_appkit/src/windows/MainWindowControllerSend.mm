@@ -95,13 +95,54 @@
     }
 }
 
+// Cancel outranks everything: it must stop the connection even when the request is wedged in a syscall,
+// the exec handle is stale, or core never reports a terminal event. Three stages, escalating:
+//   1. cancel(exec)  — trips the saga token; every sender's abort hook kills its live socket/call.
+//   2. cancelAll()   — no handle yet / wrong saga -> kill whatever is in flight.
+//   3. force-settle  — bump the guards so late events drop, then release the UI.
 - (void)cancelClicked:(id)sender {
-    if (!_sending || !_apiClient || _apiExec.empty()) return;
-    if ([self requestType] == core::RequestType::WebSocket) {
-        _apiClient->closeStream(_apiExec, 1000, "bye");        // WS disconnect
-        return;
+    if (!_sending || !_apiClient) return;
+    if (!_apiExec.empty()) {
+        // WS: graceful disconnect first (a clean close is the normal end of a session, not a failure).
+        if ([self requestType] == core::RequestType::WebSocket) _apiClient->closeStream(_apiExec, 1000, "bye");
+        _apiClient->cancel(_apiExec);
+        _cancelStage = 1;
+    } else {
+        _apiClient->cancelAll();   // send still registering -> no handle to aim at
+        _cancelStage = 2;
     }
-    _apiClient->cancel(_apiExec);                              // unary OR server-stream via IApiClient
+    [self armCancelWatchdog];
+}
+
+// Re-fires every 1.2s while the request refuses to settle, escalating one stage each time.
+- (void)armCancelWatchdog {
+    [_cancelWatchdog invalidate];
+    __weak MainWindowController *ws = self;
+    _cancelWatchdog = [NSTimer scheduledTimerWithTimeInterval:1.2 repeats:YES block:^(NSTimer *t) {
+        MainWindowController *s = ws;
+        if (!s) { [t invalidate]; return; }
+        if (!s->_sending) { [s stopCancelWatchdog]; return; }
+        if (s->_cancelStage < 2) {
+            s->_cancelStage = 2;
+            if (s->_apiClient) s->_apiClient->cancelAll();
+            return;
+        }
+        // Core is wedged below the cancel points. Cut the UI loose; the guards drop any late event.
+        [s stopCancelWatchdog];
+        s->_currentHandle = 0;
+        s->_streamToken++;
+        s->_streaming = NO;
+        [s finishSending];
+        [s displayErrorKind:core::domain::ErrorKind::Cancelled message:StrStatusCancelled
+                  elapsedMs:[s measuredElapsedMs]];
+        [s toastWarn:StrToastCancelForced];
+    }];
+}
+
+- (void)stopCancelWatchdog {
+    [_cancelWatchdog invalidate];
+    _cancelWatchdog = nil;
+    _cancelStage = 0;
 }
 
 // WebSocket action button (§6): connect if idle, else send the Message editor as a frame.
@@ -300,6 +341,7 @@
 
 - (void)finishSending {
     _sending = NO;
+    [self stopCancelWatchdog];
     _apiExec = core::domain::RequestExecutionId("");   // new-path send settled -> no stale cancel/push target
     _apiWsActive = NO;
     [self stopLiveTimer];   // freeze the live ticker; the final status line is set by the caller next

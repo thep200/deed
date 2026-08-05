@@ -35,6 +35,9 @@ public:
   send(const domain::RequestModel &request, std::shared_ptr<domain::IRequestObserver> observer);
 
   domain::Status cancel(domain::RequestExecutionId exec);
+  // Cancel EVERY live saga. Last-resort for the UI's Cancel button: it must never be a no-op just because
+  // the exec handle is stale/not stored yet (e.g. cancel pressed while send() is still registering).
+  domain::Status cancelAll();
   domain::Status sendStreamMessage(domain::RequestExecutionId exec, domain::WsMessage msg);
   domain::Status halfClose(domain::RequestExecutionId exec);
   domain::Status closeStream(domain::RequestExecutionId exec, int code, std::string reason);

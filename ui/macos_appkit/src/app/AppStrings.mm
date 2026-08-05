@@ -168,6 +168,7 @@ NSString *const StrToastRenamed = @"Renamed";
 NSString *const StrToastDuplicated = @"Duplicated";
 NSString *const StrToastInvalidSettings = @"Invalid settings JSON — skipped";
 NSString *const StrToastEncKeyInvalid = @"Encryption key invalid — encrypted values unreadable";
+NSString *const StrToastCancelForced = @"Cancelled — connection did not stop cleanly";
 NSString *const StrToastAutosaveFailed = @"Autosave failed: invalid JSON";
 NSString *const StrToastRequestGone = @"Request no longer exists";
 NSString *const StrToastEnterGrpcHost = @"Enter gRPC host first (e.g. localhost:50051)";

@@ -2,6 +2,7 @@
 
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "core/domain/http/http_request.hpp" // acceptsEventStream (SSE classifier)
 
@@ -83,6 +84,17 @@ RequestOrchestrator::send(const d::RequestModel &request,
 d::Status RequestOrchestrator::cancel(d::RequestExecutionId exec) {
   if (auto s = find(exec)) { s->cancel(); return d::ok(); }
   return d::Status::fail({d::ErrorCode::NotFound, "no such execution"});
+}
+
+d::Status RequestOrchestrator::cancelAll() {
+  std::vector<std::shared_ptr<SendRequestSaga>> live;
+  { // copy out first: cancel() reaches into transport state and must not run under our map lock
+    std::lock_guard<std::mutex> lk(mu_);
+    live.reserve(sagas_.size());
+    for (auto &kv : sagas_) live.push_back(kv.second);
+  }
+  for (auto &s : live) if (s) s->cancel();
+  return d::ok();
 }
 
 d::Status RequestOrchestrator::sendStreamMessage(d::RequestExecutionId exec, d::WsMessage msg) {

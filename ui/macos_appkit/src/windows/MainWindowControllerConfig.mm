@@ -53,33 +53,16 @@ static NSString *const kEnvNone = @"ENV";
     NSData *d = [_settingEditor.string dataUsingEncoding:NSUTF8StringEncoding];
     NSDictionary *dict = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
     if (!dict) { [self toastWarn:StrToastInvalidSettings]; return NO; }
-    core::AppConfig old = _apiClient->appConfig().load();
-    core::AppConfig c = old;
+    core::AppConfig c = _apiClient->appConfig().load();
     if (dict[@"font_name"]) c.fontName = [dict[@"font_name"] UTF8String];
     if (dict[@"font_size"]) c.fontSize = [dict[@"font_size"] intValue];
     if (dict[@"ram_cache_size"]) c.ramCacheSizeMb = [dict[@"ram_cache_size"] intValue];
     if (dict[@"disk_cache_size"]) c.diskCacheSizeMb = [dict[@"disk_cache_size"] intValue];
     if ([dict[@"encryption_key"] isKindOfClass:[NSString class]])
         c.encryptionKey = [dict[@"encryption_key"] UTF8String];
-    if ([dict[@"encryption_exclude"] isKindOfClass:[NSArray class]]) {
-        c.encryptionExclude.clear();
-        for (id v in dict[@"encryption_exclude"])
-            if ([v isKindOfClass:[NSString class]]) c.encryptionExclude.push_back([v UTF8String]);
-    }
     _apiClient->appConfig().save(c);
     _apiClient->cache().reloadCacheConfig();   // apply new cap/threshold -> evict if smaller (§1.2)
-    // exclude delta -> re-save ONLY the added (de-enc) / removed (enc) envs. Key change alone touches
-    // nothing; user toggles Enc per alias to migrate old values.
-    std::vector<std::string> delta;
-    for (const auto &n : c.encryptionExclude)
-        if (std::find(old.encryptionExclude.begin(), old.encryptionExclude.end(), n) ==
-            old.encryptionExclude.end())
-            delta.push_back(n);
-    for (const auto &n : old.encryptionExclude)
-        if (std::find(c.encryptionExclude.begin(), c.encryptionExclude.end(), n) ==
-            c.encryptionExclude.end())
-            delta.push_back(n);
-    if (!delta.empty()) _apiClient->reencryptEnvironments(delta);
+    // Key change alone re-encrypts nothing: the user re-toggles Enc per alias under the new key.
     [self applyConfiguredFontAndRefresh];
     return YES;
 }
@@ -109,16 +92,13 @@ static NSString *const kEnvNone = @"ENV";
         if (_envVC.view) _envVC.view.hidden = YES;
         _settingInset.hidden = NO;
         core::AppConfig c = _apiClient->appConfig().load();
-        NSMutableString *excl = [NSMutableString string];
-        for (size_t i = 0; i < c.encryptionExclude.size(); ++i)
-            [excl appendFormat:@"%s\"%s\"", i ? ", " : "", c.encryptionExclude[i].c_str()];
         _settingEditor.string = [NSString stringWithFormat:
             @"{\n  \"font_name\": \"%s\",\n  \"font_size\": %d,\n"
              "  \"ram_cache_size\": %d,\n  \"disk_cache_size\": %d,\n"
-             "  \"encryption_key\": \"%s\",\n  \"encryption_exclude\": [%@]\n}",
+             "  \"encryption_key\": \"%s\"\n}",
             c.fontName.c_str(), c.fontSize,
             c.ramCacheSizeMb, c.diskCacheSizeMb,
-            c.encryptionKey.c_str(), excl];
+            c.encryptionKey.c_str()];
     }
     _configMode = YES;
     _mainPane.hidden = YES;

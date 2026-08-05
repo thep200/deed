@@ -31,8 +31,10 @@ template <class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 // Single-threaded use within one send/list pass (a fresh instance per pass).
 class ReflectionDescriptorDatabase : public gp::DescriptorDatabase {
 public:
-    explicit ReflectionDescriptorDatabase(std::shared_ptr<grpc::Channel> channel)
-        : channel_(std::move(channel)), stub_(refl::ServerReflection::NewStub(channel_)) {}
+    ReflectionDescriptorDatabase(std::shared_ptr<grpc::Channel> channel,
+                                 std::shared_ptr<core::CancelToken> cancel)
+        : channel_(std::move(channel)), stub_(refl::ServerReflection::NewStub(channel_)),
+          cancel_(std::move(cancel)) {}
 
     ~ReflectionDescriptorDatabase() override {
         if (stream_) {
@@ -95,9 +97,15 @@ private:
 
     Stream* stream() {
         if (!stream_) {
-            ctx_ = std::make_unique<grpc::ClientContext>();
+            ctx_ = std::make_shared<grpc::ClientContext>();
             // Cap total reflection time (H7) so a silent/hung server can't block the call indefinitely.
             ctx_->set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
+            // Cancel must not wait out that deadline: kill the reflection RPC the moment the user asks.
+            // weak_ptr -> a late cancel after this db died is a no-op, not a dangling TryCancel.
+            if (cancel_)
+                cancel_->onCancel([w = std::weak_ptr<grpc::ClientContext>(ctx_)] {
+                    if (auto c = w.lock()) c->TryCancel();
+                });
             stream_ = stub_->ServerReflectionInfo(ctx_.get());
         }
         return stream_.get();
@@ -123,7 +131,8 @@ private:
 
     std::shared_ptr<grpc::Channel> channel_;
     std::unique_ptr<refl::ServerReflection::Stub> stub_;
-    std::unique_ptr<grpc::ClientContext> ctx_;
+    std::shared_ptr<core::CancelToken> cancel_;
+    std::shared_ptr<grpc::ClientContext> ctx_;
     std::shared_ptr<Stream> stream_;
     gp::SimpleDescriptorDatabase cached_;
     std::unordered_set<std::string> known_files_;
@@ -190,7 +199,7 @@ bool buildFromReflection(const std::string& target, const d::TlsConfig& tls, Des
         return false;
     }
     ctx.channel = grpc::CreateChannel(target, makeCreds(tls));
-    auto db = std::make_unique<ReflectionDescriptorDatabase>(ctx.channel);
+    auto db = std::make_unique<ReflectionDescriptorDatabase>(ctx.channel, ctx.cancel);
     if (!db->getServices(&ctx.serviceNames)) {
         ctx.error = db->lastError().empty() ? "reflection: ListServices failed" : db->lastError();
         return false;

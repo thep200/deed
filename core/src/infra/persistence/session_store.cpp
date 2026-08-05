@@ -35,9 +35,7 @@ Session SessionStore::load() const {
     std::string txt;
     if (!fsutil::readFile(sessionPath(root_), txt)) return Session{};
     try {
-        Session s = codec::sessionFromJson(codec::parseGuarded(txt));
-        if (s.activeEnv == kGlobalEnvName) s.activeEnv.clear(); // stale pre-Global session
-        return s;
+        return codec::sessionFromJson(codec::parseGuarded(txt));
     } catch (...) {
         return Session{}; // corrupt file -> start clean
     }

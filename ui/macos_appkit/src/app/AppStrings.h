@@ -186,6 +186,7 @@ extern NSString *const StrToastRenamed;
 extern NSString *const StrToastDuplicated;
 extern NSString *const StrToastInvalidSettings;
 extern NSString *const StrToastEncKeyInvalid;   // env value stayed ciphertext -> wrong/missing key
+extern NSString *const StrToastCancelForced;    // core never settled after Cancel -> UI released anyway
 extern NSString *const StrToastAutosaveFailed;
 extern NSString *const StrToastRequestGone;
 extern NSString *const StrToastEnterGrpcHost;

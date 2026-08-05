@@ -8,14 +8,8 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
-#include <mutex>
 
 #include "core/domain/ports/driven/i_request_sender.hpp"
-
-namespace core {
-class CancelToken;
-}
 
 namespace core::infra {
 
@@ -33,16 +27,14 @@ public:
 
   bool supports(domain::RequestType t) const override { return t == domain::RequestType::Grpc; }
 
+  // Mid-flight cancel rides the CALLER's token (core::linkCancel): reflection ctx TryCancel + the CQ pump.
+  // No member token slot / close() override — this instance is shared by every concurrent gRPC send, so a
+  // slot would cancel whichever call started last.
   domain::Status execute(const domain::RequestModel &resolved, domain::IResponseSink &sink,
                          const domain::ICancellationToken &cancel) override;
-  // Mid-flight cancel: saga.cancel()/closeStream() calls this from another thread -> cancel the in-flight
-  // token so the blocking unary/stream stops (gRPC TryCancel via the CQ pump).
-  domain::Status close(int code, std::string reason) override;
 
 private:
-  GrpcStreamLimits limits_;                  // stream ceilings (.env via composition root; default above)
-  std::mutex mu_;
-  std::shared_ptr<core::CancelToken> token_; // active call's cancel token (one in-flight per sender)
+  GrpcStreamLimits limits_; // stream ceilings (.env via composition root; default above)
 };
 
 } // namespace core::infra

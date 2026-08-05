@@ -27,6 +27,9 @@ public:
                                           std::shared_ptr<IRequestObserver> observer) = 0;
 
   virtual Status cancel(RequestExecutionId exec) = 0;
+  // Kill every in-flight execution. The Cancel button's escalation step — it must stop a hung connection
+  // even when the caller's exec handle is stale or not stored yet.
+  virtual Status cancelAll() = 0;
 
   // Interactive streaming / WS (Unsupported if the type doesn't allow it).
   virtual Status sendStreamMessage(RequestExecutionId exec, WsMessage msg) = 0;

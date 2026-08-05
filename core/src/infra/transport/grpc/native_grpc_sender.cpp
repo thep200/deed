@@ -490,15 +490,18 @@ d::Status NativeGrpcSender::execute(const d::RequestModel &resolved, d::IRespons
   const d::GrpcRequest &g = std::get<d::GrpcRequest>(resolved.payload());
   const int deadlineMs = static_cast<int>(resolved.config().timeout.millis());
 
-  auto token = std::make_shared<CancelToken>();
-  if (cancel.cancelled()) token->cancel();
-  { std::lock_guard<std::mutex> lk(mu_); token_ = token; }
+  auto token = core::linkCancel(cancel);
 
   // Resolve the method, then route by the DESCRIPTOR's streaming flags (authoritative — fixes bidi, which
   // the legacy string-based isStreaming() mis-routed to the unary send path).
   DescriptorContext ctx;
+  ctx.cancel = token; // reflection is a network call too -> Cancel must abort it, not wait out its 30s deadline
   std::string err;
   const gp::MethodDescriptor *mth = resolveMethod(g, ctx, err);
+  if (token->cancelled()) {
+    emitFailed(sink, d::ErrorKind::Cancelled, "Cancelled");
+    return d::ok();
+  }
   if (mth) {
     const bool srv = mth->server_streaming();
     const bool cli = mth->client_streaming();
@@ -507,14 +510,6 @@ d::Status NativeGrpcSender::execute(const d::RequestModel &resolved, d::IRespons
   } else {
     emitFailed(sink, d::ErrorKind::Parse, err);
   }
-
-  { std::lock_guard<std::mutex> lk(mu_); token_.reset(); }
-  return d::ok();
-}
-
-d::Status NativeGrpcSender::close(int, std::string) {
-  std::lock_guard<std::mutex> lk(mu_);
-  if (token_) token_->cancel();
   return d::ok();
 }
 

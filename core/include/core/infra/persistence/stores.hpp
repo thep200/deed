@@ -72,12 +72,12 @@ public:
     // Move a request/folder into the destination folder (drag-drop). Returns new relPath.
     std::string move(const std::string& relPath, const std::string& destFolderRel) const;
 
+    // Place an entry inside destFolderRel at `index` of that level's sorted children. Renames
+    // exactly ONE entry (fractional index) — siblings keep their keys. Returns the new relPath.
+    std::string reorder(const std::string& relPath, const std::string& destFolderRel, int index) const;
+
     // Find a request's relPath by stable id (id preferably read from filename). Empty if not found.
     std::string findRelPathById(const std::string& id) const;
-
-    // One-time migrate: prepend <id> to the filename for OLD files lacking an id (git mv).
-    // Files that already have an id -> skipped WITHOUT reading content. Returns count renamed. §2A.
-    int migrateAddIdToFilenames() const;
 
     // Ensure .gitignore has entries for .session/ and .secrets/ (app-managed — README §6.3).
     void ensureGitignore() const;
@@ -87,16 +87,15 @@ private:
     long long defaultTimeoutMs_ = kNewRequestTimeoutMsDefault; // new-request default timeout (.env DEFAULT_TIMEOUT_MS)
     bool defaultVerifyTls_ = kNewRequestVerifyTlsDefault;      // new-request default TLS verify (.env VERIFY_TLS)
 
-    // id->relPath index built LAZILY from filenames (zero-read after migrate) -> findRelPathById O(1)
-    // instead of scanning the WHOLE tree each call (resyncCurrentRelById runs before every save/switch).
-    // Invalidated on mutation (create/rename/move/duplicate/remove/save/migrate/setRoot); lookup
+    // id->relPath index built LAZILY from filenames (zero-read) -> findRelPathById O(1) instead of
+    // scanning the WHOLE tree each call (resyncCurrentRelById runs before every save/switch).
+    // Invalidated on mutation (create/rename/move/duplicate/remove/save/reorder/setRoot); lookup
     // also verifies the file still exists -> rebuilds itself if stale (safe against out-of-app changes).
     mutable std::mutex idMu_;
     mutable std::unordered_map<std::string, std::string> idIndex_;
     mutable bool idIndexBuilt_ = false;
     void buildIdIndexLocked() const;     // rebuild idIndex_ (call WHILE holding idMu_)
     void invalidateIdIndex() const;      // mark for rebuild (after mutation)
-    bool migrateOneFile(const std::string& relPath) const;  // rename one legacy file to embed its id
 };
 
 // SessionStore — app-state (.session/session.json), NOT git-versioned.
@@ -142,7 +141,7 @@ class EnvironmentStore {
 public:
     explicit EnvironmentStore(std::string root);
     void setRoot(std::string root);
-    // Source of encryption_key/encryption_exclude; null = plaintext (tests/legacy).
+    // Source of encryption_key; null = plaintext (tests/legacy).
     void attachAppConfig(const AppConfigStore* cfg) { appCfg_ = cfg; }
     // True if a loaded value is still ciphertext -> the configured key can't read it (UI warns).
     static bool isEncryptedValue(const std::string& value);
@@ -152,11 +151,6 @@ public:
     void save(const Environment&);                   // atomic
     void remove(const std::string& name);
     // (env/alias rename = UI view-model save-new + delete-old)
-
-    // One-time migration (SPEC §T5): fold values from .secrets/secrets.json (old
-    // {env:{key:value}} format) back into the env file as normal vars, then delete .secrets/.
-    // No-op if .secrets/ doesn't exist (already migrated or never had secrets).
-    void migrateLegacySecrets();
 
     // Bumps on every env change. mergedVars caches on (activeEnv, epoch) -> no disk read per send.
     std::uint64_t epoch() const { return epoch_.load(std::memory_order_relaxed); }

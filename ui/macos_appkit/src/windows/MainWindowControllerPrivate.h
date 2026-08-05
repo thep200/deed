@@ -188,6 +188,8 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     SciTextView *_settingEditor;   // JSON editor for Settings (Scintilla — JSON lexer + Platinum theme)
 
     BOOL _sending;
+    NSTimer *_cancelWatchdog;   // Cancel escalation: cancelAll, then force-settle a core that never answers
+    NSInteger _cancelStage;     // 0 = idle, 1 = cancel sent, 2 = cancelAll sent
     NSTimer *_spinTimer;   // animate loading icon in the Send button
     CGFloat _spinPhase;
     NSTimer *_liveTimer;          // live status ticker while a request is in flight (elapsed + size)
@@ -324,6 +326,8 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)streamViaApiClient;   // route server-stream (gRPC/SSE) through IApiClient
 - (void)wsViaApiClient;       // route WebSocket connect/send-frame through IApiClient
 - (void)cancelClicked:(id)sender;
+- (void)armCancelWatchdog;    // escalate + force-settle so Cancel is never a no-op
+- (void)stopCancelWatchdog;
 - (void)onCoreResponse:(uint64_t)handle response:(const core::domain::ApiResponse &)resp;
 - (void)onCoreError:(uint64_t)handle error:(const core::domain::ApiError &)err;
 - (void)onStreamOpenTransport:(int)transport;

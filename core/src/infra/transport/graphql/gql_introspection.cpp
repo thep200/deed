@@ -290,9 +290,7 @@ d::Result<d::GqlSchema> runIntrospection(const d::RequestModel &resolved) {
       else if (const auto *f = ev.get<d::EvFailed>()) err = f->error;
     }
   } sink;
-  struct NeverCancel final : d::ICancellationToken {
-    bool cancelled() const noexcept override { return false; }
-  } cancel;
+  d::NoCancel cancel;
 
   infra::NativeHttpSender http;
   d::Status st = http.execute(buildHttpModel(model.take()), sink, cancel);

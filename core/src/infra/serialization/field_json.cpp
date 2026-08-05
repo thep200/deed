@@ -141,20 +141,9 @@ d::Result<d::Auth> jsonToAuth(const std::string &text) {
     auto j = parseGuarded(text, "{\"type\":\"none\"}");
     if (!j.is_object()) return parseErr<d::Auth>("auth must be a JSON object");
     std::string type = gs(j, "type", "none");
-    // Saved request files predating the flat shape nest the fields under a sub-object named after the
-    // type ({"type":"basic","basic":{...}}); read that when present, else the flat top level.
-    auto fields = [&](const char *legacyKey) -> json {
-      return j.contains(legacyKey) && j[legacyKey].is_object() ? j[legacyKey] : j;
-    };
     if (type == "none") return d::Result<d::Auth>::ok(d::Auth::none());
-    if (type == "basic") {
-      json b = fields("basic");
-      return d::Auth::basic(gs(b, "username"), gs(b, "password"));
-    }
-    if (type == "bearer") {
-      json b = fields("bearer");
-      return d::Auth::bearer(gs(b, "token"));
-    }
+    if (type == "basic") return d::Auth::basic(gs(j, "username"), gs(j, "password"));
+    if (type == "bearer") return d::Auth::bearer(gs(j, "token"));
     if (type == "oauth2") {
       d::AuthOAuth2 o;
       std::string grant = gs(j, "grant", "client_credentials");
@@ -173,9 +162,6 @@ d::Result<d::Auth> jsonToAuth(const std::string &text) {
       o.password = gs(j, "password");
       return d::Auth::oauth2(std::move(o));
     }
-    // "apikey" was removed as a type: a custom key/value IS just a header (or query param), so it lives in
-    // the Headers/Query tab now. Saved files that still carry it degrade to none instead of failing to load.
-    if (type == "apikey") return d::Result<d::Auth>::ok(d::Auth::none());
     return parseErr<d::Auth>("unknown auth.type: " + type);
   } catch (const std::exception &e) {
     return parseErr<d::Auth>(e.what());
@@ -226,7 +212,7 @@ d::Result<d::Body> jsonToBody(const std::string &text) {
     if (mode == w::kBodyXml) return d::Result<d::Body>::ok(d::Body::raw(d::RawSubtype::Xml, gs(j, w::kBodyXml)));
     if (mode == w::kBodyForm)
       return d::Result<d::Body>::ok(d::Body::formUrlEncoded(formFieldsFrom(j)));
-    if (mode == w::kBodyMultipart || mode == w::kBodyFormData)
+    if (mode == w::kBodyMultipart)
       return d::Body::multipart(multipartPartsFrom(j));
     if (mode == w::kBodyBinary) {
       std::string fp;
@@ -362,7 +348,7 @@ std::string kafkaRecordToDisplayJson(const d::KafkaRecord &r) {
 
 // ---- Kafka editor tabs (SPEC_kafka §2/§4) ----
 namespace {
-// Schema Registry block ({url, username, password}); absent/empty url = not configured (old files OK).
+// Schema Registry block ({url, username, password}); absent/empty url = not configured.
 json schemaRegistryToJson(const d::SchemaRegistryRef &r) {
   return json{{"url", r.url}, {"username", r.username}, {"password", r.password}};
 }
@@ -439,8 +425,8 @@ d::Result<d::KafkaMessage> jsonToKafkaMessage(const std::string &text) {
     std::string key = gs(j, "key");
     if (!key.empty()) m.key = d::MessageKey{key};
     if (auto it = j.find("value"); it != j.end()) {
-      // A real JSON value (object/array/number/bool/null) -> re-serialize to the text actually sent to
-      // Kafka. A JSON string -> use its content directly (back-compat with the old string-encoded form).
+      // Real JSON -> re-serialize to the text sent to Kafka. Plain string -> use as-is (draft
+      // mid-edit; the writer stores unparseable drafts verbatim).
       m.value.value = it->is_string() ? it->get<std::string>() : it->dump(2);
     }
     m.headers = kafkaKvFromJson<d::KafkaHeader>(j.value("headers", json::array()));
@@ -482,7 +468,7 @@ d::Result<d::KafkaProduceConfig> jsonToKafkaProduceConfig(const std::string &tex
     c.clientId = gs(j, "clientId", "deed");
     c.valueFormat = gs(j, "valueFormat", "json") == "avro" ? d::KafkaValueFormat::Avro
                                                            : d::KafkaValueFormat::Json;
-    c.schemaRegistry = schemaRegistryFromJson(j); // lenient: absent -> not configured (old files)
+    c.schemaRegistry = schemaRegistryFromJson(j); // absent -> not configured
     c.extra = kafkaKvFromJson<d::KafkaExtra>(j.value("extra", json::array()));
     return d::Result<d::KafkaProduceConfig>::ok(std::move(c));
   } catch (const std::exception &e) {

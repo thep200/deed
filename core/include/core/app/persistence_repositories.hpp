@@ -64,8 +64,10 @@ public:
   virtual std::string duplicate(const std::string &relPath) const = 0;
   virtual void remove(const std::string &relPath) const = 0;
   virtual std::string move(const std::string &relPath, const std::string &destFolderRel) const = 0;
+  // Drop at a precise slot: renames ONE entry (fractional order key), siblings untouched.
+  virtual std::string reorder(const std::string &relPath, const std::string &destFolderRel,
+                              int index) const = 0;
   virtual std::string findRelPathById(const std::string &id) const = 0;
-  virtual int migrateAddIdToFilenames() const = 0;
 };
 
 // ---- Environments ----
