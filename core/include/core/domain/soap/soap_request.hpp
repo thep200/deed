@@ -1,6 +1,3 @@
-// core/domain/soap/soap_request.hpp — SOAP aggregate payload (SPEC_soap §3).
-// SOAP adds NO transport: the sender packages this into an HTTP POST (envelope = the body, verbatim).
-// The domain never parses XML — the envelope is opaque text the user edits in full (SPEC_soap §1).
 #pragma once
 
 #include <string>
@@ -13,7 +10,6 @@
 
 namespace core::domain {
 
-// Protocol dialect — decides the Content-Type and where the action rides (SPEC_soap §4):
 // 1.1 = text/xml + a mandatory SOAPAction header; 1.2 = application/soap+xml with an action param.
 enum class SoapVersion { V1_1, V1_2 };
 

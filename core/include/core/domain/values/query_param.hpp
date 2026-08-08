@@ -1,4 +1,3 @@
-// core/domain/values/query_param.hpp — QueryParam value object + QueryParamList (REFACTOR_SPEC §5.1).
 #pragma once
 
 #include <string>

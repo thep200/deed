@@ -1,6 +1,3 @@
-// core/domain/ports/driven/i_request_sender.hpp — driven port: one impl per transport (REFACTOR_SPEC §6.3).
-// The sender receives the DOMAIN RequestModel and emits ResponseEvents through the sink; it NEVER sees JSON
-// (it translates to cpr/grpc/ws internally). Interactive streaming uses push/halfClose/close.
 #pragma once
 
 #include <string>
@@ -19,8 +16,7 @@ public:
 
   virtual bool supports(RequestType) const = 0;
 
-  // Execute a resolved request. Emits events via `sink`; returns when setup is established (unary: after
-  // the terminal event has been emitted). Must honor `cancel` cooperatively.
+  // Emits events via `sink`; returns once setup is established (unary: after the terminal event). Must honor `cancel`.
   virtual Status execute(const RequestModel &resolved, IResponseSink &sink,
                          const ICancellationToken &cancel) = 0;
 

@@ -1,8 +1,3 @@
-// core/app/core_api_client.hpp — production IApiClient assembled at the composition root (REFACTOR_SPEC §2/§7.3).
-// Owns the real senders + infra adapters + orchestrator and forwards the IApiClient surface to the
-// orchestrator. The HEADER stays pure (domain ports + app orchestrator only); the concrete infra types
-// (cpr/grpc senders, clock, json validator) are constructed in composition_root.cpp — the one place that
-// knows them.
 #pragma once
 
 #include <cstdint>
@@ -14,8 +9,8 @@
 #include <utility>
 #include <vector>
 
-#include "core/app/persistence_repositories.hpp" // env/session/app-config repository ports
-#include "core/domain/response/interaction.hpp"      // InteractionKind (send routing classification)
+#include "core/app/persistence_repositories.hpp"
+#include "core/domain/response/interaction.hpp"
 #include "core/app/request_orchestrator.hpp"
 #include "core/domain/ports/driving/i_api_client.hpp"
 #include "core/domain/ports/driven/i_clock.hpp"
@@ -38,13 +33,11 @@ namespace core::app {
 
 class CoreApiClient final : public domain::IApiClient {
 public:
-  // Self-sufficient configuration (REFACTOR_SPEC §2): CoreApiClient owns its own stores + response cache,
-  // no Engine. `collectionRoot` empty -> a send-only client (no persistence repos / cache). The cache/.env
-  // tunables are raw ints (0 -> default) so this public header stays free of the internal cache/ws structs.
+  // Tunables are raw ints (0 -> default) so this public header stays free of the internal cache/ws structs.
   struct Config {
     std::string collectionRoot;   // collection dir; empty -> send-only
     std::string appConfigPath;    // empty -> OS app-support default
-    core::AppConfig appDefaults;  // app-config defaults from .env (env_config.hpp)
+    core::AppConfig appDefaults;  // app-config defaults from .env
     // New-request defaults from .env (Core never reads .env itself; 0 -> Core built-in 30-min timeout):
     long long defaultTimeoutMs = 0; // DEFAULT_TIMEOUT_MS
     bool defaultVerifyTls = true;   // VERIFY_TLS
@@ -58,8 +51,6 @@ public:
     int streamMaxBytesMb = 0;      // STREAM_MAX_BYTES_MB
   };
 
-  // Composition root: build the full self-owned stack (senders + clock + validator + orchestrator + the
-  // stores/cache when `collectionRoot` is set). No Engine.
   static std::unique_ptr<CoreApiClient> create(Config cfg);
   // Send-only client (no stores/cache) — for the CLI / e2e that only send.
   static std::unique_ptr<CoreApiClient> create();
@@ -77,32 +68,25 @@ public:
   listGrpcMethods(const domain::GrpcRequest &) override;
   domain::Result<domain::GqlSchema> introspectGraphQl(const domain::RequestModel &) override;
 
-  // Set the {{var}} bindings used to resolve requests before sending.
   void setVariableScope(domain::VariableScope scope);
-  // Pull merged vars (Global <- active env) into the send scope. UI calls before each send. Cached.
+  // Pull merged vars (Global <- active env) into the send scope; cached.
   void refreshVariableScope();
   // True if a var in the send scope is still ciphertext -> the configured encryption key can't read it.
   bool hasUnreadableVars() const;
 
-  // Request-services facade (variable resolution + RPC classification), domain-typed.
-  // exportCurl resolves env + per-request config then renders a cURL/grpcurl command (legacy toCurl kept
-  // inside the composition root); aliasifyModel rewrites literals back to {{alias}}; interactionOf classifies
-  // unary vs server-stream/bidi/duplex.
+  // aliasifyModel rewrites literals back to {{alias}}; interactionOf classifies unary vs server-stream/bidi/duplex.
   std::string exportCurl(const core::domain::RequestModel &) const;
   core::domain::RequestModel aliasifyModel(const core::domain::RequestModel &) const;
   core::InteractionKind interactionOf(const core::domain::RequestModel &) const;
-  // Resolve {{var}} in an arbitrary template against the active env (CLI preview helper).
+  // Resolve {{var}} in an arbitrary template against the active env.
   std::string resolvePreview(const std::string &tpl) const;
 
-  // Import use-cases (REFACTOR_SPEC §6.1 non-send use-cases). Classify pasted text, then parse it into a
-  // domain request. Pure (no network) — always available regardless of the WS/reflection Engine.
+  // Pure (no network): classify pasted text, then parse it into a domain request.
   std::optional<domain::ImportKind> detectImport(const std::string &text) const;
   domain::Result<domain::ImportOutcome> importText(const std::string &text,
                                                    domain::ImportKind kind) const;
 
-  // Persistence repositories (REFACTOR_SPEC §6.3/§8.3). Valid only when created with an Engine (the GUI
-  // path); they wrap that Engine's stores and return the clean POD config types (env_config.hpp) — the
-  // collection repo returns the legacy TreeNode/RequestModel the UI tree consumes (transitional).
+  // Valid only when created with a collection root; send-only clients have none.
   ICollectionRepository &collection() const;
   IEnvironmentRepository &environments() const;
   ISessionRepository &session() const;
@@ -112,23 +96,21 @@ public:
 private:
   CoreApiClient() = default;
 
-  // Owned stores (when created with a Config). Declared FIRST -> destroyed LAST, after the repos that
-  // reference them. Held by unique_ptr so the header only forward-declares the concrete store classes.
+  // Owned stores: declared FIRST -> destroyed LAST, after the repos that reference them.
   std::unique_ptr<core::CollectionStore> ownCollection_;
   std::unique_ptr<core::EnvironmentStore> ownEnv_;
   std::unique_ptr<core::SessionStore> ownSession_;
   std::unique_ptr<core::AppConfigStore> ownAppConfig_;
 
-  // Declaration order matters: orchestrator_ is declared LAST so it is destroyed FIRST (it may reference
-  // the senders/clock/validator while sagas finish).
+  // Order matters: orchestrator_ is declared LAST so it is destroyed FIRST (may reference senders/clock/validator while sagas finish).
   std::vector<std::unique_ptr<domain::IRequestSender>> senders_;
   std::unique_ptr<domain::IClock> clock_;
   std::unique_ptr<domain::IJsonValidator> validator_;
   std::unique_ptr<domain::ITokenProvider> tokenProvider_; // OAuth2 (may be referenced by running sagas)
   std::unique_ptr<domain::IVariableResolver> resolver_;
   std::unique_ptr<domain::IImportService> importer_; // pasted-command import (curl/grpcurl/graphql)
-  std::unique_ptr<ICollectionRepository> collectionRepo_; // collection/env/session/app-config/cache repos
-  std::unique_ptr<IEnvironmentRepository> envRepo_;        // over the Engine stores/cache
+  std::unique_ptr<ICollectionRepository> collectionRepo_;
+  std::unique_ptr<IEnvironmentRepository> envRepo_;
   std::unique_ptr<ISessionRepository> sessionRepo_;
   std::unique_ptr<IAppConfigRepository> appConfigRepo_;
   std::unique_ptr<IResponseCacheRepository> cacheRepo_;
@@ -145,12 +127,8 @@ private:
   mutable std::mutex varsMu_;
   mutable std::shared_ptr<const VarsSnapshot> varsCache_;
   std::unique_ptr<RequestOrchestrator> orchestrator_;
-  // Declared LAST -> destroyed FIRST: joins/drains in-flight send tasks (which reference the
-  // orchestrator/senders above) before those are torn down. Two pools (tech-debt fix, §Step1 bottleneck):
-  // `pool_` = small bounded pool for unary sends; `streamPool_` = one dedicated thread per long-lived
-  // streaming session (WS/gRPC-stream/Kafka-consumer), so an indefinite stream never blocks queued unary
-  // sends behind it. Relative order between the two doesn't matter (neither depends on the other), only
-  // that both destroy before senders_/orchestrator_ above.
+  // Declared LAST -> destroyed FIRST: joins in-flight send tasks before orchestrator_/senders_ are torn down.
+  // pool_ = bounded pool for unary sends; streamPool_ = one thread per long-lived stream so an indefinite stream never blocks unary sends.
   std::unique_ptr<core::ThreadPool> pool_;
   std::unique_ptr<core::StreamPool> streamPool_;
 };

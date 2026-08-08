@@ -1,8 +1,6 @@
-// infra/transport/shared/socket_abort.hpp — abort a libcurl transfer that is still CONNECTING.
-// libcurl runs NO callback until bytes flow (verified: zero xferinfo calls against a blackholed peer), so
-// a progress-callback abort cannot touch a connect parked on a dead SYN — the thread sits there until the
-// request timeout. That is exactly what made Cancel look dead on a hung request. Own socket open/close and
-// Cancel can shutdown() the fd instead: the blocked connect returns immediately.
+// Aborts a libcurl transfer that is still CONNECTING: libcurl runs no callback until bytes flow, so a
+// progress-callback abort can't touch a connect parked on a dead SYN. Owning socket open/close lets
+// Cancel shutdown() the fd — the blocked connect returns immediately.
 #pragma once
 
 #include <algorithm>

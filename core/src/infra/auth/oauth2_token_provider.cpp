@@ -1,5 +1,3 @@
-// oauth2_token_provider.cpp — token POST via a local NativeHttpSender (gql_introspection precedent),
-// RAM cache with expiry skew + refresh-grant fallback.
 #include "infra/auth/oauth2_token_provider.hpp"
 
 #include <cctype>
@@ -154,8 +152,7 @@ d::Result<std::string> OAuth2TokenProvider::bearerFor(const d::AuthOAuth2 &oauth
   auto it = cache_.find(key);
   if (it != cache_.end() && now < it->second.expiry) return d::Result<std::string>::ok(it->second.token);
 
-  // Expired (or never fetched): try the refresh grant first when we hold a refresh token, then fall
-  // back to the configured grant. Both failing -> report the LAST (full-grant) error.
+  // Refresh grant first when we hold a refresh token, else configured grant; both failing -> full-grant error wins.
   std::string refreshToken = it != cache_.end() ? it->second.refreshToken : std::string();
   d::Result<TokenResponse> res = fail<TokenResponse>(d::ErrorCode::Internal, "unreachable");
   bool haveRes = false;

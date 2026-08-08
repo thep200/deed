@@ -1,4 +1,3 @@
-// core/domain/ports/driven/i_cancellation_token.hpp — cooperative cancel signal (REFACTOR_SPEC §6.3/§7.4).
 #pragma once
 
 #include <functional>
@@ -10,8 +9,7 @@ public:
   virtual ~ICancellationToken() = default;
   virtual bool cancelled() const noexcept = 0;
 
-  // Abort hook, fired once when cancel trips (runs NOW if already cancelled). Sender kills its live
-  // socket/call here — polling alone never unblocks a syscall already parked on a dead peer.
+  // Abort hook, fired once when cancel trips (runs NOW if already cancelled) — polling alone never unblocks a parked syscall.
   virtual void onCancel(std::function<void()> hook) const = 0;
 };
 

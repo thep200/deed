@@ -1,35 +1,31 @@
-// core/domain/request/request_type.hpp — the request protocol classification enum, split out of request_model.hpp so it
-// SURVIVES the legacy types.hpp removal (REFACTOR_SPEC P6). It is a transport-free view/classification enum
-// used by the UI, the lazy-tree TreeNode (env_config.hpp), and the request serializers. Tiny + dependency-free.
 #pragma once
 
+#include <cstddef>
 #include <string>
 
 namespace core {
 
-// Protocol classification (matches the "type" field in the request file).
 // Order MUST match RequestModel::Payload's variant order (type() == variant index) — new types
-// therefore APPEND at the end so existing indexes stay stable.
-enum class RequestType { Http, Grpc, GraphQl, WebSocket, Kafka, Soap };
+// APPEND at the end. request_traits.hpp static_asserts this alignment.
+enum class RequestType { Http, Grpc, GraphQl, WebSocket, Kafka, Soap, Ldap };
+
+inline constexpr std::size_t kRequestTypeCount = 7;
+
+// Wire token: the JSON "type" value AND the per-type payload block key. Index = enum value.
+inline constexpr const char *kRequestTypeTokens[kRequestTypeCount] = {
+    "http", "grpc", "graphql", "ws", "kafka", "soap", "ldap"};
 
 inline std::string toString(RequestType t) {
-  switch (t) {
-  case RequestType::Grpc: return "grpc";
-  case RequestType::WebSocket: return "ws";
-  case RequestType::GraphQl: return "graphql";
-  case RequestType::Kafka: return "kafka";
-  case RequestType::Soap: return "soap";
-  default: return "http";
-  }
+  auto i = static_cast<std::size_t>(t);
+  return kRequestTypeTokens[i < kRequestTypeCount ? i : 0];
 }
 
 inline bool parseRequestType(const std::string &s, RequestType &out) {
-  if (s == "http") { out = RequestType::Http; return true; }
-  if (s == "grpc") { out = RequestType::Grpc; return true; }
-  if (s == "ws") { out = RequestType::WebSocket; return true; }
-  if (s == "graphql") { out = RequestType::GraphQl; return true; }
-  if (s == "kafka") { out = RequestType::Kafka; return true; }
-  if (s == "soap") { out = RequestType::Soap; return true; }
+  for (std::size_t i = 0; i < kRequestTypeCount; ++i)
+    if (s == kRequestTypeTokens[i]) {
+      out = static_cast<RequestType>(i);
+      return true;
+    }
   return false;
 }
 

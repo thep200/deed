@@ -1,4 +1,3 @@
-// core/domain/kafka/kafka_produce.hpp — producer config + message VOs (SPEC_kafka §3, tab Config/Message).
 #pragma once
 
 #include <chrono>
@@ -12,19 +11,16 @@ namespace core::domain {
 
 enum class Acks { None, Leader, All };               // "0" / "1" / "all"
 enum class Compression { None, Gzip, Snappy, Lz4, Zstd };
-// How the (always-JSON) editor value goes on the wire: verbatim JSON text, or Avro binary in the
-// Confluent framing, serialized against the LATEST Schema Registry schema of `<topic>-value`.
+// Wire format: verbatim JSON text, or Confluent-framed Avro against the LATEST `<topic>-value` registry schema.
 enum class KafkaValueFormat { Json, Avro };
 
-// New-request producer defaults (SPEC_kafka §3). Pure domain — these seed a freshly created request's
-// Config tab; the user edits them per request in the UI (they are not app-global .env tunables).
+// New-request defaults: seed a fresh request's config; per-request, not app-global .env tunables.
 inline constexpr std::chrono::milliseconds kDefaultMessageTimeout{30000};
 inline constexpr std::chrono::milliseconds kDefaultLinger{0};
 inline constexpr int kDefaultProduceRetries = 3;
 inline constexpr const char *kDefaultKafkaClientId = "deed";
 
-// Invariant (partition -1(auto) or >=0) is checked by KafkaRequest::create (kafka_request.hpp), which sees
-// the whole Mode variant at once — this struct itself is a plain aggregate, like the spec's pseudocode.
+// Plain aggregate — invariants are checked by KafkaRequest::create.
 struct KafkaProduceConfig {
   KafkaTopic topic;
   KafkaPartition partition{KafkaPartition::kAuto};
@@ -52,8 +48,7 @@ struct MessageKey {
   std::string value;
   bool operator==(const MessageKey &o) const { return value == o.value; }
 };
-// A producer value is always JSON text (validated by IJsonValidator at the use-case layer, not here — domain
-// stays JSON-agnostic). No raw/binary mode.
+// Always JSON text, validated at the use-case layer (IJsonValidator), never here; no raw/binary mode.
 struct MessagePayload {
   std::string value;
   bool operator==(const MessagePayload &o) const { return value == o.value; }

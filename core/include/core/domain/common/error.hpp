@@ -1,13 +1,10 @@
-// core/domain/common/error.hpp — neutral error type carried across layers (REFACTOR_SPEC §4.1).
-// Pure C++/STL only: NO nlohmann/cpr/grpc/protobuf may ever appear under core/include/core/domain/**.
 #pragma once
 
 #include <string>
 
 namespace core::domain {
 
-// Stable, transport-neutral classification of a failure. Infra converts library exceptions into one of
-// these at the boundary; domain/app never throw across layers (they return Result/Status, §4.1).
+// Infra converts library exceptions into one of these at the boundary; domain/app never throw across layers.
 enum class ErrorCode {
   Ok = 0,
   Validation, // a value object invariant was violated (bad input)
@@ -22,7 +19,6 @@ enum class ErrorCode {
   Internal    // unexpected / bug
 };
 
-// A failure with a developer-facing message and an optional offending field path (e.g. "http.url").
 struct Error {
   ErrorCode code = ErrorCode::Internal;
   std::string message; // for dev/log, not necessarily user-facing

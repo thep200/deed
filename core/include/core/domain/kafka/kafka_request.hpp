@@ -1,5 +1,3 @@
-// core/domain/kafka/kafka_request.hpp — KafkaRequest aggregate payload (SPEC_kafka §3). ONE RequestType,
-// two client kinds chosen by which Mode alternative is held (mirrors WebSocketRequest's shape).
 #pragma once
 
 #include <optional>
@@ -21,13 +19,8 @@ class KafkaRequest {
 public:
   using Mode = std::variant<KafkaProduceSpec, KafkaConsumeSpec>; // = client-kind selector
 
-  // Re-validates invariants the leaf VOs can't check alone (each side sees only its own struct, this sees
-  // the whole Mode): producer partition -1|>=0; consumer topics non-empty, partition -1|nullopt|>=0,
-  // maxMessages>0 if set, pollTimeout>0 (SPEC_kafka §3 bất biến).
-  //
-  // `inactiveDraft` = the OTHER client-kind's last state (SPEC_kafka §2.0.3): toggling Producer/Consumer
-  // is a per-request draft switch, not a data loss — the request carries both sides so the inactive one
-  // survives persistence/app restart. Invariant: if present, it holds the opposite Mode alternative.
+  // Re-validates invariants the leaf VOs can't check alone (this sees the whole Mode).
+  // inactiveDraft preserves the OTHER client-kind's last state across toggle/persistence; must hold the opposite alternative.
   static Result<KafkaRequest> create(BrokerList brokers, KafkaSecurity security, Mode mode,
                                      std::optional<Mode> inactiveDraft = std::nullopt) {
     if (auto err = validateMode(mode)) return Result<KafkaRequest>::fail(*err);

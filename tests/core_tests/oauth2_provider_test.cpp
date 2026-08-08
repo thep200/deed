@@ -1,5 +1,3 @@
-// oauth2_provider_test.cpp — pure pieces of the OAuth2 token provider (no network):
-// token-response parsing, cache-key identity, token-request building (grants + client-auth styles).
 #include <cstdio>
 #include <string>
 
@@ -42,7 +40,6 @@ std::string formOf(const domain::RequestModel &m) {
 int run_oauth2_provider_tests() {
   using domain::ErrorCode;
 
-  // parseTokenResponse
   {
     auto ok = o2::parseTokenResponse(
         R"({"access_token":"abc","token_type":"Bearer","expires_in":120,"refresh_token":"r1"})");

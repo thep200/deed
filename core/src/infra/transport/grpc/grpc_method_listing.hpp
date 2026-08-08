@@ -1,17 +1,15 @@
-// grpc_method_listing.hpp — lib-free facade over grpc_descriptors (domain types only, no protobuf/grpc
-// includes), safe to include from the app layer (composition_root's listGrpcMethods).
+// Lib-free facade over grpc_descriptors (domain types only) — safe to include from the app layer.
 #pragma once
 
 #include <string>
 #include <vector>
 
-#include "core/domain/grpc/grpc_method.hpp"  // domain GrpcMethodDescriptor
-#include "core/domain/grpc/grpc_request.hpp" // domain GrpcRequest payload
+#include "core/domain/grpc/grpc_method.hpp"
+#include "core/domain/grpc/grpc_request.hpp"
 
 namespace core::grpcdesc {
 
-// Build + list descriptors for an already-resolved domain GrpcRequest (reflection / proto files / FDS).
-// On failure returns {} and sets err.
+// `g` must already be {{var}}-resolved. On failure returns {} and sets err.
 std::vector<core::domain::GrpcMethodDescriptor> listGrpcMethods(const core::domain::GrpcRequest& g,
                                                                 std::string& err);
 

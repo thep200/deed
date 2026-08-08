@@ -14,18 +14,15 @@
 #include <cpr/cpr.h>
 #include <nlohmann/json.hpp>
 
-#include "infra/transport/shared/socket_abort.hpp" // abort a connect (no callback runs there)
-#include "infra/transport/shared/sse_parser.hpp" // pure text/event-stream parser (no transport coupling)
+#include "infra/transport/shared/cancel_token.hpp"
+#include "infra/transport/shared/socket_abort.hpp"
+#include "infra/transport/shared/sse_parser.hpp"
 #include "infra/transport/shared/url_util.hpp"
 
 namespace core::infra {
 namespace d = core::domain;
 
 namespace {
-
-const d::HttpRequest &httpOf(const d::RequestModel &m) {
-  return *std::get_if<d::HttpRequest>(&m.payload());
-}
 
 std::string applyPathVariables(std::string url, const d::PathVariableList &vars) {
   for (const auto &v : vars.items()) {
@@ -143,8 +140,7 @@ cpr::Response runVerb(cpr::Session &s, d::HttpMethod m) {
   }
 }
 
-// Configure a cpr::Session from the resolved domain HTTP request (shared by unary + SSE). `extraHeaders`
-// are merged last (SSE adds Accept / Last-Event-ID). Cancellation is wired via the progress callback.
+// Shared by unary + SSE; `extraHeaders` merge last (SSE adds Accept / Last-Event-ID). Cancel wired via progress callback.
 void configureSession(cpr::Session &session, const d::HttpRequest &h, const d::RequestModel &model,
                       const std::shared_ptr<core::CancelToken> &token,
                       const std::shared_ptr<core::SocketAbort> &abort,
@@ -188,10 +184,8 @@ void trimWs(std::string &x) {
   x = (a == std::string::npos) ? std::string() : x.substr(a, b - a + 1);
 }
 
-// Native SSE streamer (ported from the legacy core::HttpSender SseStreamer, emitting domain events). We only
-// reach here when the request asked for SSE (Accept: text/event-stream), which == httpForcesSse, so the
-// response is always parsed as SSE (no Auto/non-SSE unary-body branch). Reconnects with Last-Event-ID on a
-// clean/abnormal end (EventSource §7), up to a cap; enforces total event/byte ceilings.
+// Reached only when the request asked for SSE, so the response is always parsed as SSE. Reconnects with
+// Last-Event-ID on a clean/abnormal end (EventSource), up to a cap; enforces total event/byte ceilings.
 class SseStreamer {
 public:
   SseStreamer(const d::HttpRequest &h, const d::RequestModel &model, d::IResponseSink &sink,
@@ -202,7 +196,7 @@ public:
   void run() {
     for (int attempt = 0;; ++attempt)
       if (runAttempt(attempt) == Step::Stop) break;
-    emitMetaOnce({}); // §3: ensure we counted as "open" even if no chunk arrived
+    emitMetaOnce({}); // ensure we counted as "open" even if no chunk arrived
     if (endStatus_ == End::Cancelled) {
       sink_.emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Cancelled, endMsg_.empty() ? "Cancelled" : endMsg_, endCode_ ? std::optional<int>(endCode_) : std::nullopt}}));
     } else if (endStatus_ == End::Error) {
@@ -368,21 +362,18 @@ private:
 
 } // namespace
 
-d::Status NativeHttpSender::execute(const d::RequestModel &model, d::IResponseSink &sink,
-                                    const d::ICancellationToken &cancel) {
-  const d::HttpRequest &h = httpOf(model);
-
+d::Status NativeHttpSender::executeTyped(const d::RequestModel &model, const d::HttpRequest &h,
+                                         d::IResponseSink &sink,
+                                         const d::ICancellationToken &cancel) {
   auto token = core::linkCancel(cancel);   // aborts the transfer through the progress callback
   auto abort = std::make_shared<core::SocketAbort>();
   cancel.onCancel([abort] { abort->abort(); }); // aborts a connect, where no callback ever runs
 
-  // SSE: stream the response natively (no legacy HttpSender).
   if (d::acceptsEventStream(h)) {
     SseStreamer(h, model, sink, token, abort).run();
     return d::ok();
   }
 
-  // --- Unary, native on domain types via cpr ---
   cpr::Session session;
   configureSession(session, h, model, token, abort, {});
 

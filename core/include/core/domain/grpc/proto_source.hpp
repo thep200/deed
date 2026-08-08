@@ -1,5 +1,3 @@
-// core/domain/grpc/proto_source.hpp — ProtoSource sum type (REFACTOR_SPEC §5.5):
-// how the gRPC sender obtains method descriptors — server Reflection, local .proto files, or a descriptor set.
 #pragma once
 
 #include <string>

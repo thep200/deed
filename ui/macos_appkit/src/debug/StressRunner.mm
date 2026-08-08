@@ -114,7 +114,6 @@ static long long EnvLL(const char *key, long long def) {
     if (_logger) _logger->flush();
     NSLog(@"[stress] done iters=%lld final_footprint_mb=%.2f", _cur,
           (double)core::memprobe::PhysFootprintBytes() / (1024.0 * 1024.0));
-    // Set _wc = nil so the runner no longer keeps the controller alive.
     _wc = nil;
 }
 

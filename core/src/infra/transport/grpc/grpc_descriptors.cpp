@@ -22,13 +22,11 @@ namespace {
 namespace refl = grpc::reflection::v1alpha;
 namespace d = core::domain;
 
-// Overload set for ProtoSource::match (visits the variant alternatives).
 template <class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
 template <class... Ts> overloaded(Ts...) -> overloaded<Ts...>;
 
-// Lazy DescriptorDatabase that fetches FileDescriptorProto via gRPC ServerReflection.
-// Keeps one bidi-stream alive, caches received files so DescriptorPool can resolve transitive imports.
-// Single-threaded use within one send/list pass (a fresh instance per pass).
+// Lazy DescriptorDatabase over gRPC ServerReflection: one bidi stream, received files cached so the
+// pool resolves transitive imports. Fresh instance per pass (single-threaded).
 class ReflectionDescriptorDatabase : public gp::DescriptorDatabase {
 public:
     ReflectionDescriptorDatabase(std::shared_ptr<grpc::Channel> channel,
@@ -38,9 +36,8 @@ public:
 
     ~ReflectionDescriptorDatabase() override {
         if (stream_) {
-            // TryCancel first (H7): a half-open/hung reflection server would otherwise make Finish() block
-            // forever, hanging DescriptorContext teardown and the whole send. The deadline on ctx_ (set in
-            // stream()) is the second backstop.
+            // TryCancel first: a hung reflection server would make Finish() block forever, hanging
+            // teardown and the whole send; the deadline on ctx_ is the second backstop.
             if (ctx_) ctx_->TryCancel();
             stream_->WritesDone();
             grpc::Status s = stream_->Finish();
@@ -74,10 +71,9 @@ public:
     }
 
     bool FindFileContainingExtension(const std::string&, int, gp::FileDescriptorProto*) override {
-        return false; // POC: extensions not supported.
+        return false; // extensions not supported
     }
 
-    // List the full name of every service registered on the server.
     bool getServices(std::vector<std::string>* out) {
         refl::ServerReflectionRequest req;
         req.set_list_services("*");
@@ -98,7 +94,7 @@ private:
     Stream* stream() {
         if (!stream_) {
             ctx_ = std::make_shared<grpc::ClientContext>();
-            // Cap total reflection time (H7) so a silent/hung server can't block the call indefinitely.
+            // Cap total reflection time so a silent/hung server can't block the call indefinitely.
             ctx_->set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(30));
             // Cancel must not wait out that deadline: kill the reflection RPC the moment the user asks.
             // weak_ptr -> a late cancel after this db died is a no-op, not a dangling TryCancel.
@@ -141,7 +137,6 @@ private:
     std::mutex mu_;
 };
 
-// Collect service full_names from a FileDescriptor (skip if it has none).
 void collectServices(const gp::FileDescriptor* file, std::vector<std::string>& out) {
     if (!file) return;
     for (int i = 0; i < file->service_count(); ++i)

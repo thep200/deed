@@ -1,4 +1,3 @@
-// core/domain/kafka/kafka_consume.hpp — consumer config + record VOs (SPEC_kafka §3, tab Config / pane phải).
 #pragma once
 
 #include <chrono>
@@ -16,7 +15,6 @@
 namespace core::domain {
 
 namespace detail {
-// Pure-STL random suffix (no external lib) for the auto-generated "deed-tail-<id>" group name.
 inline std::string randomLowerAlnum(std::size_t n) {
   static std::mutex mu;
   static std::mt19937_64 rng([] {
@@ -32,7 +30,7 @@ inline std::string randomLowerAlnum(std::size_t n) {
 }
 } // namespace detail
 
-// Invariant: none on the string itself — an empty id auto-generates "deed-tail-<uuid>" (spec §3).
+// An empty id auto-generates "deed-tail-<random>".
 class ConsumerGroup {
 public:
   static Result<ConsumerGroup> create(std::string id) {
@@ -50,13 +48,11 @@ private:
 
 enum class OffsetReset { Earliest, Latest }; // -> auto.offset.reset
 
-// New-request consumer defaults (SPEC_kafka §3). Pure domain — seed a fresh request's Config tab;
-// per-request, user-edited in the UI (not app-global .env tunables).
+// New-request defaults: seed a fresh request's config; per-request, not app-global .env tunables.
 inline constexpr std::chrono::milliseconds kDefaultPollTimeout{500};
 inline constexpr const char *kDefaultConsumerClientId = "deed";
 
-// Invariants (topics non-empty, partition -1/nullopt/>=0, maxMessages>0 if set, pollTimeout>0) are checked
-// by KafkaRequest::create (kafka_request.hpp) — this struct is a plain aggregate, per the spec's pseudocode.
+// Plain aggregate — invariants are checked by KafkaRequest::create.
 struct KafkaConsumeConfig {
   std::vector<KafkaTopic> topics;
   std::optional<KafkaPartition> partition; // present => assign() one partition; absent => subscribe()
@@ -78,9 +74,7 @@ struct KafkaConsumeConfig {
   bool operator!=(const KafkaConsumeConfig &o) const { return !(*this == o); }
 };
 
-// One consumed record — OUTPUT DTO (spec §3/§6): bytes as received, EXCEPT that infra may decode a
-// Confluent-Avro value to JSON text at emit time (then `valueEncoding` says so). The domain itself
-// never interprets the bytes; pretty-print/hex is a UI concern built from `value`.
+// Bytes as received, EXCEPT infra may decode a Confluent-Avro value to JSON at emit time (valueEncoding says so).
 struct KafkaRecord {
   std::string topic;
   int partition = 0;

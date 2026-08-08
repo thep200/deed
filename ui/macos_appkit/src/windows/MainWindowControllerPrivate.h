@@ -1,14 +1,5 @@
-// MainWindowControllerPrivate.h — class extension SHARED by every file implementing
-// MainWindowController (the main file + the Tree/Editor/Send/Config/Stress categories).
-//
-// Why needed: MainWindowController is too long, so it's split into several categories in
-// separate .mm files. Categories CANNOT declare ivars; conversely ivars declared in an
-// @implementation are visible only in THAT file. Standard fix (64-bit macOS runtime):
-// declare ALL ivars in ONE class extension in this header; every implementing file #imports it
-// and gets access to the ivars.
-//
-// This header also gathers the shared imports + N()/S() helpers -> each category just needs to
-// #import this file (plus a few of its own headers if needed).
+// Categories cannot declare ivars -> ALL ivars live in this ONE class extension, imported by every
+// MainWindowController*.mm; the (Internal) interface manifests cross-file selectors so ARC sees them.
 #pragma once
 
 #import "windows/MainWindowController.h"
@@ -19,6 +10,7 @@
 #import "dialogs/OS9Dialog.h"
 #import "windows/EnvWindowController.h"
 #import "windows/TreeViews.h"
+#import "windows/typeui/RequestTypeUi.h"
 #import "theme/OS9Theme.h"
 #import "icons/OS9Glyphs.h"
 #import "widgets/OS9BackgroundView.h"
@@ -43,18 +35,16 @@
 #include <string>
 #include <vector>
 
-#include "core/infra/serialization/field_json.hpp"   // core::serial — domain JSON field codec (replaces fieldcodec)
+#include "core/infra/serialization/field_json.hpp"   // core::serial — domain JSON field codec
 #include "core/infra/import/importer.hpp"
 #include "core/infra/persistence/stores.hpp"
 #include "core/infra/persistence/request_naming.hpp"
-#include "core/domain/environment/env_config.hpp"           // TreeNode/AppConfig/Environment/Session + RequestType (survive)
-#include "core/domain/response/interaction.hpp" // StreamStatus / InteractionKind (survive types.hpp removal)
-#include "core/app/core_api_client.hpp"   // REFACTOR_SPEC P6: new send path (IApiClient)
+#include "core/domain/environment/env_config.hpp"           // TreeNode/AppConfig/Environment/Session + RequestType
+#include "core/domain/response/interaction.hpp" // StreamStatus / InteractionKind
+#include "core/app/core_api_client.hpp"   // IApiClient send path
 #include "bridge/UiObserver.h"            // domain ResponseEvent -> CoreResponseSink
 
-// std::string <-> NSString bridge used everywhere.
-static inline NSString *N(const std::string &s) { return [NSString stringWithUTF8String:s.c_str()]; }
-static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) : std::string(); }
+#import "app/NsBridge.h" // N()/S() std::string <-> NSString bridges
 
 // Conformance protocols attached to the category that implements them -> no
 // -Wprotocol / -Wobjc-protocol-method-implementation warnings, while every call site that
@@ -68,23 +58,21 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 
 @interface MainWindowController () {
 @protected
-    // Core — the UI talks ONLY to CoreApiClient (no Engine). It owns its own stores/cache/senders.
-    // REFACTOR_SPEC P6: the send stack. ALL sends (unary HTTP/gRPC/GraphQL + server-stream + WebSocket)
-    // route through IApiClient (orchestrator/saga/domain senders). The legacy Engine send path is gone.
+    // The UI talks ONLY to CoreApiClient (owns its stores/cache/senders); ALL sends (unary +
+    // server-stream + WebSocket) route through IApiClient.
     std::unique_ptr<core::app::CoreApiClient> _apiClient;
     std::shared_ptr<UiObserver> _apiObserver;     // kept alive for the in-flight send
     core::domain::RequestExecutionId _apiExec;    // handle to cancel / push the in-flight send
     uint64_t _apiHandleCounter;                   // synthesizes a RequestHandle for CoreResponseSink reuse
     BOOL _apiWsActive;                            // a WebSocket session is open (send frames via it)
-    // The editor's working request is the DOMAIN aggregate (REFACTOR_SPEC P6, Phase E-req). It's optional
-    // because core::domain::RequestModel has no default ctor (identity/payload are required); _hasRequest
-    // gates real use. The editor reads/writes it natively — no legacy bridge.
+    // The editor's working request. Optional because core::domain::RequestModel has no default ctor
+    // (identity/payload required); _hasRequest gates real use.
     std::optional<core::domain::RequestModel> _model;
     std::string _root;
     std::string _currentRel;
     std::map<std::string, std::string> _loadedBodyDrafts; // per-mode body drafts read OFF-MAIN during load
                                                           // (populateEditorsFromModel consumes; no main-thread reparse)
-    // §C3 autosave skip: last-persisted model + drafts. autosaveCurrent compares the freshly-synced state to
+    // Autosave skip: last-persisted model + drafts. autosaveCurrent compares the freshly-synced state to
     // these and writes ONLY when something changed (content-based, so no missed-mutation data loss).
     std::optional<core::domain::RequestModel> _savedModel;
     std::map<std::string, std::string> _savedDrafts;
@@ -92,11 +80,11 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     uint64_t _currentHandle;
     BOOL _hasRequest;
 
-    // streaming (SPEC_grpc_streaming §7/§10) — stream/WS now run through IApiClient (_apiExec); no legacy handles
+    // streaming — stream/WS run through IApiClient (_apiExec)
     BOOL _streaming;                       // a server-stream is in flight (Stop replaces Send)
     uint64_t _streamEvents;                // events received so far (status line)
     int64_t  _streamBytes;                 // running response size (bytes) received so far — live size counter
-    uint64_t _streamToken;                 // C2: identity of the current stream; bumped on each open, stale callbacks drop
+    uint64_t _streamToken;                 // identity of the current stream; bumped on each open, stale callbacks drop
     std::vector<core::domain::GrpcMethodDescriptor> _grpcMethods; // parallel to _servicePopup items (current request's)
     uint64_t _grpcMethodsReqSeq;  // race guard: apply only the latest listGrpcMethods result
     BOOL _grpcMethodsFetched;     // true once fetched for THIS request -> reuse, don't re-fetch (until invalidated)
@@ -135,7 +123,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     NSMutableArray<OS9BevelButton *> *_reqTabButtons;
     NSArray<NSString *> *_reqTabTitles;
     NSInteger _activeReqTab;
-    // TASK 1: remember active tab PER pane via a semantic KEY (title), NOT by index, NOT
+    // Remember active tab PER pane via a semantic KEY (title), NOT by index, NOT
     // stored in RequestModel -> persists across request switches. nil/no-match -> fall back to first tab.
     NSString *_leftPaneActiveTabKey;
 
@@ -164,7 +152,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     OS9PopupButton *_protoPopup;     // gRPC: pick proto source (Reflection | .proto)
     OS9PopupButton *_servicePopup;   // gRPC: pick service/RPC (before the Send button)
     OS9PopupButton *_methodPopup;
-    OS9Toggle *_kafkaModeToggle;     // Kafka only: Producer(off)/Consumer(on) client-kind (SPEC_kafka §2.0)
+    OS9Toggle *_kafkaModeToggle;     // Kafka only: Producer(off)/Consumer(on) client-kind
     OS9SerratedInset *_urlInset; // retro serrated input frame wrapping the URL field
     NSTextField *_urlField;
 
@@ -203,10 +191,9 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
     // from the OPEN request's Body on every (re)load -> never carries content across requests.
     NSMutableDictionary<NSString *, NSString *> *_bodyDrafts;
 
-    // Kafka Producer/Consumer drafts (bug fix): the client-kind toggle used to always rebuild a FRESH
-    // default spec on flip, discarding whatever the user had typed. Mirrors _bodyDrafts' approach — keep
-    // BOTH kinds' editor buffers (kafka-specific tabs only; the trailing shared Config/timeout-tls buffer is
-    // NOT duplicated here since it isn't per-kind) and BOTH kinds' last response, restored on toggle-back.
+    // Kafka Producer/Consumer drafts (mirrors _bodyDrafts): keep BOTH kinds' editor buffers (kafka-specific
+    // tabs only; the trailing shared Config/timeout-tls buffer is NOT per-kind so not duplicated) and BOTH
+    // kinds' last response, restored on toggle-back — flipping the client kind must not discard typed content.
     // Reset (nil'd) on every populateEditorsFromModel — never carries content across a different request.
     NSArray<NSString *> *_kafkaProducerReqBuffers; // [message, kafkaConfig] JSON
     NSArray<NSString *> *_kafkaConsumerReqBuffers; // [kafkaConfig] JSON
@@ -219,8 +206,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 }
 @end
 
-// Declare ALL internal methods so categories can call across files (ARC must see the selectors).
-// Auto-generated from the definitions in MainWindowController*.mm.
+// Cross-file selector manifest: categories call these across files; ARC must see the declarations.
 @interface MainWindowController (Internal)
 - (void)showWindow;
 - (void)restoreLastCollection;
@@ -233,7 +219,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)buildEditors;
 - (NSString *)prettyTitle;
 - (NSString *)applyView:(const std::string &)body;
-- (NSString *)applyView:(const std::string &)body mode:(int)mode;   // U2: reads no ivars -> safe off main thread
+- (NSString *)applyView:(const std::string &)body mode:(int)mode;   // reads no ivars -> safe off main thread
 - (void)buildStatusBar;
 - (void)buildToolbar;
 - (void)buildDividers;
@@ -242,7 +228,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)layoutTabButtons:(NSArray<OS9BevelButton *> *)buttons atX:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)h extra:(CGFloat)extra;
 - (void)layoutConfig;
 - (core::RequestType)requestType; // current request's protocol view-enum (reads domain _model; no bridge)
-- (core::domain::KafkaClientKind)kafkaClientKind; // Kafka payload's Producer/Consumer mode (SPEC_kafka §2.0)
+- (core::domain::KafkaClientKind)kafkaClientKind; // Kafka payload's Producer/Consumer mode
 - (void)kafkaModeToggled:(id)sender; // toolbar toggle flipped -> rebuild _model with the other Mode alternative
 // Rebuild the current gRPC payload's immutable VO via Parts + write back to _model (no-op unless gRPC).
 - (void)mutateGrpc:(void (^)(core::domain::GrpcRequest::Parts &))fn;
@@ -256,13 +242,13 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)loadChildrenOf:(TreeItem *)folder;
 - (void)reloadTree;
 - (void)restoreExpansion:(NSArray<TreeItem *> *)items;
-// Incremental update (§T1): re-scan only level `parentRel` ("" = root), keeping the TreeItems
+// Incremental update: re-scan only level `parentRel` ("" = root), keeping the TreeItems
 // (and already-loaded children) of other branches -> avoids re-scanning every open folder.
 - (void)refreshTreeLevel:(NSString *)parentRel;
 - (void)reselectTreeByRel:(NSString *)rel;   // reselect node by relPath after update (no auto-load)
 - (TreeItem *)loadedFolderItemForRel:(NSString *)rel;
 - (BOOL)mergeScanLevel:(const std::string &)rel into:(NSMutableArray<TreeItem *> *)items;
-// §T3: remap relPath prefix in _expandedFolders on folder rename/move to keep expansion state.
+// Remap relPath prefix in _expandedFolders on folder rename/move to keep expansion state.
 - (void)remapExpandedFoldersFrom:(NSString *)oldRel to:(NSString *)newRel;
 - (void)treeClicked:(id)sender;
 - (void)treeDoubleClicked:(id)sender;
@@ -308,11 +294,8 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)collapseToggle:(id)sender;
 - (void)applyConfiguredFontAndRefresh;
 - (void)controlTextDidChange:(NSNotification *)note;
-// import kind: 0 = cURL, 1 = grpcurl, 2 = GraphQL.
-- (void)importNow:(NSString *)text kind:(NSInteger)kind;
-- (void)offerImport:(NSString *)text kind:(NSInteger)kind;
-- (NSString *)importSummary:(const core::domain::RequestModel &)m unknown:(const std::vector<std::string> &)unknown kind:(NSInteger)kind;
-- (NSString *)deriveImportName:(const core::domain::RequestModel &)m;
+- (void)importNow:(NSString *)text kind:(core::domain::ImportKind)kind;
+- (void)offerImport:(NSString *)text kind:(core::domain::ImportKind)kind;
 - (void)applyImport:(const core::domain::RequestModel &)m;
 - (void)restoreUrlField;
 - (void)methodChanged:(id)sender;
@@ -322,7 +305,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)updateTitle;
 - (void)saveRequest:(id)sender;
 - (void)sendRequest:(id)sender;
-- (void)sendViaApiClient;     // REFACTOR_SPEC P6: route unary send through IApiClient
+- (void)sendViaApiClient;     // route unary send through IApiClient
 - (void)streamViaApiClient;   // route server-stream (gRPC/SSE) through IApiClient
 - (void)wsViaApiClient;       // route WebSocket connect/send-frame through IApiClient
 - (void)cancelClicked:(id)sender;
@@ -347,7 +330,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (NSString *)elapsedText:(long long)ms;  // "850ms" / "1.23s" (>1000ms -> seconds)
 - (long long)measuredElapsedMs;           // UI's own monotonic elapsed (for cancel: real time, not 0ms)
 - (void)rebuildResponseBuffers;
-- (void)rebuildResponseBuffersAsync;   // U2: format response off the main thread
+- (void)rebuildResponseBuffersAsync;   // format response off the main thread
 - (NSArray<NSString *> *)computeResponseBuffersFor:(const core::domain::ApiResponse &)r
                                               type:(core::RequestType)type
                                         prettyMode:(int)prettyMode;
@@ -382,12 +365,6 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)purgeCacheAtRel:(NSString *)rel isFolder:(BOOL)isFolder;
 - (void)deleteSelectedMulti:(id)sender;
 - (std::string)selectedFolderRel;
-- (void)newHttp:(id)s;
-- (void)newGrpc:(id)s;
-- (void)newWs:(id)s;
-- (void)newGraphQl:(id)s;
-- (void)newKafka:(id)s;
-- (void)newSoap:(id)s;
 - (void)wsSendOrConnect;
 - (void)createRequest:(core::RequestType)t name:(NSString *)name;
 - (void)newFolder:(id)s;
@@ -397,6 +374,7 @@ static inline std::string S(NSString *s) { return s ? std::string(s.UTF8String) 
 - (void)closeWindow:(id)sender;
 - (BOOL)windowShouldClose:(NSWindow *)sender;
 - (void)windowDidResize:(NSNotification *)note;
+- (void)applyPixelCorners;   // SQUARE_CORNERS=2: (re)apply the 9-slice pixel-corner mask
 - (void)windowDidBecomeKey:(NSNotification *)note;
 - (void)windowDidResignKey:(NSNotification *)note;
 - (NSString *)abbreviatePath:(NSString *)path;

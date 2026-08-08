@@ -6,8 +6,7 @@
 namespace core::codec {
 
 json parseGuarded(const std::string& text, int maxDepth) {
-    // O(n) structural-depth pre-scan: count [ and { nesting OUTSIDE of string literals. Reject before the
-    // recursive parser can blow the stack (H5). String/escape handling so brackets inside strings don't count.
+    // O(n) depth pre-scan outside string literals: reject before the recursive parser can blow the stack.
     int depth = 0;
     bool inStr = false, esc = false;
     for (char c : text) {
@@ -19,8 +18,7 @@ json parseGuarded(const std::string& text, int maxDepth) {
         }
         if (c == '"') inStr = true;
         else if (c == '[' || c == '{') {
-            // std::runtime_error derives from std::exception, same as json::parse_error — every existing
-            // catch(const std::exception&)/catch(...) around these parse sites handles it identically.
+            // runtime_error is caught by the same catch(const std::exception&) sites as json::parse_error.
             if (++depth > maxDepth)
                 throw std::runtime_error("JSON nesting too deep (max " + std::to_string(maxDepth) + ")");
         } else if (c == ']' || c == '}') {
@@ -76,7 +74,7 @@ AppConfig appConfigFromJson(const json& j, const AppConfig& def) {
     c.ramCacheSizeMb = getInt(j, "ram_cache_size", def.ramCacheSizeMb);
     c.diskCacheSizeMb = getInt(j, "disk_cache_size", def.diskCacheSizeMb);
     if (j.find("encryption_key") != j.end()) c.encryptionKey = getStr(j, "encryption_key");
-    // cacheResponses/cachePersist no longer in user config -> keep the struct's default true.
+    // cacheResponses/cachePersist are not user config -> the struct's default (true) stands.
     return c;
 }
 

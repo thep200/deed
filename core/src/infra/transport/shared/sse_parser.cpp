@@ -1,4 +1,3 @@
-// sse_parser.cpp — pure text/event-stream parser (SPEC_sse §3). No transport deps.
 #include "infra/transport/shared/sse_parser.hpp"
 
 #include <algorithm>
@@ -21,10 +20,8 @@ void SseParser::feed(const char* data, std::size_t n, const Emit& emit) {
         bomChecked_ = true;
     }
 
-    // Split complete lines. Terminators: "\n", "\r\n", or a lone "\r". A trailing '\r' at the end of the
-    // buffer is ambiguous (could be the CR of a CRLF split across chunks) -> keep it for the next feed.
-    // Lines are passed as views into buf_ (no per-line copy): buf_ is only mutated after the loop and the
-    // emit callback never touches this parser.
+    // Terminators: "\n", "\r\n", lone "\r"; a trailing '\r' is ambiguous (CRLF split across chunks) -> defer.
+    // Lines are views into buf_: buf_ is only mutated after the loop and emit never touches this parser.
     std::size_t i = 0, lineStart = 0;
     while (i < buf_.size()) {
         char c = buf_[i];
@@ -44,8 +41,7 @@ void SseParser::feed(const char* data, std::size_t n, const Emit& emit) {
 }
 
 void SseParser::finish(const Emit& emit) {
-    // EOF: process whatever is left as the final line (M12). feed() defers a trailing '\r' (it could be the
-    // CR of a CRLF split across chunks) — at a clean EOF that ambiguity is resolved, so strip it and emit.
+    // A trailing '\r' deferred by feed() is resolved at clean EOF: strip it and emit the final line.
     if (!buf_.empty()) {
         std::string_view line = buf_;
         if (line.back() == '\r') line.remove_suffix(1);
@@ -72,8 +68,7 @@ void SseParser::handleRetryField(std::string_view value) {
     bool allDigit = !value.empty();
     for (char c : value) if (c < '0' || c > '9') { allDigit = false; break; }
     if (!allDigit) return;
-    // Clamp to a sane ceiling (M11): a hostile/huge `retry:` must not make the I/O thread sleep for
-    // days (cancel latency) — overflow from stol also lands on the max.
+    // Clamp: a hostile/huge `retry:` must not park the I/O thread (cancel latency); stol overflow also lands on max.
     try { long v = std::stol(std::string(value)); retryMs_ = v < 0 ? 0 : (v > 60000 ? 60000 : v); }
     catch (...) { retryMs_ = 60000; }
 }

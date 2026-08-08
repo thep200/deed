@@ -1,4 +1,4 @@
-// deed gRPC test server — REFACTOR_SPEC e2e backend for the new domain stack's gRPC path.
+// deed gRPC e2e test server.
 // Reflection-enabled echo service so DEED's reflection (GrpcSender) can discover + call it.
 //
 //   echo.Echo/Unary(EchoRequest{msg,count})        -> EchoResponse{msg}              (echoes msg once)

@@ -1,6 +1,3 @@
-// graphql_importer.cpp — import a GraphQL request (SPEC_graphql): a raw document that starts with
-// query/mutation/subscription. (cURL-body import was intentionally removed — GraphQL is not imported
-// from cURL.)
 #include <cctype>
 
 #include "core/infra/import/importer.hpp"
@@ -10,7 +7,6 @@ namespace core {
 
 namespace {
 
-// Does the (trimmed) text start with a GraphQL operation keyword followed by a boundary?
 bool startsWithGqlKeyword(const std::string& t) {
     for (const char* kw : {"query", "mutation", "subscription"}) {
         size_t n = std::char_traits<char>::length(kw);

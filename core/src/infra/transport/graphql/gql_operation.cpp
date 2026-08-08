@@ -1,5 +1,3 @@
-// gql_operation.cpp — GraphQL->HTTP packaging + shared operation payload (SPEC_graphql §4). DOMAIN-native.
-// (Operation detection moved to the domain: core/domain/graphql/gql_operation.hpp.)
 #include "infra/transport/graphql/graphql.hpp"
 
 #include <cctype>
@@ -27,7 +25,6 @@ nlohmann::json operationPayload(const d::GraphQlOperation& op) {
 d::RequestModel buildHttpModel(const d::RequestModel& model) {
     const d::GraphQlRequest& g = std::get<d::GraphQlRequest>(model.payload());
 
-    // Carry the headers over (Authorization etc.), then add Accept (and Content-Type for the POST body).
     auto hasHeader = [&](const char* name) {
         for (const auto& h : g.headers().items()) {
             if (!h.enabled()) continue;
@@ -43,11 +40,10 @@ d::RequestModel buildHttpModel(const d::RequestModel& model) {
     if (!hasHeader("content-type"))
         hdrs.push_back(d::Header::create("Content-Type", "application/json").take());
 
-    // POST body {query, variables, operationName}. (The domain model has no GET-for-query flag.)
+    // The domain model has no GET-for-query flag — always POST.
     nlohmann::json body = operationPayload(g.op());
 
-    // Parts holds a Url (no default ctor) -> brace-init in member order:
-    // method, url, pathVariables, params, headers, body, auth.
+    // Parts holds a Url (no default ctor) -> brace-init in member order.
     d::HttpRequest::Parts hp{d::HttpMethod::Post,
                              g.url(),
                              {},

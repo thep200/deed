@@ -1,6 +1,4 @@
-// core/src/infra/persistence/collection_repository.hpp — ICollectionRepository over the legacy
-// CollectionStore (REFACTOR_SPEC §8.3). Converts legacy structs <-> domain via the request bridge; turns
-// store exceptions into Result errors at the boundary (no throw across layers, §4.1).
+// Turns store exceptions into Result errors at the boundary — no throw across layers.
 #pragma once
 
 #include <memory>

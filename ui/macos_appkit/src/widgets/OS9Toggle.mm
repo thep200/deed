@@ -1,6 +1,3 @@
-// OS9Toggle.mm — retro slide switch. Fills its frame (as tall as a toolbar button), square corners,
-// crisp 1px bevels. A raised KNOB (half width) carries the label (e.g. "TLS") and slides left (off) /
-// right (on) with a short animation; the cell to the knob's left is accent-filled when on. Click toggles.
 #import "widgets/OS9Toggle.h"
 #import "theme/OS9Theme.h"
 

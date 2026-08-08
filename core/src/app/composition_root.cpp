@@ -1,6 +1,4 @@
-// core/src/app/composition_root.cpp — THE single place that wires concrete infra into the app
-// (REFACTOR_SPEC §2). Only this TU (not the app headers) names the concrete senders/clock/validator, so
-// the domain-purity gate stays green for everything under core/include.
+// Only this TU names concrete senders/clock/validator so the domain-purity gate stays green.
 #include "core/app/core_api_client.hpp"
 
 #include "infra/import/import_service.hpp"
@@ -11,19 +9,21 @@
 #include "infra/transport/http/native_http_sender.hpp"
 #include "infra/transport/kafka/kafka_sender.hpp"
 #include "infra/transport/ws/ws_sender.hpp"
-#include "app/cache_config.hpp"     // detail::buildCacheConfig (native response cache)
-#include "core/infra/variables/variable_resolver.hpp" // valueToAlias/prefixToAlias (native aliasify)
-#include "core/infra/export/exporter.hpp" // core::toCurl (domain copy-as-cURL export)
-#include "core/domain/graphql/gql_operation.hpp"    // domain effectiveOperation (native interactionOf)
-#include "infra/platform/fs_util.hpp"        // fsutil::join (.session dir for the cache)
+#include "app/repo_adapters.hpp"
+#include "core/infra/variables/variable_resolver.hpp"
+#include "core/infra/export/exporter.hpp"
+#include "core/domain/request/interaction_of.hpp"
+#include "app/aliasify.hpp"
+#include "infra/platform/fs_util.hpp"
 #include "infra/platform/stream_pool.hpp"
 #include "infra/platform/thread_pool.hpp"
 #include "infra/variables/domain_variable_resolver.hpp"
-#include "core/domain/auth/with_auth.hpp"                // oauth2Of/withAuth (OAuth2 materialization)
-#include "infra/auth/oauth2_token_provider.hpp"          // OAuth2 token fetch + cache (ITokenProvider)
-#include "infra/transport/graphql/gql_introspection.hpp" // native introspection (introspectGraphQl)
-#include "infra/transport/grpc/grpc_method_listing.hpp" // native gRPC reflection (listGrpcMethods)
-#include "infra/transport/soap/native_soap_sender.hpp"  // SOAP over HTTP (SPEC_soap)
+#include "core/domain/auth/with_auth.hpp"
+#include "infra/auth/oauth2_token_provider.hpp"
+#include "infra/transport/graphql/gql_introspection.hpp"
+#include "infra/transport/grpc/grpc_method_listing.hpp"
+#include "infra/transport/soap/native_soap_sender.hpp"
+#include "infra/transport/ldap/native_ldap_sender.hpp"
 
 #include <chrono>
 #include <functional>
@@ -38,98 +38,6 @@ namespace core::app {
 namespace d = core::domain;
 
 namespace {
-// Native response cache (no Engine): owns the ResponseCache, replicating engine_cache.cpp exactly (revision
-// fingerprint, ResponseRecord build, reload = recreate-on-enabled/persist-change). Shares the cache-config
-// builder via cache_config.hpp so the effective config matches the Engine's byte-for-byte.
-std::int64_t nowEpochMs() {
-  using namespace std::chrono;
-  return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-}
-class NativeResponseCacheRepository final : public IResponseCacheRepository {
-public:
-  NativeResponseCacheRepository(core::AppConfigStore *appCfg, core::CacheLimits limits, std::string sessionDir)
-      : appCfg_(appCfg), limits_(limits), sessionDir_(std::move(sessionDir)) {
-    rebuild();
-  }
-  void putResponse(const std::string &id, const core::domain::ApiResponse &resp) override {
-    putResponse(id, core::domain::ApiResponse(resp));
-  }
-  void putResponse(const std::string &id, core::domain::ApiResponse &&resp) override {
-    if (id.empty()) return;
-    auto c = cachePtr();
-    if (!c) return;
-    core::ResponseRecord rec;
-    rec.isError = false;
-    // The domain ApiResponse carries no resolved-request dump, so there's no fingerprint to stamp; the
-    // "stale response" badge was already inert on the live stack. Leave requestRevision empty.
-    rec.response = std::move(resp);
-    rec.receivedAt = nowEpochMs();
-    c->put(id, std::move(rec));
-  }
-  void putError(const std::string &id, const core::domain::ApiError &err) override {
-    if (id.empty()) return;
-    auto c = cachePtr();
-    if (!c) return;
-    core::ResponseRecord rec;
-    rec.isError = true;
-    rec.errorKind = err.kind;
-    rec.errorMessage = err.message;
-    rec.receivedAt = nowEpochMs();
-    c->put(id, std::move(rec));
-  }
-  std::optional<core::ResponseRecord> getResponse(const std::string &id) override {
-    auto c = cachePtr();
-    return c ? c->get(id) : std::nullopt;
-  }
-  void removeResponse(const std::string &id) override {
-    auto c = cachePtr();
-    if (c) c->remove(id);
-  }
-  void reloadCacheConfig() override {
-    std::shared_ptr<core::ResponseCache> c;
-    core::CacheConfig fresh;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      bool wasPersist = cfg_.persist, wasEnabled = cfg_.enabled;
-      fresh = core::detail::buildCacheConfig(appCfg_->load(), limits_);
-      if (cache_ && fresh.enabled == wasEnabled && fresh.persist == wasPersist) {
-        cfg_ = fresh;
-        c = cache_; // change cap/threshold in place (keep tiers) -> onConfigChanged OUTSIDE the lock
-      }
-    }
-    if (c) { c->onConfigChanged(fresh); return; }
-    rebuild(); // toggle enabled / change persist -> rebuild tiers
-  }
-  void flush() override {
-    auto c = cachePtr();
-    if (c) c->flush();
-  }
-  std::uint64_t l1UsedBytes() const override {
-    std::lock_guard<std::mutex> lk(mu_);
-    return cache_ ? cache_->l1UsedBytes() : 0;
-  }
-
-private:
-  std::shared_ptr<core::ResponseCache> cachePtr() {
-    std::lock_guard<std::mutex> lk(mu_);
-    return cache_;
-  }
-  void rebuild() {
-    std::lock_guard<std::mutex> lk(mu_);
-    cfg_ = core::detail::buildCacheConfig(appCfg_->load(), limits_);
-    cache_ = cfg_.enabled ? std::shared_ptr<core::ResponseCache>(core::ResponseCache::create(cfg_, sessionDir_))
-                          : nullptr;
-  }
-  core::AppConfigStore *appCfg_;
-  core::CacheLimits limits_;
-  std::string sessionDir_;
-  mutable std::mutex mu_;
-  core::CacheConfig cfg_;
-  std::shared_ptr<core::ResponseCache> cache_;
-};
-
-// --- Merged-vars helpers (Global base <- active env; cached in CoreApiClient::mergedVars) ---
-
 // Enabled keys of one env, definition order. Missing/corrupt file -> nothing.
 void appendEnabledKeys(IEnvironmentRepository *env, const std::string &name, std::vector<core::EnvKey> &out) {
   try {
@@ -139,8 +47,7 @@ void appendEnabledKeys(IEnvironmentRepository *env, const std::string &name, std
   } catch (...) {
   }
 }
-// Map view: Global first, active wins per key. Empty active value never shadows non-empty Global
-// (grid saves "" for blank cells).
+// Global first, active wins per key; empty active value never shadows non-empty Global (grid saves "" for blanks).
 void mergeVarsMap(const std::vector<core::EnvKey> &globalKeys, const std::vector<core::EnvKey> &activeKeys,
                   std::unordered_map<std::string, std::string> &map) {
   for (const auto &k : globalKeys) map[k.key] = k.value;
@@ -162,8 +69,7 @@ void mergeVarsOrdered(const std::vector<core::EnvKey> &globalKeys, const std::ve
     if (!shadowed) ordered.emplace_back(k.key, k.value);
   }
 }
-// Rebuild a domain GrpcRequest with its {{var}}-resolved target (immutable VO -> via Parts). Used by gRPC
-// reflection (resolve the host typed with {{vars}} before the descriptor pass).
+// Immutable VO -> rebuild via Parts with the {{var}}-resolved target.
 core::domain::GrpcRequest resolveGrpcTarget(const core::domain::GrpcRequest &g,
                                             const std::unordered_map<std::string, std::string> &um) {
   std::map<std::string, std::string> vm(um.begin(), um.end());
@@ -178,49 +84,6 @@ core::domain::GrpcRequest resolveGrpcTarget(const core::domain::GrpcRequest &g,
   p.tls = g.tls();
   return core::domain::GrpcRequest::create(std::move(p)).take();
 }
-// Concrete app-layer collection repository over CollectionStore. The store speaks the DOMAIN RequestModel
-// natively now, so load/save/create-from-model forward it directly (no bridge). The rest forward the
-// surviving TreeNode/RequestType ops.
-class CollectionRepository final : public ICollectionRepository {
-public:
-  explicit CollectionRepository(core::CollectionStore &s) : s_(s) {}
-  std::vector<core::TreeNode> scanLevel(const std::string &d) const override { return s_.scanLevel(d); }
-  core::TreeNode scanTree() const override { return s_.scanTree(); }
-  core::domain::RequestModel loadRequest(const std::string &r) const override { return s_.loadRequest(r); }
-  std::string saveRequest(const std::string &r, const core::domain::RequestModel &m) const override {
-    return s_.saveRequest(r, m);
-  }
-  std::map<std::string, std::string> loadBodyDrafts(const std::string &r) const override {
-    return s_.loadBodyDrafts(r);
-  }
-  std::string saveRequest(const std::string &r, const core::domain::RequestModel &m,
-                          const std::map<std::string, std::string> &drafts) const override {
-    return s_.saveRequest(r, m, drafts);
-  }
-  std::string createRequest(const std::string &f, core::RequestType t, const std::string &n) const override {
-    return s_.createRequest(f, t, n);
-  }
-  std::string createRequestFromModel(const std::string &f, core::domain::RequestModel m,
-                                     const std::string &n) const override {
-    return s_.createRequestFromModel(f, std::move(m), n);
-  }
-  std::string createFolder(const std::string &p, const std::string &n) const override {
-    return s_.createFolder(p, n);
-  }
-  std::string rename(const std::string &r, const std::string &n) const override { return s_.rename(r, n); }
-  std::string duplicate(const std::string &r) const override { return s_.duplicate(r); }
-  void remove(const std::string &r) const override { s_.remove(r); }
-  std::string move(const std::string &r, const std::string &d) const override { return s_.move(r, d); }
-  std::string reorder(const std::string &r, const std::string &d, int i) const override {
-    return s_.reorder(r, d, i);
-  }
-  std::string findRelPathById(const std::string &id) const override { return s_.findRelPathById(id); }
-
-private:
-  core::CollectionStore &s_;
-};
-
-// .env -> WsConfig / GrpcStreamLimits / CacheLimits builders (value-returning; keep create() under the size threshold).
 core::WsConfig buildWsConfig(const CoreApiClient::Config &cfg) {
   core::WsConfig ws; // 0 -> ws_sender default
   if (cfg.wsPingIntervalMs > 0) ws.pingIntervalMs = cfg.wsPingIntervalMs;
@@ -271,7 +134,7 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
                                                  : std::make_unique<core::AppConfigStore>(cfg.appConfigPath);
     c->ownAppConfig_->setDefaults(cfg.appDefaults);
     c->ownEnv_->attachAppConfig(c->ownAppConfig_.get()); // encrypt-at-rest key/exclude source
-    c->ownCollection_->setRequestDefaults(cfg.defaultTimeoutMs, cfg.defaultVerifyTls); // new-request .env defaults
+    c->ownCollection_->setRequestDefaults(cfg.defaultTimeoutMs, cfg.defaultVerifyTls);
     c->ownCollection_->ensureGitignore();
 
     c->collectionRepo_ = std::make_unique<CollectionRepository>(*c->ownCollection_);
@@ -289,13 +152,11 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
   c->senders_.push_back(std::make_unique<infra::WsSenderAdapter>(buildWsConfig(cfg)));
   c->senders_.push_back(std::make_unique<infra::KafkaSender>());
   c->senders_.push_back(std::make_unique<infra::NativeSoapSender>());
+  c->senders_.push_back(std::make_unique<infra::NativeLdapSender>());
 
   std::vector<d::IRequestSender *> ptrs;
   for (auto &s : c->senders_) ptrs.push_back(s.get());
-  // Two pools (tech-debt fix): a long-lived stream (WS/gRPC-stream/Kafka-consumer) used to share this SAME
-  // bounded pool with unary sends — enough concurrent streams could occupy every worker indefinitely and
-  // starve new unary requests behind them. RequestOrchestrator now classifies each send and routes
-  // accordingly; `pool` stays small/bounded (unary only), `streamPool` gives every stream its own thread.
+  // Long-lived streams (WS/gRPC-stream/Kafka-consumer) get their own pool so they can't starve unary sends.
   c->pool_ = std::make_unique<core::ThreadPool>();
   c->streamPool_ = std::make_unique<core::StreamPool>();
   core::ThreadPool *pool = c->pool_.get();
@@ -305,10 +166,8 @@ std::unique_ptr<CoreApiClient> CoreApiClient::create(Config cfg) {
   c->orchestrator_ = std::make_unique<RequestOrchestrator>(
       deps,
       [pool, streamPool](std::function<void()> job) {
-        // submit() takes the task BY VALUE -> pass a copy so `job` stays valid for the next fallback when
-        // a pool rejects it (full/stopped). Moving here would leave `job` empty -> bad_function_call.
-        // Falling back to streamPool (a fresh thread) before inline matters: inline means the UI thread
-        // runs the send, and a hung send there freezes the Cancel button along with everything else.
+        // submit() takes the task by value -> pass a copy so `job` stays valid for the next fallback.
+        // streamPool before inline: inline runs the send on the UI thread, where a hang freezes Cancel.
         if (!pool->submit(job) && !streamPool->submit(job)) job();
       },
       [streamPool](std::function<void()> job) {
@@ -351,9 +210,6 @@ void CoreApiClient::refreshVariableScope() {
 bool CoreApiClient::hasUnreadableVars() const { return mergedVars()->undecryptable; }
 
 std::string CoreApiClient::exportCurl(const core::domain::RequestModel &m) const {
-  // Resolve {{var}} on the domain model against the active env, then render the cURL/grpcurl command.
-  // toCurl reads config().tlsEnabledDefault for the gRPC -plaintext decision, so no legacy bridge or
-  // per-request-config replication is needed — domain end to end. No public ResolvedRequest type leaks out.
   d::VariableScope scope;
   scope.values = mergedVars()->map;
   auto r = resolver_->resolve(m, scope);
@@ -361,138 +217,7 @@ std::string CoreApiClient::exportCurl(const core::domain::RequestModel &m) const
 }
 
 core::domain::RequestModel CoreApiClient::aliasifyModel(const core::domain::RequestModel &model) const {
-  // Aliasify (literal -> {{alias}}) on the domain model: merged ordered vars + pure matchers (prefix for
-  // url/target, whole-value for kv/auth). Factory reject -> keep original. Never body/query/message.
-  auto snap = mergedVars();
-  const auto &vars = snap->ordered;
-  auto whole = [&](const std::string &s) -> std::string {
-    std::string out, key;
-    return core::VariableResolver::valueToAlias(s, vars, out, &key) ? out : s;
-  };
-  auto prefix = [&](const std::string &s) -> std::string {
-    std::string out, key;
-    return core::VariableResolver::prefixToAlias(s, vars, out, &key) ? out : s;
-  };
-  auto aliasUrl = [&](const d::Url &u) { return d::Url::create(prefix(u.raw())).take(); };
-  auto aliasHeaders = [&](const d::HeaderList &hl) {
-    std::vector<d::Header> out;
-    out.reserve(hl.items().size());
-    for (const auto &h : hl.items()) {
-      auto r = d::Header::create(h.name(), h.enabled() ? whole(h.value()) : h.value(), h.enabled());
-      out.push_back(r ? r.take() : h);
-    }
-    return d::HeaderList(std::move(out));
-  };
-  auto aliasParams = [&](const d::QueryParamList &pl) {
-    std::vector<d::QueryParam> out;
-    out.reserve(pl.items().size());
-    for (const auto &p : pl.items()) {
-      auto r = d::QueryParam::create(p.key(), p.enabled() ? whole(p.value()) : p.value(), p.enabled());
-      out.push_back(r ? r.take() : p);
-    }
-    return d::QueryParamList(std::move(out));
-  };
-  auto aliasPathVars = [&](const d::PathVariableList &pl) {
-    std::vector<d::PathVariable> out;
-    out.reserve(pl.items().size());
-    for (const auto &p : pl.items()) {
-      auto r = d::PathVariable::create(p.key(), p.enabled() ? whole(p.value()) : p.value(), p.enabled());
-      out.push_back(r ? r.take() : p);
-    }
-    return d::PathVariableList(std::move(out));
-  };
-  auto aliasMetadata = [&](const d::GrpcMetadata &md) {
-    std::vector<d::MetadataEntry> out;
-    out.reserve(md.entries().size());
-    for (const auto &e : md.entries()) out.push_back({e.key, e.enabled ? whole(e.value) : e.value, e.enabled});
-    auto r = d::GrpcMetadata::create(std::move(out));
-    return r ? r.take() : md;
-  };
-  auto aliasAuth = [&](const d::Auth &a) -> d::Auth {
-    return a.match([&](auto &&x) -> d::Auth {
-      using T = std::decay_t<decltype(x)>;
-      if constexpr (std::is_same_v<T, d::AuthNone>) return d::Auth::none();
-      else if constexpr (std::is_same_v<T, d::AuthBearer>) {
-        auto r = d::Auth::bearer(whole(x.token)); return r ? r.take() : a;
-      } else if constexpr (std::is_same_v<T, d::AuthBasic>) {
-        auto r = d::Auth::basic(whole(x.username), whole(x.password)); return r ? r.take() : a;
-      } else { // AuthOAuth2 — alias every user-typed string field (NOT a catch-all: keep branches
-               // explicit; a trailing else here once silently coerced new alternatives to Basic)
-        d::AuthOAuth2 o = x;
-        o.tokenUrl = whole(o.tokenUrl); o.clientId = whole(o.clientId);
-        o.clientSecret = whole(o.clientSecret); o.scope = whole(o.scope);
-        o.username = whole(o.username); o.password = whole(o.password);
-        auto r = d::Auth::oauth2(std::move(o)); return r ? r.take() : a;
-      }
-    });
-  };
-  auto payload = model.match([&](auto &&p) -> d::RequestModel::Payload {
-    using T = std::decay_t<decltype(p)>;
-    if constexpr (std::is_same_v<T, d::HttpRequest>) {
-      d::HttpRequest::Parts hp{p.method(), aliasUrl(p.url()), aliasPathVars(p.pathVariables()),
-                               aliasParams(p.params()), aliasHeaders(p.headers()), p.body(),
-                               aliasAuth(p.auth())};
-      return d::HttpRequest::create(std::move(hp)).take();
-    } else if constexpr (std::is_same_v<T, d::GrpcRequest>) {
-      d::GrpcRequest::Parts gp{prefix(p.target()), p.service(),         p.method(),
-                               p.methodType(),     p.message(),         aliasMetadata(p.metadata()),
-                               p.protoSource(),    p.tls()};
-      return d::GrpcRequest::create(std::move(gp)).take();
-    } else if constexpr (std::is_same_v<T, d::WebSocketRequest>) {
-      d::WebSocketRequest::Parts wp{aliasUrl(p.url()), p.subprotocols(), aliasHeaders(p.headers()),
-                                    aliasAuth(p.auth()), p.onOpenSend(), p.defaultSendKind()};
-      auto r = d::WebSocketRequest::create(std::move(wp));
-      return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
-    } else if constexpr (std::is_same_v<T, d::KafkaRequest>) {
-      // Alias brokers (prefix, like url/target) + topic/group (whole); message VALUE is body-like -> untouched.
-      auto aliasTopic = [&](const d::KafkaTopic &t) {
-        auto r = d::KafkaTopic::create(whole(t.value()));
-        return r ? r.take() : t;
-      };
-      auto aliasKafkaHeaders = [&](const std::vector<d::KafkaHeader> &hs) {
-        std::vector<d::KafkaHeader> out;
-        out.reserve(hs.size());
-        for (const auto &h : hs) out.push_back({h.key, h.enabled ? whole(h.value) : h.value, h.enabled});
-        return out;
-      };
-      auto brokers = d::BrokerList::parse(prefix(p.brokers().toBootstrapServers()));
-      d::BrokerList newBrokers = brokers ? brokers.take() : p.brokers();
-      auto mode = p.match([&](auto &&spec) -> d::KafkaRequest::Mode {
-        using S = std::decay_t<decltype(spec)>;
-        if constexpr (std::is_same_v<S, d::KafkaProduceSpec>) {
-          d::KafkaProduceSpec out = spec;
-          out.config.topic = aliasTopic(spec.config.topic);
-          if (out.message.key) out.message.key = d::MessageKey{whole(spec.message.key->value)};
-          out.message.headers = aliasKafkaHeaders(spec.message.headers);
-          return out;
-        } else {
-          d::KafkaConsumeSpec out = spec;
-          std::vector<d::KafkaTopic> topics;
-          for (const auto &t : spec.config.topics) topics.push_back(aliasTopic(t));
-          out.config.topics = std::move(topics);
-          auto g = d::ConsumerGroup::create(whole(spec.config.group.value()));
-          out.config.group = g ? g.take() : spec.config.group;
-          return out;
-        }
-      });
-      auto r = d::KafkaRequest::create(newBrokers, p.security(), std::move(mode));
-      return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
-    } else if constexpr (std::is_same_v<T, d::SoapRequest>) {
-      // Alias url + action + headers + auth; the envelope is body-like -> untouched.
-      d::SoapRequest::Parts sp{aliasUrl(p.url()), whole(p.action()), p.version(), p.envelope(),
-                               aliasHeaders(p.headers()), aliasAuth(p.auth())};
-      auto r = d::SoapRequest::create(std::move(sp));
-      return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
-    } else { // GraphQlRequest — alias url + headers + auth only (query/variables untouched)
-      d::GraphQlRequest::Parts gp{aliasUrl(p.url()), p.op(), aliasHeaders(p.headers()), aliasAuth(p.auth()),
-                                  p.subTransport(), p.wsProtocol()};
-      auto r = d::GraphQlRequest::create(std::move(gp));
-      return r ? d::RequestModel::Payload(r.take()) : d::RequestModel::Payload(p);
-    }
-  });
-  auto rebuilt =
-      d::RequestModel::create(model.id(), model.name(), model.seq(), model.config(), std::move(payload));
-  return rebuilt.isOk() ? rebuilt.take() : model;
+  return ::core::app::aliasifyModel(model, mergedVars()->ordered);
 }
 
 std::string CoreApiClient::resolvePreview(const std::string &tpl) const {
@@ -502,41 +227,7 @@ std::string CoreApiClient::resolvePreview(const std::string &tpl) const {
 }
 
 core::InteractionKind CoreApiClient::interactionOf(const core::domain::RequestModel &m) const {
-  // Native classification on the DOMAIN model (pure: gql operation / HTTP-SSE via Accept header / gRPC
-  // methodType). InteractionKind survives types.hpp (relocated to stream_events.hpp).
-  switch (m.type()) {
-  case d::RequestType::WebSocket:
-    return core::InteractionKind::Duplex;
-  case d::RequestType::GraphQl: {
-    const auto &g = std::get<d::GraphQlRequest>(m.payload());
-    return d::effectiveOperation(g) == d::GqlOperationType::Subscription
-               ? core::InteractionKind::ServerStream
-               : core::InteractionKind::Unary;
-  }
-  case d::RequestType::Http:
-    // SSE = an enabled Accept: text/event-stream header (the native HTTP sender forces SSE on this signal).
-    return d::acceptsEventStream(std::get<d::HttpRequest>(m.payload()))
-               ? core::InteractionKind::ServerStream
-               : core::InteractionKind::Unary;
-  case d::RequestType::Grpc: {
-    switch (std::get<d::GrpcRequest>(m.payload()).methodType()) {
-    case d::GrpcMethodType::ServerStreaming: return core::InteractionKind::ServerStream;
-    case d::GrpcMethodType::ClientStreaming: return core::InteractionKind::ClientStream;
-    case d::GrpcMethodType::BidiStreaming: return core::InteractionKind::BiDi;
-    default: return core::InteractionKind::Unary;
-    }
-  }
-  case d::RequestType::Soap:
-    return core::InteractionKind::Unary; // one envelope in, one envelope out — plain HTTP POST
-  case d::RequestType::Kafka: {
-    // Producer = unary (one delivery report); Consumer = server-stream (inbound-only records, no push —
-    // unlike WS's Duplex, cancel()/Stop is the only client->server signal, same shape as gRPC ServerStream).
-    const auto &k = std::get<d::KafkaRequest>(m.payload());
-    return k.kind() == d::KafkaClientKind::Consumer ? core::InteractionKind::ServerStream
-                                                     : core::InteractionKind::Unary;
-  }
-  }
-  return core::InteractionKind::Unary;
+  return d::interactionOf(m);
 }
 
 std::optional<d::ImportKind> CoreApiClient::detectImport(const std::string &text) const {
@@ -554,8 +245,7 @@ IResponseCacheRepository &CoreApiClient::cache() const { return *cacheRepo_; }
 
 d::Result<d::RequestExecutionId>
 CoreApiClient::send(const d::RequestModel &request, std::shared_ptr<d::IRequestObserver> observer) {
-  // Resolve {{vars}} at the boundary (mirrors Engine's resolve-before-send). On resolver failure, fall
-  // back to the unresolved request rather than dropping the send.
+  // Resolver failure -> send unresolved rather than dropping the send.
   if (resolver_) {
     auto resolved = resolver_->resolve(request, scope_);
     if (resolved.isOk()) return orchestrator_->send(resolved.value(), std::move(observer));
@@ -575,7 +265,6 @@ d::Status CoreApiClient::validateJson(const d::JsonText &t) { return orchestrato
 
 d::Result<std::vector<d::GrpcMethodDescriptor>>
 CoreApiClient::listGrpcMethods(const d::GrpcRequest &g) {
-  // Native reflection (no Engine): resolve {{var}} in the target, then run grpcdesc directly on domain types.
   auto resolved = resolveGrpcTarget(g, mergedVars()->map);
   std::string err;
   std::vector<d::GrpcMethodDescriptor> descs = grpcdesc::listGrpcMethods(resolved, err);
@@ -587,8 +276,7 @@ CoreApiClient::listGrpcMethods(const d::GrpcRequest &g) {
 d::Result<d::GqlSchema> CoreApiClient::introspectGraphQl(const d::RequestModel &request) {
   if (request.type() != d::RequestType::GraphQl)
     return d::Result<d::GqlSchema>::fail({d::ErrorCode::Validation, "not a graphql request", ""});
-  // Resolve {{vars}} against the CURRENT active env (fresh read, like listGrpcMethods — the UI may call
-  // this without a preceding refreshVariableScope). Resolver failure -> proceed unresolved, like send().
+  // Fresh env read (UI may skip refreshVariableScope); resolver failure -> proceed unresolved.
   d::VariableScope scope;
   scope.values = mergedVars()->map;
   d::RequestModel resolved = request;

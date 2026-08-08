@@ -1,4 +1,4 @@
-// deed test server — REFACTOR_SPEC e2e backend for the new domain stack (CoreApiClient).
+// deed e2e test server (HTTP + GraphQL + SSE + WebSocket).
 // Pure Go standard library (no external modules, builds offline). One process serves every request type the
 // app sends, on a single ephemeral port:
 //

@@ -1,11 +1,10 @@
-// url_util — shared URL utilities (percent-encoding decode, split query after '?').
-// Header-only (inline) -> usable in both infra/import and infra/transport without adding a CMake source.
+// Header-only so both infra/import and infra/transport can use it without a new CMake source.
 #pragma once
 
 #include <string>
 #include <vector>
 
-#include "infra/transport/shared/dto_common.hpp" // KeyValue (neutral; survives types.hpp removal)
+#include "infra/transport/shared/dto_common.hpp"
 
 namespace core::urlutil {
 
@@ -34,8 +33,7 @@ inline std::string urlDecode(const std::string& s) {
     return out;
 }
 
-// Split the query (after '?') off the url: url becomes RAW (drops '?...'), k=v pairs are
-// DECODED and pushed into params (enabled=true). No '?' -> no-op.
+// url keeps only the part before '?'; k=v pairs are DECODED into params (enabled=true). No '?' -> no-op.
 inline void splitUrlQuery(std::string& url, std::vector<KeyValue>& params) {
     size_t q = url.find('?');
     if (q == std::string::npos) return;

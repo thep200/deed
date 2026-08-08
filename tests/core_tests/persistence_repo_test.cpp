@@ -1,5 +1,4 @@
-// persistence_repo_test.cpp — REFACTOR_SPEC §6.3/§8.3: environment/session/appConfig repository ports
-// forward to the underlying stores. Verifies round-trips through the port interfaces (not the stores directly).
+// Round-trips go through the repository PORT interfaces, not the stores directly.
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -66,8 +65,7 @@ int run_persistence_repo_tests() {
   auto rc = cfg.load();
   PR_CHECK(rc.fontName == "Monaco" && rc.fontSize == 13, "appconfig repo round-trip");
 
-  // Collection store (the app-layer ICollectionRepository now returns DOMAIN models + its concrete adapter
-  // lives in composition_root; the store keeps the legacy surface tested here).
+  // Collection store (the legacy store surface; the domain ICollectionRepository adapter lives in composition_root).
   auto collRoot = root / "collection";
   fs::create_directories(collRoot);
   core::CollectionStore collStore(collRoot.string());

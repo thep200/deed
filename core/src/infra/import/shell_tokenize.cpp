@@ -7,8 +7,7 @@ namespace core {
 
 namespace {
 
-// Each scanner receives the index just AFTER the opening quote/marker, appends the unquoted content
-// to `cur`, and returns the index just past the closing quote (or n if unterminated).
+// Scanners take the index just after the opening quote and return the index past the closing one (n if unterminated).
 
 size_t scanSingleQuote(const std::string& in, size_t i, size_t n, std::string& cur) {
     while (i < n && in[i] != '\'') cur += in[i++];
@@ -41,11 +40,10 @@ size_t scanAnsiCQuote(const std::string& in, size_t i, size_t n, std::string& cu
     return i < n ? i + 1 : i;
 }
 
-// Handle a backslash at in[i]. A backslash before whitespace is a line continuation (dropped, the
-// whitespace separates next); otherwise it escapes the next char into `cur`. Returns the next index.
+// Backslash before whitespace is a line continuation (dropped); otherwise it escapes the next char.
 size_t handleBackslash(const std::string& in, size_t i, size_t n, std::string& cur, bool& inTok) {
     if (i + 1 < n && (in[i + 1] == '\n' || in[i + 1] == '\r' || in[i + 1] == ' ' || in[i + 1] == '\t'))
-        return i + 1; // drop only the backslash; the whitespace is handled as a separator next
+        return i + 1;
     if (i + 1 < n) { cur += in[i + 1]; inTok = true; return i + 2; }
     return i + 1;
 }

@@ -19,7 +19,7 @@ static NSString *const kEnvNone = @"ENV";
     if (!_apiClient) { [self toastWarn:StrToastOpenFolderFirst]; return; }
     NSMutableArray<NSString *> *items = [NSMutableArray array];
     for (const auto &name : _apiClient->environments().list()) [items addObject:N(name)];
-    if (!items.count) { [self toastWarn:StrToastNoEnvs]; return; }   // manage row moved to Settings
+    if (!items.count) { [self toastWarn:StrToastNoEnvs]; return; }
     NSString *active = N(_apiClient->session().getActiveEnv());
     NSInteger sel = [items indexOfObject:active]; if (sel == NSNotFound) sel = 0;
     __weak MainWindowController *ws = self;
@@ -61,7 +61,7 @@ static NSString *const kEnvNone = @"ENV";
     if ([dict[@"encryption_key"] isKindOfClass:[NSString class]])
         c.encryptionKey = [dict[@"encryption_key"] UTF8String];
     _apiClient->appConfig().save(c);
-    _apiClient->cache().reloadCacheConfig();   // apply new cap/threshold -> evict if smaller (§1.2)
+    _apiClient->cache().reloadCacheConfig();   // apply new cap/threshold -> evict if smaller
     // Key change alone re-encrypts nothing: the user re-toggles Enc per alias under the new key.
     [self applyConfiguredFontAndRefresh];
     return YES;
@@ -78,7 +78,7 @@ static NSString *const kEnvNone = @"ENV";
 
 - (void)enterConfig:(NSInteger)kind {
     if (!_apiClient) { [self toastWarn:StrToastOpenFolderFirst]; return; }
-    // §2.1: release the main pane's input context (URL/editor) before hiding it.
+    // Release the main pane's input context (URL/editor) before hiding it.
     OS9SafeEndEditing(_window, nil);
     [self autosaveCurrent];
     _configKind = kind;
@@ -108,7 +108,7 @@ static NSString *const kEnvNone = @"ENV";
 }
 
 - (void)exitConfig:(id)sender {
-    // §2.1: commit + release the editing field's input context (settings editor / env cell) BEFORE
+    // Commit + release the editing field's input context (settings editor / env cell) BEFORE
     // hiding the config pane — otherwise the hidden view still holds the input context -> crash in updateWindows.
     OS9SafeEndEditing(_window, nil);
     // Auto-save on back, for whichever screen is open.

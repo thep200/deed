@@ -1,4 +1,3 @@
-// core/domain/ports/driven/i_variable_resolver.hpp — substitute {{vars}} in a request (REFACTOR_SPEC §6.3).
 #pragma once
 
 #include <string>
@@ -9,7 +8,6 @@
 
 namespace core::domain {
 
-// The active environment's key/value bindings used to resolve {{placeholders}}.
 struct VariableScope {
   std::unordered_map<std::string, std::string> values;
 };
@@ -17,8 +15,7 @@ struct VariableScope {
 class IVariableResolver {
 public:
   virtual ~IVariableResolver() = default;
-  // Return a NEW request with placeholders resolved (immutable); fail if an undefined var is referenced
-  // (policy is the impl's choice).
+  // Returns a NEW resolved request; whether an undefined var fails is the impl's policy.
   virtual Result<RequestModel> resolve(const RequestModel &, const VariableScope &) const = 0;
 };
 

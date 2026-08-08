@@ -1,4 +1,3 @@
-// core/domain/http/http_request.hpp — HttpRequest aggregate payload (REFACTOR_SPEC §5.4).
 #pragma once
 
 #include <cctype>
@@ -29,9 +28,7 @@ public:
     Auth auth = Auth::none();
   };
 
-  // The url<->path-variable consistency is a use-case-layer concern (a missing binding is not rejected
-  // here) — the URL may legitimately contain `{{vars}}` or `:seg` resolved later. The factory therefore
-  // only assembles; structural URL/body checks happen in the use-case layer.
+  // Factory only assembles — the URL may contain `{{vars}}`/`:seg` resolved later; structural checks happen in the use-case layer.
   static Result<HttpRequest> create(Parts p) {
     return Result<HttpRequest>::ok(HttpRequest(std::move(p)));
   }
@@ -56,8 +53,7 @@ private:
   Parts p_;
 };
 
-// True when an enabled `Accept` header contains `text/event-stream` — the signal that forces the SSE path
-// (the model has no separate streamMode field). Case-insensitive, compared in place (no allocations).
+// An enabled `Accept: text/event-stream` header is THE signal that forces the SSE path — there is no streamMode field.
 inline bool acceptsEventStream(const HttpRequest &h) {
   constexpr const char *kAccept = "accept";
   constexpr const char *kEventStream = "text/event-stream";

@@ -1,4 +1,3 @@
-// core/domain/ports/driving/exec_id.hpp — handle identifying one in-flight request execution (REFACTOR_SPEC §6.1).
 #pragma once
 
 #include "core/domain/common/strong_string.hpp"

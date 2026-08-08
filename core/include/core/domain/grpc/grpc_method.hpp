@@ -1,4 +1,3 @@
-// core/domain/grpc/grpc_method.hpp — gRPC method type enum + descriptor (REFACTOR_SPEC §5.5).
 #pragma once
 
 #include <string>
@@ -27,7 +26,6 @@ inline Result<GrpcMethodType> parseGrpcMethodType(const std::string &s) {
   return Result<GrpcMethodType>::fail({ErrorCode::Validation, "unknown grpc methodType: " + s, "methodType"});
 }
 
-// One discoverable RPC (returned by IApiClient::listGrpcMethods for the service/method dropdown).
 struct GrpcMethodDescriptor {
   std::string service; // full pkg.Service
   std::string method;  // RPC name

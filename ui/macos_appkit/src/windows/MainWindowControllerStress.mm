@@ -101,7 +101,7 @@ static void StressCollectRels(const core::TreeNode &n, NSMutableArray<NSString *
     TreeItem *t = [_tree itemAtRow:(NSInteger)(r % (uint32_t)_tree.numberOfRows)];
     if (!t || t.relPath.length == 0) return;
     // Modal blocks the run loop -> schedule the abort first; the main-queue block runs in NSModalPanelRunLoopMode
-    // -> dialog opens, field becomes first responder, then auto-dismisses (goes through end-editing/orderOut §2.3).
+    // -> dialog opens, field becomes first responder, then auto-dismisses (end-editing/orderOut path).
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.02 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{ [NSApp abortModal]; });
     [self promptRenameItem:t];

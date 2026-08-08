@@ -1,12 +1,5 @@
-// stream_sink_test.cpp — gatekeeper for INV-1 (SPEC_grpc_streaming §12 AC-4, Appendix B).
-//
-// This translation unit includes ONLY the neutral stream contract + DTOs. It MUST NOT include any
-// transport header (grpc/grpcpp, protobuf, cpr, libcurl). If a future change leaks such a type into
-// the consumer side of the contract, this file stops compiling — that is the point.
-//
-// AC-1..3/AC-5 need a live server (Calc/fibonacci @ localhost:8765) and are exercised manually via the
-// CLI (`apicli send <root> <rel>`). Here we prove the CONTRACT + ordering with a transport-free producer:
-// a consumer written against IStreamSink alone receives open -> N×event(seq 0..N-1) -> close exactly once.
+// Transport-free gatekeeper: this TU must include NO transport header (grpc/grpcpp, protobuf, cpr, libcurl) — leaks stop the build.
+// The live legs need the Calc server @ localhost:8765 and run manually via the CLI (`apicli send <root> <rel>`).
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -24,14 +17,13 @@ int g_fail = 0;
         else { ++g_fail; std::printf("  FAIL: %s  (%s:%d)\n", msg, __FILE__, __LINE__); } \
     } while (0)
 
-// A consumer that depends on NOTHING but the contract — it records the call sequence to assert on.
-// This is exactly what a CLI harness, a cache writer, or the UI bridge is (minus the marshalling).
+// A consumer depending on NOTHING but the contract (what a CLI harness / cache writer / UI bridge is).
 class RecordingSink : public core::IStreamSink {
 public:
     int opens = 0;
     int closes = 0;
     std::vector<std::uint64_t> seqs;       // every event's seq, in arrival order
-    std::string assembled;                 // the array form, assembled by the consumer (Appendix A)
+    std::string assembled;                 // the array form, assembled by the consumer
     core::StreamEnd lastEnd;
     bool sawEventAfterClose = false;
     bool sawEventBeforeOpen = false;
@@ -53,11 +45,11 @@ public:
     }
 };
 
-// Transport-free producer: emits the §3 sequence (open -> n events -> close). Stands in for any sender.
+// Transport-free producer: emits open -> n events -> close. Stands in for any sender.
 void fakeServerStream(core::IStreamSink& sink, int n, core::StreamStatus status, bool truncated) {
     core::StreamMeta meta;
     meta.streamId = "fake-1";
-    meta.transport = core::StreamTransport::Sse;   // deliberately NOT Grpc — consumer must not care (INV-1)
+    meta.transport = core::StreamTransport::Sse;   // deliberately NOT Grpc — the consumer must not care
     sink.onStreamOpen(meta);
 
     std::uint64_t bytes = 0;
@@ -122,7 +114,6 @@ void test_cancelled_partial() {
 
 } // namespace
 
-// Called from test_main.cpp. Returns the number of failed checks (0 = all passed).
 int run_stream_sink_tests() {
     test_happy_path();
     test_empty_stream();

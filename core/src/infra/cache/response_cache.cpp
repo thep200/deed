@@ -1,6 +1,6 @@
 #include "core/infra/cache/cache.hpp"
 
-#include <utility>   // std::move
+#include <utility>
 
 #include "infra/cache/disk_cache_driver.hpp"
 #include "infra/cache/ram_cache_driver.hpp"
@@ -38,26 +38,24 @@ std::unique_ptr<ResponseCache> ResponseCache::create(const CacheConfig& cfg,
 
 std::optional<ResponseRecord> ResponseCache::get(const std::string& id) {
     if (id.empty()) return std::nullopt;
-    if (auto r = l1_->get(id)) return r;             // L1 hit (RAM first)
+    if (auto r = l1_->get(id)) return r;
     if (l2_) {
-        if (auto r = l2_->get(id)) {                 // L2 hit
+        if (auto r = l2_->get(id)) {
             std::uint64_t b = r->bytes ? r->bytes : estimateBytes(*r);
-            // M7: promotion to L1 isn't atomic with a concurrent remove() on L2. A remove between this read
-            // and the put could leave the entry in L1 after L2 dropped it — transient L1/L2 divergence that
-            // self-heals (a later get re-reads L2, a later remove clears both). Accepted for a response cache.
-            if (b < ramThresholdBytes_) l1_->put(id, *r, b);  // promote to RAM if small
+            // L1 promotion races a concurrent L2 remove(); transient L1/L2 divergence self-heals — accepted.
+            if (b < ramThresholdBytes_) l1_->put(id, *r, b);
             return r;
         }
     }
-    return std::nullopt;                             // miss
+    return std::nullopt;
 }
 
 void ResponseCache::put(const std::string& id, ResponseRecord r) {
     if (id.empty()) return;
     if (r.bytes == 0) r.bytes = estimateBytes(r);
     std::uint64_t b = r.bytes;
-    if (l2_) l2_->put(id, r, b);                          // write-through (read r, serialize -> disk)
-    if (b < ramThresholdBytes_) l1_->put(id, std::move(r), b);  // prefer RAM; move (last use of r)
+    if (l2_) l2_->put(id, r, b);                          // write-through; r still read here, moved below
+    if (b < ramThresholdBytes_) l1_->put(id, std::move(r), b);
     // b >= threshold -> disk only (does not occupy RAM)
 }
 

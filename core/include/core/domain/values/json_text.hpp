@@ -1,6 +1,3 @@
-// core/domain/values/json_text.hpp — JsonText value object (REFACTOR_SPEC §5.1).
-// Holds a raw JSON string ONLY. The domain never parses JSON; structural validity is checked by the
-// IJsonValidator port at the use-case layer. This keeps the golden rule (§0.4) intact.
 #pragma once
 
 #include <string>
@@ -8,6 +5,7 @@
 
 namespace core::domain {
 
+// Raw JSON string only — the domain never parses it; validity is checked by the IJsonValidator port.
 class JsonText {
 public:
   JsonText() = default;

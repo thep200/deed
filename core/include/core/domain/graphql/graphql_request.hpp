@@ -1,4 +1,3 @@
-// core/domain/graphql/graphql_request.hpp — GraphQlOperation + GraphQlRequest (REFACTOR_SPEC §5.6).
 #pragma once
 
 #include <string>
@@ -37,8 +36,7 @@ public:
     std::string wsProtocol; // only when subTransport == Ws
   };
 
-  // Invariants: query non-empty; a Subscription must use the Ws transport; when Ws, wsProtocol must be one
-  // of the two known sub-protocols.
+  // Invariants: query non-empty; Subscription requires the Ws transport; wsProtocol must be a known sub-protocol.
   static Result<GraphQlRequest> create(Parts p) {
     if (p.op.query.empty())
       return Result<GraphQlRequest>::fail({ErrorCode::Validation, "graphql query required", "graphql.query"});

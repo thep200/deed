@@ -1,4 +1,3 @@
-// thread_pool.hpp — small pool to run requests asynchronously (README §1, Phase 1).
 #pragma once
 
 #include <algorithm>
@@ -14,9 +13,8 @@ namespace core {
 
 class ThreadPool {
 public:
-    // maxQueue bounds the backlog (H1a): submit() refuses tasks past this so a runaway producer can't
-    // grow memory without bound. 0 -> unbounded. Streams/sessions no longer run here (they get dedicated
-    // threads) so this pool only carries short unary sends.
+    // maxQueue bounds the backlog (0 = unbounded); submit() refuses past it. Only short unary sends
+    // run here — streams get dedicated threads (StreamPool).
     explicit ThreadPool(unsigned n = 0, std::size_t maxQueue = 1024) : maxQueue_(maxQueue) {
         if (n == 0) n = std::max(2u, std::thread::hardware_concurrency());
         for (unsigned i = 0; i < n; ++i)

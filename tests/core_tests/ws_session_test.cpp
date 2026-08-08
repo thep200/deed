@@ -1,8 +1,5 @@
-// ws_session_test.cpp — gatekeeper for INV-1 on the duplex (send+recv) contract (SPEC_websocket AC-6/AC-7).
-//
-// This TU includes ONLY the neutral contracts + DTOs — never a transport header (curl/curl_ws). If a
-// future change leaks a transport type into the consumer side, this stops compiling. The live echo
-// (AC-1/AC-2) runs via the CLI: `apicli ws wss://ws.postman-echo.com/raw <msg>`.
+// Transport-free gatekeeper: this TU must include NO transport header (curl/curl_ws) — leaks stop the build.
+// The live echo runs via the CLI: `apicli ws wss://ws.postman-echo.com/raw <msg>`.
 #include <cstdio>
 #include <deque>
 #include <string>
@@ -42,7 +39,7 @@ public:
     std::size_t maxFrames = 4;
     bool open = true;
     bool sendText(const std::string& s) override {
-        if (!open || queue.size() >= maxFrames) return false;   // backpressure (§11)
+        if (!open || queue.size() >= maxFrames) return false;   // backpressure
         queue.push_back(s);
         return true;
     }
@@ -55,8 +52,7 @@ public:
     bool isOpen() const override { return open; }
 };
 
-// Transport-free duplex driver: open -> (consume the channel's queued sends as Outbound, echo each back
-// as Inbound) -> close. Stands in for WsSender to prove the contract is enough (no curl).
+// Transport-free duplex driver: open -> echo each queued send back as Inbound -> close. Stands in for WsSender.
 void fakeDuplexEcho(core::IStreamSink& sink, FakeChannel& ch) {
     core::StreamMeta meta;
     meta.streamId = "fake-ws";
@@ -125,7 +121,6 @@ void test_backpressure() {
 
 } // namespace
 
-// Called from test_main.cpp. Returns the number of failed checks.
 int run_ws_session_tests() {
     test_duplex_reuse();
     test_backpressure();

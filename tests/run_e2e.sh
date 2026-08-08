@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_e2e.sh — REFACTOR_SPEC e2e runner backed by the Go test servers.
+# e2e runner backed by the Go test servers.
 #   tests/testserver  (stdlib-only): HTTP echo + GraphQL + WebSocket on one ephemeral port.
 #   tests/grpcserver  (needs grpc-go in the module cache): reflection echo gRPC on its own port.
 # Builds + starts whichever servers the requested pairs need, runs each e2e binary against the right one,

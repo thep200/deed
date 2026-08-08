@@ -36,7 +36,6 @@
     }
 
 #if DEED_DEBUG_TOOLS
-    // Stress runner (STRESS_TEST.md §5) — only when DEED_STRESS=1 and built with DEED_DEBUG_TOOLS.
     if ([StressRunner enabledFromEnv]) {
         _stressRunner = [[StressRunner alloc] initWithController:self.mainWC];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
@@ -47,8 +46,7 @@
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app { return YES; }
 
-// Fix 2: flush deferred cache metadata on quit. C++ dtors (which would otherwise persist the cache index)
-// do NOT run on app terminate, so do it explicitly here.
+// C++ dtors do NOT run on app terminate -> flush deferred cache metadata explicitly.
 - (void)applicationWillTerminate:(NSNotification *)note { [self.mainWC flushCaches]; }
 
 - (void)openFolder:(id)sender  { [self.mainWC openFolder:sender]; }

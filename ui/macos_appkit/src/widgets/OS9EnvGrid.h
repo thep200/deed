@@ -1,8 +1,4 @@
-// OS9EnvGrid — self-drawn Platinum-style Environment table (SPEC §T1/§T2/§T3).
-// Matrix: row = alias, col = env. Self-draws header/zebra/grid/selection; only the edit
-// field uses a native NSTextField overlay when editing text. Inline actions: × delete env
-// in header (except a protected first column, see protectedFirstColumn), + add env,
-// "+ alias" row, × delete alias at row start. Does not use NSTableView.
+// Self-drawn env matrix (row=alias, col=env) — no NSTableView; only text editing uses a native NSTextField overlay.
 #import <Cocoa/Cocoa.h>
 
 @class OS9EnvGrid;

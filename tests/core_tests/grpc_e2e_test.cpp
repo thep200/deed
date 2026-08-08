@@ -1,7 +1,4 @@
-// grpc_e2e_test.cpp — REFACTOR_SPEC e2e for the gRPC path through the new domain stack: CoreApiClient ->
-// RequestOrchestrator -> SendRequestSaga -> LegacySenderAdapter(GrpcSender) -> grpc++ -> the Go reflection
-// echo server (tests/grpcserver). Covers server reflection (listGrpcMethods), a unary call, and a
-// server-streaming call. argv[1] is "grpc://host:port" (run_e2e strips nothing; we take host:port).
+// e2e against the Go reflection echo server (tests/grpcserver); argv[1] = "grpc://host:port".
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -80,7 +77,7 @@ int main(int argc, char **argv) {
   std::string arg = argc > 1 ? argv[1] : "grpc://127.0.0.1:18070";
   std::string target = arg;
   auto pos = target.find("://");
-  if (pos != std::string::npos) target = target.substr(pos + 3); // strip scheme -> host:port
+  if (pos != std::string::npos) target = target.substr(pos + 3);
   std::printf("== grpc_e2e (target=%s) ==\n", target.c_str());
 
   auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();

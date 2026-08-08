@@ -1,7 +1,3 @@
-// core/domain/auth/auth.hpp — Auth sum type (REFACTOR_SPEC §5.2).
-// Auth is DATA only: applying it to a request (Base64 for Basic, the Authorization header) is the
-// sender's job (infra), never the domain's. Custom auth headers/params (former "apikey" type) are just
-// entries in the Headers/Query tab — no dedicated alternative.
 #pragma once
 
 #include <string>
@@ -28,11 +24,9 @@ struct AuthBearer {
 };
 
 enum class OAuth2Grant { ClientCredentials, Password };
-// How the client authenticates at the token endpoint: Basic header (RFC 6749 §2.3.1 default) or
-// client_id/client_secret as form-body params (what some IdPs require).
+// Token-endpoint client auth: Basic header (RFC 6749 default) or client_id/secret as form-body params (some IdPs).
 enum class OAuth2ClientAuth { Header, Body };
-// OAuth2 CONFIG only — the fetched access token / expiry live in the infra token provider's cache,
-// never in the domain. Every field is a plain string so {{var}} may sit anywhere (incl. the secret).
+// Config only — fetched token/expiry live in the infra token provider; plain strings so {{var}} may sit anywhere.
 struct AuthOAuth2 {
   std::string tokenUrl;
   std::string clientId;

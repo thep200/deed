@@ -1,5 +1,3 @@
-// core/domain/ports/driving/i_api_client.hpp — driving port UI -> App (REFACTOR_SPEC §6.1).
-// Only domain objects cross this boundary. Returns a RequestExecutionId handle to track/cancel/interact.
 #pragma once
 
 #include <memory>
@@ -22,13 +20,12 @@ class IApiClient {
 public:
   virtual ~IApiClient() = default;
 
-  // Send (unary or stream init). The observer receives every event for this execution's lifecycle.
+  // The observer receives every event for this execution's lifecycle.
   virtual Result<RequestExecutionId> send(const RequestModel &request,
                                           std::shared_ptr<IRequestObserver> observer) = 0;
 
   virtual Status cancel(RequestExecutionId exec) = 0;
-  // Kill every in-flight execution. The Cancel button's escalation step — it must stop a hung connection
-  // even when the caller's exec handle is stale or not stored yet.
+  // Kill every in-flight execution — must work even when the caller's exec handle is stale or not stored yet.
   virtual Status cancelAll() = 0;
 
   // Interactive streaming / WS (Unsupported if the type doesn't allow it).
@@ -39,7 +36,7 @@ public:
   // Non-sending use-cases (synchronous, pure domain).
   virtual Status validateJson(const JsonText &) = 0;
   virtual Result<std::vector<GrpcMethodDescriptor>> listGrpcMethods(const GrpcRequest &) = 0;
-  // Fetch the endpoint's schema via the standard introspection query (synchronous — call off-main).
+  // Synchronous — call off-main.
   virtual Result<GqlSchema> introspectGraphQl(const RequestModel &) = 0;
 };
 

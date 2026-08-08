@@ -1,10 +1,7 @@
-// UiObserver — adapts the new domain port core::domain::IRequestObserver to the existing CoreResponseSink
-// (REFACTOR_SPEC P6 UI flip). Reuses ALL existing response handling by converting domain ResponseEvents back
-// to the legacy callbacks on the main queue (same marshaling contract as UiDelegateBridge).
-//   Unary mode:     EvCompleted -> onCoreResponse,  EvFailed -> onCoreError.
-//   Streaming mode: EvStarted -> onStreamOpenTransport (reset pane, '['),  EvMessage -> onStreamChunk,
-//                   EvCompleted/EvClosed -> onStreamClose(Ok),  EvFailed -> onStreamClose(error).
-// Used for server-stream (gRPC/SSE) and WebSocket sessions. One observer per send (carries its own state).
+// Adapts domain IRequestObserver events to CoreResponseSink on the main queue; ONE observer per send.
+//   Unary:     EvCompleted -> onCoreResponse,  EvFailed -> onCoreError.
+//   Streaming: EvStarted -> onStreamOpenTransport,  EvMessage -> onStreamChunk,
+//              EvCompleted/EvClosed -> onStreamClose(Ok),  EvFailed -> onStreamClose(error).
 #pragma once
 
 #import <Cocoa/Cocoa.h>
@@ -14,7 +11,7 @@
 #include <mutex>
 #include <string>
 
-#include "bridge/CoreBridge.h" // CoreResponseSink + legacy DTOs + StreamStatus
+#include "bridge/CoreBridge.h" // CoreResponseSink + StreamStatus
 #include "core/domain/ports/driven/i_request_observer.hpp"
 #include "core/domain/response/response_event.hpp"
 #include "core/infra/serialization/field_json.hpp" // core::serial::kafkaRecordToDisplayJson (UI-only pretty-print)
@@ -38,7 +35,6 @@ public:
       }
       return;
     }
-    // --- streaming ---
     if (ev.is<EvStarted>()) {
       openStream();
     } else if (const auto *m = ev.get<EvMessage>()) {

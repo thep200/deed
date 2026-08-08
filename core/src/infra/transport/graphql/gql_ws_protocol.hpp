@@ -1,11 +1,6 @@
-// infra/transport/graphql/gql_ws_protocol.hpp — the GraphQL-over-WebSocket protocol layer (SPEC_graphql §6).
-// PURE: it speaks `graphql-transport-ws` (modern) / `graphql-ws` legacy purely in terms of raw text frames
-// in (onFrame) and a sendRaw callback out — NO libcurl/curl_ws. It translates the connection_init/ack/
-// subscribe/next/error/complete envelope into clean StreamEvents on a UI IStreamSink, so the UI sees a
-// plain server-stream (INV-1). Reusable + unit-testable with a fake transport (AC-7).
-//
-// §6.1 naming trap: subprotocol `graphql-transport-ws` <-> library graphql-ws (modern, default);
-//                   subprotocol `graphql-ws`           <-> library subscriptions-transport-ws (legacy).
+// Pure protocol layer: raw text frames in (onFrame), a sendRaw callback out — no libcurl/curl_ws, so it
+// unit-tests with a fake transport. Naming trap: subprotocol `graphql-transport-ws` <-> library graphql-ws
+// (modern, default); subprotocol `graphql-ws` <-> library subscriptions-transport-ws (legacy).
 #pragma once
 
 #include <cstdint>

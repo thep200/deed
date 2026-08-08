@@ -116,8 +116,7 @@
     NSRectFill(_listRect);
     NSDictionary *norm = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor blackColor]};
     NSDictionary *hi   = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor whiteColor]};
-    // Truncating "…" variant built ONCE before the loop (shared constant paragraph style) — previously
-    // alloc'd NSMutableParagraphStyle + mutableCopy per row.
+    // Truncating "…" variant built ONCE before the loop (shared constant paragraph style, no per-row alloc).
     NSParagraphStyle *trunc = [OS9Theme truncatingTailStyle];
     NSDictionary *normTr = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor blackColor], NSParagraphStyleAttributeName : trunc};
     NSDictionary *hiTr   = @{NSFontAttributeName : [OS9Theme uiFont], NSForegroundColorAttributeName : [NSColor whiteColor], NSParagraphStyleAttributeName : trunc};

@@ -1,4 +1,3 @@
-// OS9Glyphs — hand-drawn icons via NSBezierPath (split from OS9Widgets).
 #import <Cocoa/Cocoa.h>
 
 // Draw a classic cog icon of given size — used for the Settings button.

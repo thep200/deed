@@ -1,4 +1,3 @@
-// core/domain/ports/driven/i_response_sink.hpp — where a sender pushes lifecycle events (REFACTOR_SPEC §6.3).
 #pragma once
 
 #include "core/domain/response/response_event.hpp"

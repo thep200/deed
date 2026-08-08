@@ -1,5 +1,4 @@
-// soap_test.cpp — SOAP -> HTTP packaging (version header policy), faultstring extraction, and the
-// conservative XML indenter (SPEC_soap §4/§5). Pure fixtures, no network.
+// Pure fixtures, no network.
 #include <cstdio>
 #include <string>
 
@@ -104,7 +103,7 @@ int run_soap_tests() {
     check(infra::soap::extractFaultString("<ok/>").empty(), "no fault -> empty");
   }
 
-  // formatXml (SPEC_soap §5) — conservative indenter.
+  // formatXml — conservative indenter.
   {
     std::string in = "<a><b attr=\"1\">x</b><c/></a>";
     std::string out = serial::formatXml(in);

@@ -1,4 +1,3 @@
-// core/domain/values/header.hpp — Header value object + HeaderList (REFACTOR_SPEC §5.1).
 #pragma once
 
 #include <algorithm>
@@ -15,8 +14,7 @@ namespace core::domain {
 
 struct HeaderTag {};
 
-// Invariant: when enabled, name must be a non-empty, valid HTTP field-name token (RFC 7230 tchar).
-// A disabled header may have an empty name (it is ignored on send).
+// An enabled header needs a non-empty RFC 7230 token name; a disabled one may be empty (ignored on send).
 class Header : public detail::KeyValueEntry<HeaderTag> {
 public:
   static Result<Header> create(std::string name, std::string value, bool enabled = true) {
@@ -51,7 +49,7 @@ private:
   }
 };
 
-// Ordered list with the usual conveniences; order is preserved and duplicates allowed.
+// Order is preserved and duplicates allowed.
 class HeaderList {
 public:
   HeaderList() = default;

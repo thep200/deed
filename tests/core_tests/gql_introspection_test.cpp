@@ -1,5 +1,4 @@
-// gql_introspection_test.cpp — SDL printer + introspection-body handling (the Schema response tab).
-// Pure fixture tests: no network — runIntrospection's HTTP leg is covered by manual/e2e runs.
+// Pure fixtures, no network — runIntrospection's HTTP leg is covered by manual/e2e runs.
 #include <cstdio>
 #include <string>
 
@@ -71,7 +70,6 @@ int run_gql_introspection_tests() {
     check(!has(q, "isRepeatable"), "query stays pre-2021 (no isRepeatable)");
   }
 
-  // SDL rendering of the fixture.
   {
     auto r = gql::sdlFromIntrospectionJson(kFixture);
     check(r.isOk(), "fixture renders");
@@ -96,7 +94,6 @@ int run_gql_introspection_tests() {
     check(!has(sdl, "directive @skip"), "built-in directive skipped");
   }
 
-  // Body-shape handling.
   {
     check(gql::sdlFromIntrospectionJson(R"({"__schema":{"types":[]}})").isOk(),
           "bare __schema (no data wrapper) accepted");

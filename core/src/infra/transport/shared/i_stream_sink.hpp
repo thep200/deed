@@ -1,13 +1,7 @@
-// infra/transport/shared/i_stream_sink.hpp — the reusable stream-receiving contract (SPEC_grpc_streaming §3).
-// INV-1: UI (and any consumer) depends ONLY on this + the StreamEvent DTO — never on a transport type
-// (grpc/cpr/libcurl/protobuf). A new transport = a new sender that emits StreamEvent; consumers untouched.
-//
-// Call contract every sender MUST honor:
-//   1. exactly one onStreamOpen first,
-//   2. 0..N onStreamEvent with seq 0,1,2,… (contiguous),
-//   3. exactly one onStreamClose last (even on error/cancel/empty).
-//   4. all callbacks of ONE stream run sequentially (sender guarantees), but may be on a background
-//      thread — the consumer marshals to its UI thread itself (§6).
+// Consumers depend only on this + StreamEvent — never on a transport type.
+// Contract: exactly one onStreamOpen first; 0..N onStreamEvent with contiguous seq 0,1,2,…; exactly one
+// onStreamClose last (even on error/cancel/empty). Callbacks of one stream run sequentially, but may be
+// on a background thread — the consumer marshals to its UI thread itself.
 #pragma once
 
 #include "infra/transport/shared/stream_events.hpp"

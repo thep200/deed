@@ -1,4 +1,3 @@
-// Small OS9-style label (borderless NSTextField) + vertically centered variant.
 #import <Cocoa/Cocoa.h>
 
 // Small OS9-style label (borderless NSTextField).

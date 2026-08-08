@@ -7,7 +7,7 @@ namespace d = core::domain;
 
 d::Result<d::RequestModel> CollectionRepository::load(const std::string &relPath) const {
   try {
-    return d::Result<d::RequestModel>::ok(store_->loadRequest(relPath)); // store speaks domain now
+    return d::Result<d::RequestModel>::ok(store_->loadRequest(relPath));
   } catch (const std::exception &e) {
     return d::Result<d::RequestModel>::fail({d::ErrorCode::NotFound, e.what(), relPath});
   }

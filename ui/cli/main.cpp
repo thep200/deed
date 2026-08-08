@@ -1,5 +1,3 @@
-// ui/cli — headless adapter to run Core without a GUI. Drives the domain stack (CoreApiClient) directly;
-// no Engine. A blocking observer collects the async ResponseEvents and prints them for the command.
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -95,6 +93,7 @@ int usage() {
                "  apicli import-curl <curl command...>\n"
                "  apicli import-grpc <grpc spec...>\n"
                "  apicli import-graphql <query | curl...>\n"
+               "  apicli import-ldap <ldapsearch command | ldap:// url>\n"
                "  apicli grpc-list <host:port>\n"
                "  apicli ws <url> [message]\n"
                "  apicli sse <url> [seconds]\n"
@@ -119,20 +118,7 @@ std::string joinArgs(int argc, char **argv, int from) {
   return s;
 }
 
-const char *typeLabel(d::RequestType t) {
-  switch (t) {
-  case d::RequestType::Http: return "http";
-  case d::RequestType::Grpc: return "grpc";
-  case d::RequestType::GraphQl: return "graphql";
-  case d::RequestType::WebSocket: return "ws";
-  case d::RequestType::Kafka: return "kafka";
-  case d::RequestType::Soap: return "soap";
-  }
-  return "http";
-}
-
-// Send a domain model through CoreApiClient and print the result. Handles unary, server-stream/SSE
-// (bounded wait then cancel), and WebSocket (wait inbound then close).
+// Send a domain model and print the result: unary waits; server-stream/SSE bounded-wait then cancel; WebSocket waits inbound then closes.
 int sendDomain(CoreApiClient &client, const d::RequestModel &m, int streamSecs) {
   auto obs = std::make_shared<CliObserver>();
   client.refreshVariableScope();
@@ -169,8 +155,8 @@ int main(int argc, char **argv) {
     }
     if (cmd == "send" && argc >= 4) {
       auto client = CoreApiClient::create(CoreApiClient::Config{argv[2]});
-      auto m = client->collection().loadRequest(argv[3]); // domain RequestModel
-      std::cout << "Sending: " << m.name() << " (" << typeLabel(m.type()) << ")\n";
+      auto m = client->collection().loadRequest(argv[3]);
+      std::cout << "Sending: " << m.name() << " (" << core::toString(m.type()) << ")\n";
       return sendDomain(*client, m, argc >= 5 ? std::atoi(argv[4]) : 8);
     }
     if (cmd == "resolve" && argc >= 4) {
@@ -240,7 +226,7 @@ int main(int argc, char **argv) {
     }
     if (cmd == "import-curl" && argc >= 3) {
       core::CurlImporter imp;
-      auto r = imp.parse(joinArgs(argc, argv, 2)); // domain RequestModel out
+      auto r = imp.parse(joinArgs(argc, argv, 2));
       if (!r.ok || !r.model) { std::cerr << "Import error: " << r.error << "\n"; return 1; }
       const auto &h = std::get<core::domain::HttpRequest>(r.model->payload());
       std::cout << "Imported HTTP OK: " << core::domain::toString(h.method()) << " " << h.url().raw()
@@ -254,6 +240,20 @@ int main(int argc, char **argv) {
       if (!r.ok || !r.model) { std::cerr << "Import error: " << r.error << "\n"; return 1; }
       const auto &g = std::get<core::domain::GrpcRequest>(r.model->payload());
       std::cout << "Imported gRPC OK: target=" << g.target() << " (Service/Method picked after import)\n";
+      return 0;
+    }
+    if (cmd == "import-ldap" && argc >= 3) {
+      core::LdapImporter imp;
+      auto r = imp.parse(joinArgs(argc, argv, 2));
+      if (!r.ok || !r.model) { std::cerr << "Import error: " << r.error << "\n"; return 1; }
+      const auto &l = std::get<core::domain::LdapRequest>(r.model->payload());
+      std::cout << "Imported LDAP OK: " << l.url().raw() << (l.startTls() ? " (StartTLS)" : "")
+                << "\n  bindDn=" << l.bindDn() << " baseDn=" << l.baseDn()
+                << " scope=" << core::domain::toString(l.scope())
+                << "\n  filter=" << core::domain::composeLdapFilter(l.filter(), l.group())
+                << "\n  attrs=" << l.attributes().size() << " sizeLimit=" << l.sizeLimit()
+                << " timeLimit=" << l.timeLimit() << " pageSize=" << l.pageSize() << "\n";
+      for (const auto &u : r.unknown) std::cout << "  skipped: " << u << "\n";
       return 0;
     }
     if (cmd == "import-graphql" && argc >= 3) {

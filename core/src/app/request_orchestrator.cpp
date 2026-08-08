@@ -4,42 +4,30 @@
 #include <utility>
 #include <vector>
 
-#include "core/domain/http/http_request.hpp" // acceptsEventStream (SSE classifier)
+#include "core/domain/http/http_request.hpp"
 
 namespace core::app {
 namespace d = core::domain;
 
 namespace {
 
-// Long-lived == the sender's execute() blocks indefinitely (until the user stops it / the peer closes),
-// as opposed to a bounded call that returns once its own data is exhausted. Used ONLY to pick an executor
-// (StreamPool vs the small unary ThreadPool) — NOT a general interaction classifier (see CoreApiClient::
-// interactionOf for that). Erring towards "true" here is safe (just uses the bigger/unbounded pool for a
-// request that happens to finish quickly); erring towards "false" is NOT (recreates the starvation bug).
+// Long-lived == execute() blocks until user stop / peer close; picks the executor only, not interactionOf.
+// Over-classifying is safe, erring "false" recreates pool starvation. One overload per type -> compile error for new types.
+bool longLivedTyped(const d::HttpRequest &p) { return d::acceptsEventStream(p); }
+bool longLivedTyped(const d::GrpcRequest &p) {
+  auto mt = p.methodType();
+  return mt == d::GrpcMethodType::ServerStreaming || mt == d::GrpcMethodType::BidiStreaming;
+}
+bool longLivedTyped(const d::GraphQlRequest &p) {
+  return p.subTransport() == d::GqlSubTransport::Ws;
+}
+bool longLivedTyped(const d::WebSocketRequest &) { return true; }
+bool longLivedTyped(const d::KafkaRequest &p) { return p.kind() == d::KafkaClientKind::Consumer; }
+bool longLivedTyped(const d::SoapRequest &) { return false; }
+bool longLivedTyped(const d::LdapRequest &) { return false; }
+
 bool isLongLivedSend(const d::RequestModel &request) {
-  switch (request.type()) {
-  case d::RequestType::WebSocket:
-    return true; // duplex session, open until the user disconnects
-  case d::RequestType::Grpc: {
-    auto mt = std::get<d::GrpcRequest>(request.payload()).methodType();
-    // Client-streaming sends a pre-built list of messages then awaits ONE response (bounded, like unary) —
-    // only server-stream/bidi keep the call open waiting on the PEER indefinitely.
-    return mt == d::GrpcMethodType::ServerStreaming || mt == d::GrpcMethodType::BidiStreaming;
-  }
-  case d::RequestType::GraphQl:
-    // Only a ws-subTransport subscription is actually long-lived (native_graphql_sender.cpp's
-    // runSubscription); a plain HTTP query/mutation is bounded. Approximated by subTransport alone (no
-    // infra dependency to check the operation kind) — a ws-transport query/mutation would be slightly
-    // over-classified as "streaming", which is the safe direction per the note above.
-    return std::get<d::GraphQlRequest>(request.payload()).subTransport() == d::GqlSubTransport::Ws;
-  case d::RequestType::Http:
-    return d::acceptsEventStream(std::get<d::HttpRequest>(request.payload()));
-  case d::RequestType::Kafka:
-    return std::get<d::KafkaRequest>(request.payload()).kind() == d::KafkaClientKind::Consumer;
-  case d::RequestType::Soap:
-    return false; // one bounded HTTP POST
-  }
-  return false;
+  return request.match([](const auto &p) { return longLivedTyped(p); });
 }
 
 } // namespace
@@ -47,7 +35,7 @@ bool isLongLivedSend(const d::RequestModel &request) {
 RequestOrchestrator::RequestOrchestrator(SendRequestSaga::Deps deps, Executor unaryExec, Executor streamExec)
     : deps_(std::move(deps)), unaryExecutor_(std::move(unaryExec)), streamExecutor_(std::move(streamExec)) {
   auto inlineExec = [](std::function<void()> job) { job(); };
-  if (!unaryExecutor_) unaryExecutor_ = inlineExec;   // default: inline (synchronous), same as before the split
+  if (!unaryExecutor_) unaryExecutor_ = inlineExec;
   if (!streamExecutor_) streamExecutor_ = inlineExec;
 }
 
@@ -75,7 +63,7 @@ RequestOrchestrator::send(const d::RequestModel &request,
   Executor exe = isLongLivedSend(request) ? streamExecutor_ : unaryExecutor_;
   exe([this, saga, observer, exec]() {
     saga->run(*observer);
-    std::lock_guard<std::mutex> lk(mu_); // drop terminal saga (lifecycle done)
+    std::lock_guard<std::mutex> lk(mu_);
     sagas_.erase(exec);
   });
   return d::Result<d::RequestExecutionId>::ok(exec);

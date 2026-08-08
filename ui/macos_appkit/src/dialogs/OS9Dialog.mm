@@ -5,7 +5,6 @@
 #import "widgets/OS9BevelButton.h"
 #import "widgets/OS9SerratedInset.h"
 
-// --- Metrics (CUSTOM_DIALOG §8) ---
 static const CGFloat kPad = 16;
 static const CGFloat kBtnGap = 8;
 static const CGFloat kBtnMinW = 70;
@@ -246,7 +245,7 @@ static const CGFloat kFieldH = 22;
     NSRect mb = message.length ? [self measureMessage:message width:contentW - 2 * kPad] : NSZeroRect;
     CGFloat msgH = message.length ? MAX(16, ceil(mb.size.height)) : 0;
 
-    // Error line uses the dialog's UI font (was a small fixed 10pt) -> size the row to fit it.
+    // Error line uses the dialog's UI font -> size the row to fit it.
     CGFloat errH = ceil([[OS9Theme uiFont] ascender] - [[OS9Theme uiFont] descender]) + 4;
     CGFloat contentH = topInset + (msgH ? msgH + kBtnGap : 0) + kFieldH + 4 + errH + kPad + kBtnH + kPad;
     [self buildWindowWidth:contentW height:contentH movable:YES title:title icon:OS9AlertNone];
@@ -328,7 +327,7 @@ static const CGFloat kFieldH = 22;
                                                 backing:NSBackingStoreBuffered defer:NO];
     _win.opaque = NO;
     _win.hasShadow = YES;
-    _win.releasedWhenClosed = NO;   // §2.3: controller holds a strong ref for the modal's lifetime; ARC manages lifecycle
+    _win.releasedWhenClosed = NO;   // controller holds a strong ref for the modal's lifetime; ARC manages lifecycle
     _win.level = NSModalPanelWindowLevel;
     __weak OS9DialogController *ws = self;
     _win.onReturn = ^{ [ws fireDefault]; };
@@ -344,7 +343,7 @@ static const CGFloat kFieldH = 22;
     [_win makeKeyAndOrderFront:nil];
     if (fr) { [_win makeFirstResponder:fr]; if ([fr isKindOfClass:[NSTextField class]]) [(NSTextField *)fr selectText:nil]; }
     NSInteger code = [NSApp runModalForWindow:_win];
-    // §2.3: deactivate the input field's input context (rename) WHILE the window is alive, THEN close.
+    // Deactivate the input field's input context WHILE the window is alive, THEN close.
     OS9SafeEndEditing(_win, _field);
     [_win orderOut:nil];
     return code;

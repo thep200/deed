@@ -1,12 +1,12 @@
 #import "windows/TreeViews.h"
 
+#import "app/NsBridge.h"
 #import "theme/OS9Theme.h"
+#import "windows/typeui/RequestTypeUi.h"
 
 #include <string>
 
 NSString *const kTreeDragType = @"com.example.deed.request";
-
-static inline NSString *N(const std::string &s) { return [NSString stringWithUTF8String:s.c_str()]; }
 
 @implementation TreeItem
 @end
@@ -23,14 +23,8 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
         it.requestType = n.requestType;
         it.grpc = (n.requestType == core::RequestType::Grpc);
         it.badge = [NSString stringWithFormat:@"%s %s", core::toString(n.requestType).c_str(), n.methodOrType.c_str()];
-        // HTTP -> method name (GET/POST...); gRPC -> "gRPC"; WebSocket -> "WS"; GraphQL -> "GQL";
-        // Kafka -> "KAFKA"; SOAP -> "SOAP" (methodOrType is empty for method-less types).
-        it.mark = it.grpc ? @"gRPC"
-                : (n.requestType == core::RequestType::WebSocket) ? @"WS"
-                : (n.requestType == core::RequestType::GraphQl) ? @"GQL"
-                : (n.requestType == core::RequestType::Kafka) ? @"KAFKA"
-                : (n.requestType == core::RequestType::Soap) ? @"SOAP"
-                : N(n.methodOrType);
+        // HTTP -> method name (GET/POST...); every other type -> its fixed binder mark.
+        it.mark = [TypeUiFor(n.requestType) treeMark:N(n.methodOrType)];
     }
     return it;
 }
@@ -112,13 +106,12 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
 
 - (void)hideDropFeedback { _dropIndicator.hidden = YES; }
 
-- (NSInteger)dropRowAtPoint:(NSPoint)p belowMidline:(BOOL *)below {
+- (CGFloat)rowFractionAtPoint:(NSPoint)p {
     NSInteger row = [self rowAtPoint:p];
-    if (below) {
-        NSRect r = row >= 0 ? [self rectOfRow:row] : NSZeroRect;
-        *below = row >= 0 && p.y > NSMidY(r);
-    }
-    return row;
+    if (row < 0) return -1;
+    NSRect r = [self rectOfRow:row];
+    if (r.size.height <= 0) return -1;
+    return (p.y - NSMinY(r)) / r.size.height;
 }
 
 // NSDraggingDestination methods are OPTIONAL: calling super blindly can hit a class that does not
@@ -154,7 +147,6 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n) {
 }
 @end
 
-// --- Row geometry (matches OS9 Platinum reference, SPEC §2) ---
 static const CGFloat kTreeLeftMargin = 5;   // left margin for disclosure triangle (from panel inner edge)
 static const CGFloat kTreeGutterW   = 19;   // disclosure-triangle cell (before folder icon) = margin + triangle
 static const CGFloat kTreeIconW     = 16;   // folder icon
@@ -175,9 +167,8 @@ static NSString *TreeEllipsize(NSString *s, CGFloat maxW, NSDictionary *attrs) {
     return [[s substringToIndex:lo] stringByAppendingString:e];
 }
 
-// --- Pixel-art disclosure arrows (source: assets/Position={Down,Right}…Purple.svg) ---
-// Each pixel = half a point (SVG 8x8pt, 0.5 grid) -> crisp 1:1 on Retina. Converted the
-// purple gradient to gray (R==G in every purple, so use the R channel as gray level); #262626 border kept.
+// Pixel-art disclosure arrows from assets/Position={Down,Right}…Purple.svg: each pixel = half a point
+// (crisp 1:1 on Retina); purple gradient converted to gray (R channel), #262626 border kept.
 typedef struct { unsigned char x, y, gray; float a; } TreePx;
 
 // ▽ pointing down (folder open) — 16x10 half-pt = 8x5 pt.

@@ -69,8 +69,7 @@ Environment EnvironmentStore::encryptedForDisk(const Environment& e) const {
     if (!appCfg_) return e;
     AppConfig cfg = appCfg_->load();
     if (cfg.encryptionKey.empty()) return e;
-    // Stored ciphertext reused when the plaintext is unchanged -> only actually-changed keys re-encrypt
-    // (no nonce re-roll, byte-stable files).
+    // Reuse stored ciphertext when the plaintext is unchanged — no nonce re-roll, byte-stable files.
     std::unordered_map<std::string, std::string> stored;
     {
         std::string txt;

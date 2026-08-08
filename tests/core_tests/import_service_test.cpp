@@ -1,5 +1,3 @@
-// import_service_test.cpp — REFACTOR_SPEC P6: IImportService detect + parse into a DOMAIN RequestModel.
-// Pure (no network). Verifies cURL/grpcurl/GraphQL are classified and parsed into the right domain type.
 #include <cstdio>
 #include <string>
 
@@ -49,6 +47,15 @@ int run_import_service_tests() {
     IM_CHECK(r.isOk() && r.value().model.type() == RequestType::Grpc, "grpcurl -> Grpc");
   }
 
+  // ldapsearch -> LDAP
+  const std::string ldap = "ldapsearch -x -H ldap://dir:389 -b dc=x '(uid=bob)'";
+  auto kLdap = svc.detect(ldap);
+  IM_CHECK(kLdap && *kLdap == ImportKind::Ldap, "detect ldapsearch");
+  if (kLdap) {
+    auto r = svc.import(ldap, *kLdap);
+    IM_CHECK(r.isOk() && r.value().model.type() == RequestType::Ldap, "ldapsearch -> Ldap");
+  }
+
   // GraphQL document -> GraphQL
   const std::string gql = "query Me { me { id name } }";
   auto kGql = svc.detect(gql);
@@ -58,7 +65,6 @@ int run_import_service_tests() {
     IM_CHECK(r.isOk() && r.value().model.type() == RequestType::GraphQl, "GraphQL -> GraphQl");
   }
 
-  // Garbage -> no detection.
   IM_CHECK(!svc.detect("just some random text").has_value(), "non-command -> no detect");
 
   std::printf("  import_service: %d passed, %d failed\n", im_pass, im_fail);

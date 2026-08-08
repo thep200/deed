@@ -1,6 +1,3 @@
-// core/domain/common/result.hpp — Result<T> (REFACTOR_SPEC §4.1): a value-or-error carrier replacing
-// exceptions across layer boundaries. C++17 has no std::expected, so this is the minimal stand-in.
-// Pure STL only.
 #pragma once
 
 #include <optional>
@@ -20,14 +17,12 @@ public:
   bool isOk() const noexcept { return value_.has_value(); }
   explicit operator bool() const noexcept { return isOk(); }
 
-  // Precondition: isOk(). Reading the value of a failed Result is a programming error. The unchecked
-  // optional deref is by-contract (callers gate on isOk()/operator bool), so the clang-tidy check is muted.
+  // Precondition: isOk() — the unchecked optional deref is by-contract, so the clang-tidy check is muted.
   const T &value() const & { return *value_; } // NOLINT(bugprone-unchecked-optional-access)
   T &&take() { return std::move(*value_); }    // NOLINT(bugprone-unchecked-optional-access) — move out (single use)
 
   const Error &error() const { return error_; }
 
-  // Convenience: the value if ok, otherwise the supplied fallback (no precondition).
   T valueOr(T fallback) const { return value_.has_value() ? *value_ : std::move(fallback); }
 
   bool operator==(const Result &o) const {
@@ -43,7 +38,7 @@ private:
   Error error_;
 };
 
-// Status = a fallible "void". ok() / fail(Error).
+// Status = a fallible "void".
 using Status = Result<std::monostate>;
 
 inline Status ok() { return Status::ok(std::monostate{}); }

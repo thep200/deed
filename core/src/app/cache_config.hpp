@@ -1,26 +1,22 @@
-// cache_config.hpp — INTERNAL (core/src). The response-cache config builder, shared by the Engine
-// (engine_impl.hpp) and the native CoreApiClient cache (composition_root.cpp). Extracted so the native
-// path can build the exact same CacheConfig without depending on Engine::Impl — survives Engine deletion.
 #pragma once
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
-#include "core/infra/cache/cache.hpp"      // CacheConfig + CacheLimits
-#include "core/domain/environment/env_config.hpp" // AppConfig
+#include "core/infra/cache/cache.hpp"
+#include "core/domain/environment/env_config.hpp"
 
 namespace core::detail {
 
-// Cache ceiling/floor fallbacks — used only when neither .env (CacheLimits) nor the DEED_* process env
-// provides a value (RESPONSE_CACHE §1).
+// Fallbacks used only when neither .env (CacheLimits) nor the DEED_* process env provides a value.
 inline constexpr std::uint64_t kRamCacheMaxMbDefault = 256;
 inline constexpr std::uint64_t kRamCacheMinMbDefault = 0;
 inline constexpr std::uint64_t kDiskCacheMaxMbDefault = 1024;
 inline constexpr std::uint64_t kDiskCacheMinMbDefault = 0;
 inline constexpr std::uint64_t kRamCacheThresholdKbDefault = 256;
 
-// Read a numeric env var (>0) or fall back to default. ENV layer = hard ceiling (RESPONSE_CACHE §1).
+// Numeric env var (>0) or default; the env layer is the hard ceiling.
 inline std::uint64_t envU64(const char* key, std::uint64_t def) {
     const char* v = std::getenv(key);
     if (!v || !*v) return def;
@@ -34,7 +30,7 @@ inline std::uint64_t limitOr(int fromEnvFile, const char* envKey, std::uint64_t 
     return envU64(envKey, def);
 }
 
-// effective = clamp(user, min, max); user outside [min,max] -> clamp + warning log (RESPONSE_CACHE §1.2).
+// effective = clamp(user, min, max); out-of-range values are clamped with a warning log.
 inline CacheConfig buildCacheConfig(const AppConfig& app, const CacheLimits& lim) {
     std::uint64_t ramMaxMb = limitOr(lim.ramMaxMb, "DEED_RAM_CACHE_SIZE_MAX", kRamCacheMaxMbDefault);
     std::uint64_t ramMinMb = limitOr(lim.ramMinMb, "DEED_RAM_CACHE_SIZE_MIN", kRamCacheMinMbDefault);
@@ -42,7 +38,7 @@ inline CacheConfig buildCacheConfig(const AppConfig& app, const CacheLimits& lim
     std::uint64_t diskMinMb = limitOr(lim.diskMinMb, "DEED_DISK_CACHE_SIZE_MIN", kDiskCacheMinMbDefault);
     std::uint64_t thrKb = limitOr(lim.thresholdKb, "DEED_RAM_CACHE_THRESHOLD_KB", kRamCacheThresholdKbDefault);
 
-    // clamp(user, min, max) + log when clamped. min > max (misconfig) -> prefer max as ceiling.
+    // min > max (misconfig) -> prefer max as ceiling.
     auto clampMb = [](const char* what, std::uint64_t user, std::uint64_t mn, std::uint64_t mx) {
         if (mn > mx) mn = mx;
         std::uint64_t v = user;
@@ -53,7 +49,6 @@ inline CacheConfig buildCacheConfig(const AppConfig& app, const CacheLimits& lim
         return v;
     };
 
-    // Read the LEVEL from the USER CONFIG (AppConfig) — this is the user layer (Settings).
     std::uint64_t ramUserMb = app.ramCacheSizeMb > 0 ? static_cast<std::uint64_t>(app.ramCacheSizeMb) : 0;
     std::uint64_t diskUserMb = app.diskCacheSizeMb > 0 ? static_cast<std::uint64_t>(app.diskCacheSizeMb) : 0;
 

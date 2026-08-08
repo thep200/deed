@@ -1,6 +1,3 @@
-// core/domain/values/url.hpp — Url value object (REFACTOR_SPEC §5.1).
-// Loose validation at the domain level: non-empty, and a placeholder-aware scheme check. Full resolution
-// of {{vars}} happens later (IVariableResolver); domain only guards the obvious invariants.
 #pragma once
 
 #include <algorithm>
@@ -15,15 +12,12 @@ namespace core::domain {
 
 class Url {
 public:
-  // Loose: trims only. Emptiness is allowed so a DRAFT request (no URL typed yet) is a valid domain value;
-  // "must be non-empty to send" is a send-time check, not a construction invariant. Scheme is NOT enforced
-  // here (a URL may be `{{base}}/x`). Use createWithSchemes() when a context (WS) demands a scheme set.
+  // Trims only. Empty is a valid DRAFT ("non-empty" is a send-time check); scheme is NOT enforced (may be `{{base}}/x`).
   static Result<Url> create(std::string raw) { return Result<Url>::ok(Url(trim(std::move(raw)))); }
 
   bool empty() const noexcept { return raw_.empty(); }
 
-  // Enforce that the scheme (when present and not a placeholder) is one of `allowed`. A URL beginning with
-  // `{{` is accepted (resolved later). Used by WebSocketRequest (ws/wss) and similar.
+  // The scheme (when present and not a placeholder) must be one of `allowed`; a `{{`-prefixed URL is accepted.
   static Result<Url> createWithSchemes(std::string raw, const std::vector<std::string> &allowed) {
     auto r = create(std::move(raw));
     if (!r) return r;

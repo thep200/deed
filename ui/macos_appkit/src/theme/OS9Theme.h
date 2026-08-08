@@ -1,5 +1,4 @@
-// OS9Theme — Platinum (Mac OS 9) color palette + bevel/inset drawing helpers (README §5).
-// Custom look, does NOT use default AppKit controls (modern Aqua render).
+// Platinum (Mac OS 9) palette + bevel/inset drawing; does NOT use default AppKit controls.
 #import <Cocoa/Cocoa.h>
 
 @interface OS9Theme : NSObject
@@ -36,49 +35,42 @@
 + (void)drawLineButtonInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
 // Button style selector (for all buttons): "line" (default) | "new" | "classic" (.env BUTTON_STYLE).
 + (void)setButtonStyleName:(NSString *)name;
-+ (void)setClassicButtonStyle:(BOOL)classic;   // kept for compatibility (classic<->new)
++ (void)setClassicButtonStyle:(BOOL)classic;
 + (void)drawButtonInRect:(NSRect)r pressed:(BOOL)pressed isDefault:(BOOL)isDefault;
 // Text color matching button state (line style inverts fill when pressed -> white text).
 + (NSColor *)buttonFGPressed:(BOOL)pressed enabled:(BOOL)enabled;
 // Draw inset (sunken) border for input field: dark top-left, light bottom-right.
 + (void)drawInsetInRect:(NSRect)r;
-// Draw platinum striped title bar. Stripes drawn only within stripesRect (between the 2 icon clusters),
-// the band background still covers all of r.
-+ (void)drawStripedTitleInRect:(NSRect)r stripesInRect:(NSRect)stripesRect active:(BOOL)active;
 
 // Pixel-style rounded button path (per button.svg).
 + (NSBezierPath *)steppedPathInRect:(NSRect)r;
 
-// Small serrated-corner path (for URL input field / status line).
-+ (NSBezierPath *)serratedPathInRect:(NSRect)r;
-
 // Mac-style window control box (per *_box.svg). glyph: 0=close, 1=collapse, 2=zoom.
 + (void)drawMacControlBox:(NSRect)r glyph:(int)glyph;
+@end
 
-// === OS9 Platinum title bar (PROMPT_os9_titlebar_objcpp.md — pixel-accurate draw) ===
+// Pixel-accurate Platinum title bar drawing — implemented in OS9ThemeTitleBar.mm.
+@interface OS9Theme (TitleBar)
 // Active bar background: #262626 bottom border + #CCCCCC fill.
 + (void)drawTitleBarFrameInRect:(NSRect)r;
 // INACTIVE bar background: flat #D6D6D6, no pinstripe (buttons + icons drawn by title bar).
 + (void)drawTitleBarInactiveInRect:(NSRect)r;
-// Pinstripe grip band: #DDDDDD fill, #EEEEEE/#C5C5C5 edges, #999999 line every 2px;
-// fixed 13px tall, vertically centered in r, stretches with r.width.
-// mirrored=NO: light edge left, dark edge right (default). mirrored=YES: swapped — so the LEFT band
-// can face its lit edge toward the centered title (the two bands read as a symmetric pair, not one run).
+// Pinstripe grip band: fixed 13px tall, centered in r. mirrored=YES flips the lit edge so the LEFT
+// band faces the centered title (the two bands read as a symmetric pair).
 + (void)drawTitleGripInRect:(NSRect)r mirrored:(BOOL)mirrored;
-// Title button (close/zoom/collapse) — square bevel box with side r.size.width.
-// Structure (outer→inner, each layer 1px): outer bevel (TL #808080 / BR #FFFFFF, sunken) ->
-// black frame #262626 -> vertical gradient face #C9C9C9(top)→#F1F1F1(bottom) -> inner bevel
-// (TL #FFFFFF / BR #9A9A9A, raised) -> glyph #262626.
-// glyph: 0=close (empty), 1=zoom (small square top-left, shares an edge),
-//        2=collapse (2 horizontal bars touching both edges -> 3 bands, windowshade).
-// pressed=YES -> overlay #353535→#9C9C9C @0.8 diagonal TL→BR on the face (mouse-down).
+// Square bevel title button. glyph: 0=close (empty), 1=zoom (small square top-left), 2=collapse (windowshade bars).
 + (void)drawTitleButtonInRect:(NSRect)r glyph:(int)glyph pressed:(BOOL)pressed;
 
 // ▾ arrow + divider line for dropdown (method/env) — per dropdown.svg.
 + (void)drawDropdownArrowInRect:(NSRect)r;
 
-// Vintage Mac OS 9 checkmark: a chunky, aliased (pixel-crisp) ✓ stroked inside `r`, in color `c`.
-// Used for selection ticks (dropdown/menu) and the env "secret" checkbox. Drawn for FLIPPED views
-// (top-left origin) — all our self-drawn views are flipped.
+// Draw platinum striped title bar. Stripes drawn only within stripesRect (between the 2 icon clusters),
+// the band background still covers all of r.
++ (void)drawStripedTitleInRect:(NSRect)r stripesInRect:(NSRect)stripesRect active:(BOOL)active;
+
+// Small serrated-corner path (for URL input field / status line).
++ (NSBezierPath *)serratedPathInRect:(NSRect)r;
+
+// Chunky aliased (pixel-crisp) ✓ stroked inside r; drawn for FLIPPED (top-left origin) views.
 + (void)drawCheckInRect:(NSRect)r color:(NSColor *)c;
 @end

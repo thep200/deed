@@ -1,5 +1,3 @@
-// core/domain/response/response_event.hpp — the event stream for unary AND streaming sends
-// (REFACTOR_SPEC §5.9). One variant carried by IRequestObserver/IResponseSink across the whole lifecycle.
 #pragma once
 
 #include <chrono>
@@ -55,9 +53,7 @@ struct EvClosed {
   std::string reason; // WS close
   bool operator==(const EvClosed &o) const { return code == o.code && reason == o.reason; }
 };
-// One Kafka consumer record — OUTPUT THUẦN (SPEC_kafka §3/§6): the record travels byte-for-byte, no
-// EvMessage string-encoding detour (KafkaRecord has too much shape — topic/partition/offset/headers/ts —
-// to flatten into EvMessage's {kind,payload,index} without processing the bytes).
+// The record travels byte-for-byte — too much shape (topic/partition/offset/headers/ts) to flatten into EvMessage.
 struct EvKafkaRecord {
   KafkaRecord record;
   bool operator==(const EvKafkaRecord &o) const { return record == o.record; }
@@ -72,7 +68,6 @@ public:
 
   template <class V> decltype(auto) match(V &&v) const { return std::visit(std::forward<V>(v), data_); }
 
-  // Lifecycle helpers used by the saga/orchestrator.
   bool isTerminal() const {
     return std::holds_alternative<EvCompleted>(data_) || std::holds_alternative<EvFailed>(data_) ||
            std::holds_alternative<EvClosed>(data_);

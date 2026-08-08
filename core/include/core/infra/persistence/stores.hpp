@@ -1,5 +1,3 @@
-// core/stores.hpp — Core's stores (README §6, §8.3, UI spec §2.3).
-// All file I/O lives in Core; UI only calls load/save. Atomic write for every write.
 #pragma once
 
 #include <atomic>
@@ -12,19 +10,17 @@
 #include <unordered_map>
 #include <vector>
 
-#include "core/domain/request/request_model.hpp" // domain RequestModel (collection load/save/create)
-#include "core/domain/environment/env_config.hpp"                   // Environment/Session/AppConfig/TreeNode (config PODs)
-#include "core/domain/request/request_type.hpp"                 // RequestType (createRequest)
+#include "core/domain/request/request_model.hpp"
+#include "core/domain/environment/env_config.hpp"
+#include "core/domain/request/request_type.hpp"
 
 namespace core {
 
-// New-request per-request defaults. Fallback when the .env value (DEFAULT_TIMEOUT_MS / VERIFY_TLS,
-// passed in via CollectionStore::setRequestDefaults) is absent or 0.
+// Fallbacks when the .env value (DEFAULT_TIMEOUT_MS / VERIFY_TLS) is absent or 0.
 inline constexpr long long kNewRequestTimeoutMsDefault = 30LL * 60 * 1000; // 30 min
 inline constexpr bool kNewRequestVerifyTlsDefault = true;
 
-// CollectionStore — load/save requests, scan the tree (README §6.2).
-// Real on-disk path = folder tree; filename = slug; display name in the name field.
+// On-disk: folder tree; filename = slug; display name lives in the "name" field.
 class CollectionStore {
 public:
     explicit CollectionStore(std::string root);
@@ -32,54 +28,44 @@ public:
     const std::string& root() const { return root_; }
     void setRoot(std::string root);
 
-    // Scan ONE directory level, metadata ONLY (parse filename, do NOT read content).
-    // empty dirRelPath = root level. Subfolders kept folded (empty children). §3.
+    // ONE directory level, metadata ONLY (parse filename, do NOT read content); "" = root; subfolders kept folded.
     std::vector<TreeNode> scanLevel(const std::string& dirRelPath) const;
 
-    // Scan the whole tree recursively (metadata-only, content-free). For test/utility;
-    // UI builds the tree via lazy scanLevel instead of this.
+    // Recursive, metadata-only; the UI uses lazy scanLevel instead.
     TreeNode scanTree() const;
 
     core::domain::RequestModel loadRequest(const std::string& relPath) const;     // throws on error
-    // Atomic write; if filename mismatches type/method/name -> rename to match (§4).
-    // Returns relPath AFTER write (may change on rename). Atomic. Preserves any existing "_uiBodyDrafts".
+    // Atomic; renames the file to match type/method/name and returns relPath AFTER write. Preserves "_uiBodyDrafts".
     std::string saveRequest(const std::string& relPath, const core::domain::RequestModel&) const;
 
-    // UI-only per-mode body drafts (body mode -> raw editor text), persisted in the request file under
-    // the "_uiBodyDrafts" key. The domain RequestModel + senders IGNORE them — a request still sends ONE
-    // body. They let the editor keep content the user typed in NON-active body modes across save/reload
-    // and request-switching (RESTRUCTURE follow-up: body-mode persistence). Empty map on a missing key.
+    // UI-only per-mode body drafts persisted under "_uiBodyDrafts"; the domain model + senders IGNORE them.
+    // Empty map when the key is missing.
     std::map<std::string, std::string> loadBodyDrafts(const std::string& relPath) const;
-    // saveRequest overload that ALSO writes "_uiBodyDrafts" (overwriting any existing). Empty drafts ->
-    // the key is omitted. Same atomic write + filename-sync as the 2-arg version.
+    // Also writes "_uiBodyDrafts" (overwriting); empty drafts -> the key is omitted.
     std::string saveRequest(const std::string& relPath, const core::domain::RequestModel&,
                             const std::map<std::string, std::string>& bodyDrafts) const;
 
-    // New-request default per-request config (timeout + TLS verify). Sourced from .env via
-    // CoreApiClient::Config -> the composition root (Core never reads .env itself). timeoutMs <= 0 keeps
-    // the built-in default. Affects createRequest only; existing requests load their own saved config.
+    // timeoutMs <= 0 keeps the built-in default; affects createRequest only — existing requests load their own config.
     void setRequestDefaults(long long timeoutMs, bool verifyTls);
 
     // CRUD — return relPath of the created/changed item.
     std::string createRequest(const std::string& folderRel, RequestType, const std::string& name) const;
-    // Create a new request FROM an existing model (e.g. cURL/grpcurl import). Assign new id + name, atomic write.
+    // Assigns a new id + name (import path); atomic write.
     std::string createRequestFromModel(const std::string& folderRel, core::domain::RequestModel model,
                                        const std::string& name) const;
     std::string createFolder(const std::string& parentRel, const std::string& name) const;
     std::string rename(const std::string& relPath, const std::string& newName) const;
     std::string duplicate(const std::string& relPath) const;
     void remove(const std::string& relPath) const;
-    // Move a request/folder into the destination folder (drag-drop). Returns new relPath.
     std::string move(const std::string& relPath, const std::string& destFolderRel) const;
 
-    // Place an entry inside destFolderRel at `index` of that level's sorted children. Renames
-    // exactly ONE entry (fractional index) — siblings keep their keys. Returns the new relPath.
+    // Places the entry at `index` of the level's sorted children; renames exactly ONE entry (fractional index).
     std::string reorder(const std::string& relPath, const std::string& destFolderRel, int index) const;
 
-    // Find a request's relPath by stable id (id preferably read from filename). Empty if not found.
+    // Empty if not found.
     std::string findRelPathById(const std::string& id) const;
 
-    // Ensure .gitignore has entries for .session/ and .secrets/ (app-managed — README §6.3).
+    // Ensures .gitignore covers .session/ and .secrets/.
     void ensureGitignore() const;
 
 private:
@@ -87,10 +73,8 @@ private:
     long long defaultTimeoutMs_ = kNewRequestTimeoutMsDefault; // new-request default timeout (.env DEFAULT_TIMEOUT_MS)
     bool defaultVerifyTls_ = kNewRequestVerifyTlsDefault;      // new-request default TLS verify (.env VERIFY_TLS)
 
-    // id->relPath index built LAZILY from filenames (zero-read) -> findRelPathById O(1) instead of
-    // scanning the WHOLE tree each call (resyncCurrentRelById runs before every save/switch).
-    // Invalidated on mutation (create/rename/move/duplicate/remove/save/reorder/setRoot); lookup
-    // also verifies the file still exists -> rebuilds itself if stale (safe against out-of-app changes).
+    // id->relPath index built LAZILY from filenames (zero-read); invalidated on every mutation.
+    // Lookup verifies the file still exists and rebuilds if stale — safe against out-of-app changes.
     mutable std::mutex idMu_;
     mutable std::unordered_map<std::string, std::string> idIndex_;
     mutable bool idIndexBuilt_ = false;
@@ -98,9 +82,8 @@ private:
     void invalidateIdIndex() const;      // mark for rebuild (after mutation)
 };
 
-// SessionStore — app-state (.session/session.json), NOT git-versioned.
-// Writes are DEBOUNCED: many consecutive changes (e.g. clicking through requests) coalesce into one disk write
-// after ~kDebounceMs, handled by one worker thread. flush()/destructor writes out any pending.
+// App-state (.session/session.json), NOT git-versioned.
+// Writes are DEBOUNCED onto one worker thread; flush()/destructor writes any pending.
 class SessionStore {
 public:
     explicit SessionStore(std::string root);
@@ -121,7 +104,6 @@ private:
     Session current_;
     std::string root_;
 
-    // --- Disk-write debounce ---
     mutable std::mutex mu_;                           // guards current_/root_/flags; worker + main access it
     std::condition_variable cv_;
     std::thread worker_;
@@ -134,14 +116,12 @@ private:
 
 class AppConfigStore;
 
-// EnvironmentStore — one file per env in environments/ (README §8.3).
-// Values with EnvKey.secret ("Enc") are encrypted at rest when an encryption key is configured;
-// in-memory Environment is always plaintext.
+// One file per env; "Enc"-flagged values are encrypted at rest when a key is configured — in-memory always plaintext.
 class EnvironmentStore {
 public:
     explicit EnvironmentStore(std::string root);
     void setRoot(std::string root);
-    // Source of encryption_key; null = plaintext (tests/legacy).
+    // Source of encryption_key; null = plaintext.
     void attachAppConfig(const AppConfigStore* cfg) { appCfg_ = cfg; }
     // True if a loaded value is still ciphertext -> the configured key can't read it (UI warns).
     static bool isEncryptedValue(const std::string& value);
@@ -162,7 +142,7 @@ private:
     const AppConfigStore* appCfg_ = nullptr;
 };
 
-// AppConfigStore — app-global in OS app-support, OUTSIDE the collection (README §12.1).
+// App-global, in OS app-support — OUTSIDE the collection.
 class AppConfigStore {
 public:
     AppConfigStore();

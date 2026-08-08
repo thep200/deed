@@ -1,5 +1,3 @@
-// field_json_test.cpp — round-trip + validation tests for core::serial (domain field codec, REFACTOR_SPEC
-// Phase E enabler): JSON <-> domain Header/QueryParam/Auth/Body/Config. Mirrors the legacy fieldcodec gate.
 #include <cstdio>
 #include <string>
 
@@ -18,7 +16,7 @@ void check(bool ok, const char *msg) {
 int run_field_json_tests() {
   using namespace core::domain;
 
-  // Headers: round-trip (order + enabled preserved) + validation error on bad name.
+  // Headers round-trip preserves order + enabled flags.
   {
     std::vector<Header> hs;
     hs.push_back(Header::create("X-A", "1", true).take());
@@ -32,7 +30,6 @@ int run_field_json_tests() {
     check(empty.isOk() && empty.value().empty(), "empty headers -> empty list");
   }
 
-  // Params: round-trip.
   {
     std::vector<QueryParam> ps;
     ps.push_back(QueryParam::create("a", "1", true).take());
@@ -42,7 +39,6 @@ int run_field_json_tests() {
     check(rt.isOk() && rt.value() == list, "params round-trip");
   }
 
-  // Auth: each alternative round-trips.
   {
     auto none = serial::jsonToAuth(serial::authToJson(Auth::none()));
     check(none.isOk() && none.value() == Auth::none(), "auth none round-trip");
@@ -52,16 +48,13 @@ int run_field_json_tests() {
     Auth bearer = Auth::bearer("tok").take();
     auto rbe = serial::jsonToAuth(serial::authToJson(bearer));
     check(rbe.isOk() && rbe.value() == bearer, "auth bearer round-trip");
-    // Flat shape is what we WRITE (one "type" key, fields at top level — no per-type sub-object).
     check(serial::authToJson(basic).find("\"basic\": {") == std::string::npos &&
               serial::authToJson(basic).find("\"username\"") != std::string::npos,
           "auth json is flat (no nested sub-object)");
-    // Only the flat shape is read — no per-type sub-object, no removed types.
     check(!serial::jsonToAuth(R"({"type":"basic","basic":{"username":"u","password":"p"}})").isOk(),
           "nested auth shape rejected");
     check(!serial::jsonToAuth(R"({"type":"apikey","key":"k"})").isOk(), "unknown auth type rejected");
 
-    // OAuth2: both grants round-trip; defaults fill; unknown enum strings rejected.
     AuthOAuth2 occ;
     occ.tokenUrl = "https://idp/token"; occ.clientId = "cid"; occ.clientSecret = "s"; occ.scope = "r";
     Auth oauthCc = Auth::oauth2(occ).take();
@@ -81,8 +74,7 @@ int run_field_json_tests() {
           "oauth2 unknown clientAuth rejected");
   }
 
-  // Kafka record display: valueEncoding annotation + non-UTF8 must never throw (it renders inside a
-  // noexcept observer — a throw is std::terminate; regression for the Avro-binary-value crash).
+  // Kafka record display: non-UTF8 must never throw — it renders inside a noexcept observer (regression: Avro-binary value crash).
   {
     KafkaRecord r;
     r.topic = "t";
@@ -99,7 +91,6 @@ int run_field_json_tests() {
     check(!out.empty(), "record display: non-UTF8 bytes render (no throw)");
   }
 
-  // Body: each variant round-trips.
   {
     Body raw = Body::raw(RawSubtype::Json, "{\"k\":1}");
     auto rr = serial::jsonToBody(serial::bodyToJson(raw));
@@ -117,7 +108,6 @@ int run_field_json_tests() {
     check(rn.isOk() && rn.value() == Body::none(), "body none round-trip");
   }
 
-  // Config: round-trip timeout + tls.
   {
     RequestConfig c{Timeout::fromMillis(12345).take(), false};
     auto rt = serial::jsonToConfig(serial::configToJson(c));

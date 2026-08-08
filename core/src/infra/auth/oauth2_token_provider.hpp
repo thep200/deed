@@ -1,6 +1,3 @@
-// oauth2_token_provider.hpp — ITokenProvider adapter: token-endpoint POST + in-memory token cache.
-// INTERNAL (core/src). The pure pieces (parse/cache-key/request building) are free functions here so
-// tests cover them without network; nlohmann stays in the .cpp.
 #pragma once
 
 #include <mutex>
@@ -22,17 +19,14 @@ struct TokenResponse {
   std::string refreshToken; // empty = none
 };
 
-// {"access_token","token_type","expires_in","refresh_token"} -> TokenResponse. Accepts numeric or
-// string expires_in. Errors: non-JSON, missing access_token, token_type present and != "bearer"
-// (case-insensitive), or an OAuth error body ({"error","error_description"}).
+// Accepts numeric or string expires_in; rejects non-JSON, missing access_token, non-bearer token_type,
+// or an OAuth error body.
 core::domain::Result<TokenResponse> parseTokenResponse(const std::string &body);
 
 // Cache identity of a config (RESOLVED values): tokenUrl|grant|clientId|scope|username.
 std::string cacheKey(const core::domain::AuthOAuth2 &o);
 
-// The token-endpoint POST as a domain RequestModel (form-urlencoded; clientAuth==Header -> the model's
-// auth is Basic(clientId, clientSecret) and NativeHttpSender does the base64). `refreshToken` non-empty
-// -> a grant_type=refresh_token request instead of the configured grant.
+// clientAuth==Header -> Basic(clientId, clientSecret); non-empty refreshToken -> grant_type=refresh_token.
 core::domain::Result<core::domain::RequestModel>
 tokenRequestModel(const core::domain::AuthOAuth2 &o, const core::domain::Timeout &timeout,
                   const std::string &refreshToken = "");
@@ -51,7 +45,6 @@ private:
     std::chrono::steady_clock::time_point expiry;
     std::string refreshToken;
   };
-  // POST `model` and parse the reply (shared by fresh + refresh fetches).
   core::domain::Result<TokenResponse> fetch(const core::domain::RequestModel &model,
                                             const core::domain::ICancellationToken &cancel);
 

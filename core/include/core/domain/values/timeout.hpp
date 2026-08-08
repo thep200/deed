@@ -1,4 +1,3 @@
-// core/domain/values/timeout.hpp — Timeout value object (REFACTOR_SPEC §5.1). Maps from config.timeout_ms.
 #pragma once
 
 #include <chrono>
@@ -9,7 +8,7 @@ namespace core::domain {
 
 class Timeout {
 public:
-  // Invariant: strictly positive. A zero/negative timeout is a validation error.
+  // Invariant: strictly positive.
   static Result<Timeout> fromMillis(long long ms) {
     if (ms <= 0)
       return Result<Timeout>::fail({ErrorCode::Validation, "timeout must be > 0ms", "config.timeout_ms"});

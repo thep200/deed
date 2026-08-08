@@ -31,13 +31,13 @@ SessionStore::~SessionStore() {
 }
 
 Session SessionStore::load() const {
-    // Fail-safe: missing/corrupt -> defaults, no throw (README §6.3).
+    // Fail-safe: missing/corrupt -> defaults, no throw.
     std::string txt;
     if (!fsutil::readFile(sessionPath(root_), txt)) return Session{};
     try {
         return codec::sessionFromJson(codec::parseGuarded(txt));
     } catch (...) {
-        return Session{}; // corrupt file -> start clean
+        return Session{};
     }
 }
 

@@ -1,4 +1,3 @@
-// core/variable_resolver.hpp — Resolve {{var}} (README §9.5). Pure function, easy to test.
 #pragma once
 
 #include <map>
@@ -19,29 +18,21 @@ public:
     static ResolveResult resolve(const std::string& tpl,
                                  const std::map<std::string, std::string>& vars);
 
-    // --- Reverse substitution: rewrite a literal value back to {{alias}} (README §9.5). ---
-    // Used to proactively replace hardcoded values that match the active env with an alias.
+    // Reverse substitution: rewrite a literal value back to {{alias}}.
+    // `vars` order: active env pairs first, then non-shadowed Global; on duplicate values the FIRST entry wins.
 
-    // `vars` order: active env pairs first, then non-shadowed Global pairs (mergedVars). On duplicate
-    // values the FIRST entry wins.
-
-    // Whole-value match: if `value` exactly equals some vars[key].value (non-empty), set `out` to
-    // "{{key}}" and return true. For headers/query/auth/metadata, where the field holds the bare
-    // value. No change (returns false) otherwise.
+    // Whole-value match: `value` exactly equals some non-empty vars value -> out = "{{key}}", returns true; else false.
     static bool valueToAlias(const std::string& value,
                              const std::vector<std::pair<std::string, std::string>>& vars,
                              std::string& out, std::string* key = nullptr);
 
-    // Prefix match: if some vars[key].value (length >= kMinPrefixLen) is a prefix of `value`,
-    // replace that prefix with "{{key}}" (keeping the remainder) and return true. Longest value
-    // wins; ties -> the first-defined key. For url / gRPC target, where the alias is usually a
-    // baseUrl prefix. The length floor avoids a 1-2 char value mangling unrelated text.
+    // Prefix match (vars value length >= kMinPrefixLen): replaces the prefix with "{{key}}", keeping the remainder.
+    // Longest value wins; ties -> the first-defined key.
     static bool prefixToAlias(const std::string& value,
                               const std::vector<std::pair<std::string, std::string>>& vars,
                               std::string& out, std::string* key = nullptr);
 
-    // Minimum env-value length eligible for prefix matching (url/target). Whole-value matching
-    // has no floor — exact equality is unambiguous even for short values.
+    // Floor for prefix matching only (avoids a 1-2 char value mangling unrelated text); whole-value matching has none.
     static constexpr std::size_t kMinPrefixLen = 4;
 };
 

@@ -1,4 +1,4 @@
-// infra/transport/shared/dto_common.hpp — primitives shared by every neutral DTO (README §7). Keep tiny + dependency-free.
+// Keep tiny and dependency-free.
 #pragma once
 
 #include <string>
@@ -6,8 +6,7 @@
 
 namespace core {
 
-// key/value line (headers, params, metadata, pathVariables, form...). Array (not object) to keep order,
-// allow duplicate keys, each line has `enabled`. (README §7.4)
+// Serialized as an array (not an object) to keep order and allow duplicate keys.
 struct KeyValue {
   std::string key;
   std::string value;

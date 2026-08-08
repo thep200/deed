@@ -1,5 +1,4 @@
-// sse_parser_test.cpp — gatekeeper for the SSE wire parser (SPEC_sse AC-2/3/5/7). Transport-free: includes
-// ONLY the pure parser — no libcurl. If a transport type leaks into the parser, this stops compiling.
+// Transport-free gatekeeper: includes ONLY the pure parser — if a transport type leaks in, this stops compiling.
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -39,7 +38,7 @@ void test_basic_and_default_event() {
     ECHECK(p.lastEventId() == "7", "lastEventId tracked");
 }
 
-void test_multiline_data() {   // AC-2
+void test_multiline_data() {
     std::printf("[sse: multi-line data]\n");
     core::SseParser p;
     auto ev = drain(p, "data: line1\ndata: line2\n\n");
@@ -47,7 +46,7 @@ void test_multiline_data() {   // AC-2
     ECHECK(ev[0].data == "line1\nline2", "data joined with \\n, trailing \\n dropped");
 }
 
-void test_chunk_split() {   // AC-3 — a chunk cut mid-line/mid-event
+void test_chunk_split() {
     std::printf("[sse: chunk split]\n");
     core::SseParser p;
     std::vector<core::SseEvent> all;
@@ -71,7 +70,7 @@ void test_crlf_split() {
     ECHECK(all[0].data == "x\ny", "CRLF handled, both lines joined");
 }
 
-void test_comment_heartbeat() {   // AC-5
+void test_comment_heartbeat() {
     std::printf("[sse: comment heartbeat]\n");
     core::SseParser p;
     auto ev = drain(p, ": keep-alive\n\n");
@@ -86,10 +85,8 @@ void test_id_and_retry() {
     drain(p, "retry: 4500\nid: 99\ndata: a\n\n");
     ECHECK(p.retryMs() == 4500, "retry parsed");
     ECHECK(p.lastEventId() == "99", "id parsed");
-    // id persists to the next event even if that event has no id:
     auto ev = drain(p, "data: b\n\n");
     ECHECK(ev.size() == 1 && ev[0].id == "99", "lastEventId persists across events");
-    // empty id is valid -> resets lastEventId to ""
     drain(p, "id\ndata: c\n\n");
     ECHECK(p.lastEventId().empty(), "empty id sets lastEventId to \"\"");
 }
@@ -111,7 +108,7 @@ void test_max_bytes() {
     ECHECK(p.truncated(), "truncated flag set");
 }
 
-void test_finish_flush() {   // M12 — final event with no trailing blank line is flushed on EOF
+void test_finish_flush() {
     std::printf("[sse: finish flush on EOF]\n");
     core::SseParser p;
     std::vector<core::SseEvent> out;
@@ -132,7 +129,6 @@ void test_finish_flush() {   // M12 — final event with no trailing blank line 
 
 } // namespace
 
-// Called from test_main.cpp. Returns the number of failed checks.
 int run_sse_parser_tests() {
     test_basic_and_default_event();
     test_multiline_data();

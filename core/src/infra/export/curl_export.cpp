@@ -23,8 +23,7 @@ std::string shq(const std::string& s) {
     return out;
 }
 
-// Try to substitute a ":key" path variable at url[i]. On a match, append its value to `out` and return
-// the index just past the key. Returns npos when no enabled path-var matches at a path boundary.
+// Returns the index just past the substituted ":key", or npos when no enabled var matches at a path boundary.
 std::size_t matchPathVar(const std::string& url, std::size_t i,
                          const d::PathVariableList& vars, std::string& out) {
     if (url[i] != ':') return std::string::npos;
@@ -43,8 +42,7 @@ std::size_t matchPathVar(const std::string& url, std::size_t i,
 
 std::string applyPathVars(const std::string& url, const d::PathVariableList& vars) {
     if (vars.items().empty()) return url;
-    // Single left-to-right pass (M18): at each ':' try to match a path-var key (with a path boundary after)
-    // and substitute. One allocation, no repeated full-string find/replace + realloc.
+    // Single left-to-right pass: one allocation, no repeated full-string find/replace.
     std::string out;
     out.reserve(url.size() + 16);
     for (std::size_t i = 0; i < url.size();) {
@@ -57,7 +55,6 @@ std::string applyPathVars(const std::string& url, const d::PathVariableList& var
 
 std::string toLower(std::string s) { for (auto& c : s) c = (char)::tolower((unsigned char)c); return s; }
 
-// Build the "?a=b&c=d" query string from enabled params. Empty if no params.
 std::string curlQueryString(const d::HttpRequest& h) {
     std::string qs;
     auto add = [&](const std::string& k, const std::string& v) {
@@ -68,7 +65,7 @@ std::string curlQueryString(const d::HttpRequest& h) {
     return qs;
 }
 
-// Append enabled `-H` headers and the auth flag (bearer/basic). Auth wins over an Authorization header.
+// Auth wins over a user-supplied Authorization header.
 void appendHeadersAndAuth(std::string& cmd, const d::HeaderList& headers, const d::Auth& auth) {
     bool authActive = !auth.isNone();
     for (const auto& hd : headers.items()) {
@@ -83,8 +80,7 @@ void appendHeadersAndAuth(std::string& cmd, const d::HeaderList& headers, const 
         else if constexpr (std::is_same_v<T, d::AuthBasic>)
             cmd += " \\\n  -u " + shq(a.username + ":" + a.password);
         else if constexpr (std::is_same_v<T, d::AuthOAuth2>)
-            // Export stays a pure render (no network, no token cache): reference an env var the user
-            // fills (a mid-command shell comment would break the \-continuation chain).
+            // Pure render (no token fetch) -> reference an env var; a mid-command shell comment would break the \-chain.
             cmd += " \\\n  -H \"Authorization: Bearer $OAUTH2_TOKEN\"";
     });
 }
@@ -95,7 +91,7 @@ bool headersHaveContentType(const d::HeaderList& headers) {
     return false;
 }
 
-// Append the body flags for the body alternative (adds a Content-Type unless one is already present).
+// Adds a Content-Type only when none is present.
 void appendBody(std::string& cmd, const d::HttpRequest& h) {
     bool hasContentType = headersHaveContentType(h.headers());
     auto ct = [&](const char* v) {
@@ -122,7 +118,8 @@ void appendBody(std::string& cmd, const d::HttpRequest& h) {
     });
 }
 
-std::string curlHttp(const d::HttpRequest& h) {
+// One commandFor overload per payload type — dispatch by overload resolution, so a new type without a render is a compile error.
+std::string commandFor(const d::HttpRequest& h, bool) {
     std::string url = applyPathVars(h.url().raw(), h.pathVariables()) + curlQueryString(h);
     std::string cmd = "curl -X " + d::toString(h.method()) + " " + shq(url);
     appendHeadersAndAuth(cmd, h.headers(), h.auth());
@@ -130,9 +127,8 @@ std::string curlHttp(const d::HttpRequest& h) {
     return cmd;
 }
 
-// gRPC: `tlsOn` is the per-request effective TLS (config.tls); !tlsOn -> -plaintext (matches the legacy
-// applyRequestConfig that copied config.tls onto grpc.tls.enabled before exporting).
-std::string curlGrpc(const d::GrpcRequest& g, bool tlsOn) {
+// tlsOn is the per-request effective TLS (config.tls); !tlsOn -> -plaintext.
+std::string commandFor(const d::GrpcRequest& g, bool tlsOn) {
     std::string cmd = "grpcurl";
     if (!tlsOn) cmd += " -plaintext";
     const std::string& msg = g.message().text();
@@ -143,9 +139,8 @@ std::string curlGrpc(const d::GrpcRequest& g, bool tlsOn) {
     return cmd;
 }
 
-// GraphQL over HTTP: a POST carrying {query, operationName?, variables}. (Subscriptions actually run over
-// WS/SSE, but "copy as cURL" renders the HTTP-POST form — the universally runnable shape.)
-std::string curlGraphQl(const d::GraphQlRequest& g) {
+// Subscriptions actually run over WS/SSE, but export renders the universally runnable HTTP-POST form.
+std::string commandFor(const d::GraphQlRequest& g, bool) {
     nlohmann::json body;
     body["query"] = g.op().query;
     if (!g.op().operationName.empty()) body["operationName"] = g.op().operationName;
@@ -159,14 +154,49 @@ std::string curlGraphQl(const d::GraphQlRequest& g) {
 }
 
 // WebSocket has no faithful one-shot cURL; emit the handshake URL + headers/auth as a best-effort reference.
-std::string curlWs(const d::WebSocketRequest& w) {
+std::string commandFor(const d::WebSocketRequest& w, bool) {
     std::string cmd = "curl " + shq(w.url().raw());
     appendHeadersAndAuth(cmd, w.headers(), w.auth());
     return cmd;
 }
 
-// SOAP = HTTP POST of the envelope; mirror the sender's version-header policy (SPEC_soap §4).
-std::string curlSoap(const d::SoapRequest& s) {
+std::string commandFor(const d::KafkaRequest& k, bool) {
+    const std::string brokers = k.brokers().toBootstrapServers();
+    std::string cmd;
+    k.match([&](auto&& spec) {
+        using S = std::decay_t<decltype(spec)>;
+        if constexpr (std::is_same_v<S, d::KafkaProduceSpec>) {
+            const auto& c = spec.config;
+            const auto& m = spec.message;
+            cmd = "echo " + shq(m.value.value) + " | kcat -P -b " + shq(brokers) +
+                  " -t " + shq(c.topic.value());
+            if (c.partition.value >= 0) cmd += " -p " + std::to_string(c.partition.value);
+            if (m.key) cmd += " -k " + shq(m.key->value);
+            for (const auto& h : m.headers)
+                if (h.enabled && !h.key.empty()) cmd += " \\\n  -H " + shq(h.key + "=" + h.value);
+            if (c.valueFormat == d::KafkaValueFormat::Avro && !c.schemaRegistry.url.empty())
+                cmd += " \\\n  -s value=avro -r " + shq(c.schemaRegistry.url);
+        } else {
+            const auto& c = spec.config;
+            const char* reset =
+                c.offsetReset == d::OffsetReset::Earliest ? "earliest" : "latest";
+            if (!c.partition.has_value()) {
+                cmd = "kcat -b " + shq(brokers) + " -G " + shq(c.group.value());
+                for (const auto& t : c.topics) cmd += " " + shq(t.value());
+            } else {
+                cmd = "kcat -C -b " + shq(brokers);
+                if (!c.topics.empty()) cmd += " -t " + shq(c.topics.front().value());
+                cmd += " -p " + std::to_string(c.partition->value);
+            }
+            cmd += " \\\n  -X auto.offset.reset=" + std::string(reset);
+            if (c.maxMessages) cmd += " -c " + std::to_string(*c.maxMessages);
+        }
+    });
+    return cmd;
+}
+
+// Mirrors the sender's per-version Content-Type/SOAPAction policy.
+std::string commandFor(const d::SoapRequest& s, bool) {
     std::string cmd = "curl -X POST " + shq(s.url().raw());
     appendHeadersAndAuth(cmd, s.headers(), s.auth());
     if (!headersHaveContentType(s.headers())) {
@@ -183,20 +213,28 @@ std::string curlSoap(const d::SoapRequest& s) {
     return cmd;
 }
 
+// -x = simple bind (like the sender); the bind-test second bind has no ldapsearch equivalent — search only.
+std::string commandFor(const d::LdapRequest& l, bool) {
+    std::string cmd = "ldapsearch -x -H " + shq(l.url().raw());
+    if (l.startTls()) cmd += " -ZZ";   // require a successful StartTLS, not best-effort
+    if (!l.bindDn().empty()) {
+        cmd += " \\\n  -D " + shq(l.bindDn());
+        if (!l.bindPassword().empty()) cmd += " -w " + shq(l.bindPassword());
+    }
+    cmd += " \\\n  -b " + shq(l.baseDn()) + " -s " + d::toString(l.scope());
+    if (l.sizeLimit() > 0) cmd += " -z " + std::to_string(l.sizeLimit());
+    if (l.timeLimit() > 0) cmd += " -l " + std::to_string(l.timeLimit());
+    if (l.pageSize() > 0) cmd += " -E " + shq("pr=" + std::to_string(l.pageSize()) + "/noprompt");
+    cmd += " \\\n  " + shq(d::composeLdapFilter(l.filter(), l.group()));
+    for (const auto& a : l.attributes()) if (!a.empty()) cmd += " " + shq(a);
+    return cmd;
+}
+
 } // namespace
 
 std::string toCurl(const d::RequestModel& m) {
     const bool tlsOn = m.config().tlsEnabledDefault;
-    std::string out;
-    m.match([&](auto&& p) {
-        using T = std::decay_t<decltype(p)>;
-        if constexpr (std::is_same_v<T, d::HttpRequest>) out = curlHttp(p);
-        else if constexpr (std::is_same_v<T, d::GrpcRequest>) out = curlGrpc(p, tlsOn);
-        else if constexpr (std::is_same_v<T, d::GraphQlRequest>) out = curlGraphQl(p);
-        else if constexpr (std::is_same_v<T, d::WebSocketRequest>) out = curlWs(p);
-        else if constexpr (std::is_same_v<T, d::SoapRequest>) out = curlSoap(p);
-    });
-    return out;
+    return m.match([&](const auto& p) { return commandFor(p, tlsOn); });
 }
 
 } // namespace core

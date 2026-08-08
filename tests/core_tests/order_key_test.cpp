@@ -1,6 +1,4 @@
-// order_key_test.cpp — fractional index invariants (core/infra/persistence/order_key).
-// The whole ordering feature rests on: byte-compare == logical order, and "insert between" never
-// touching the neighbours.
+// The ordering feature rests on: byte-compare == logical order, and "insert between" never touching the neighbours.
 #include <algorithm>
 #include <cstdio>
 #include <random>
@@ -27,7 +25,6 @@ bool charsetOk(const std::string& k) {
   return !k.empty();
 }
 
-// Insert repeatedly into the same gap: every new key must land strictly between its neighbours.
 void testInsertMiddle() {
   std::string lo = between("", "");
   std::string hi = between(lo, "");
@@ -75,12 +72,11 @@ void testPrependStart() {
   OK_CHECK(maxLen <= 6, "prepend keeps keys short");
 }
 
-// Build a list by random insertion, then check byte-sort reproduces the logical order.
 void testSortMatchesInsertOrder() {
   std::mt19937 rng(12345);
   std::vector<std::string> keys{between("", "")};
   for (int i = 0; i < 2000; ++i) {
-    std::size_t at = rng() % (keys.size() + 1);          // insert position
+    std::size_t at = rng() % (keys.size() + 1);
     std::string lo = at > 0 ? keys[at - 1] : std::string();
     std::string hi = at < keys.size() ? keys[at] : std::string();
     keys.insert(keys.begin() + static_cast<long>(at), between(lo, hi));

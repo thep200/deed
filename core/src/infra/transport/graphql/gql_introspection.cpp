@@ -1,4 +1,3 @@
-// gql_introspection.cpp — standard introspection query, SDL printer, and the one-off HTTP runner.
 #include "infra/transport/graphql/gql_introspection.hpp"
 
 #include <optional>
@@ -307,8 +306,7 @@ d::Result<d::GqlSchema> runIntrospection(const d::RequestModel &resolved) {
   auto sdl = sdlFromIntrospectionJson(resp.body);
   if (!sdl.isOk()) return d::Result<d::GqlSchema>::fail(sdl.error());
 
-  // Raw view: pretty-print the data object (fall back to the raw body if the shape surprises us —
-  // sdlFromIntrospectionJson already vouched for parseability).
+  // Raw view: pretty-print the data object; fall back to the raw body if the shape surprises us.
   std::string pretty = resp.body;
   try {
     json j = json::parse(resp.body);

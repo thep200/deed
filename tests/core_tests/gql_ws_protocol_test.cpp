@@ -1,7 +1,4 @@
-// gql_ws_protocol_test.cpp — gatekeeper for the GraphQL-over-WS protocol layer (SPEC_graphql AC-7).
-// Drives GraphQlWsProtocol with a FAKE transport (a sendRaw collector + a recording IStreamSink) and a
-// canned ack/next/complete frame sequence. Includes NO libcurl/curl_ws -> proves the protocol layer is
-// transport-independent (INV-1) and the §6.1 naming trap is handled.
+// Transport-free gatekeeper: includes NO libcurl/curl_ws — the protocol layer must run against fakes alone.
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -15,9 +12,7 @@ namespace {
 
 namespace d = core::domain;
 
-// Build a domain GraphQlRequest subscription for the protocol driver (url/headers irrelevant to the protocol
-// layer — it only reads query/operationName/variables/wsProtocol). `wsProtocol`: "graphql-transport-ws"
-// (modern) | "graphql-ws" (legacy subscriptions-transport-ws).
+// mkGql: only query/operationName/variables/wsProtocol matter here; wsProtocol is "graphql-transport-ws" (modern) or "graphql-ws" (legacy).
 d::GraphQlRequest mkGql(const std::string& query, const std::string& wsProtocol = "graphql-transport-ws") {
     d::GraphQlRequest::Parts p{
         d::Url::create("wss://example/graphql").take(),
@@ -48,7 +43,6 @@ public:
     void onStreamClose(const core::StreamEnd& end) override { ++closes; lastEnd = end; }
 };
 
-// Returns the "type" field of the last raw frame the protocol sent.
 std::string typeOf(const std::string& raw) {
     try { return nlohmann::json::parse(raw).value("type", ""); } catch (...) { return ""; }
 }
@@ -74,11 +68,9 @@ void test_modern_happy_path() {
     GCHECK(sink.events.size() == 2, "two next -> two events");
     GCHECK(sink.events[0] == R"({"data":{"countdown":3}})", "event payload = ExecutionResult");
 
-    // a next for a different id is ignored
     proto.onFrame(R"({"type":"next","id":"99","payload":{"data":{"x":1}}})");
     GCHECK(sink.events.size() == 2, "next for other id ignored");
 
-    // ping -> pong
     size_t before = sent.size();
     proto.onFrame(R"({"type":"ping"})");
     GCHECK(sent.size() == before + 1 && typeOf(sent.back()) == "pong", "ping -> pong");
@@ -87,7 +79,6 @@ void test_modern_happy_path() {
     GCHECK(sink.closes == 1 && sink.lastEnd.status == core::StreamStatus::Ok, "complete -> close(Ok)");
     GCHECK(sink.lastEnd.totalEvents == 2, "totalEvents = 2");
 
-    // frames after close are ignored
     proto.onFrame(R"({"type":"next","id":"1","payload":{"data":{}}})");
     GCHECK(sink.events.size() == 2, "no events after close");
 }
@@ -100,7 +91,6 @@ void test_subscribe_error() {
                                   [&](const std::string& s) { sent.push_back(s); });
     proto.onOpen();
     proto.onFrame(R"({"type":"connection_ack"})");
-    // an error for a different id is ignored (id-scoped like next/complete)
     proto.onFrame(R"({"type":"error","id":"99","payload":[{"message":"other"}]})");
     GCHECK(sink.closes == 0, "error for other id ignored");
     proto.onFrame(R"({"type":"error","id":"1","payload":[{"message":"boom"}]})");
@@ -139,7 +129,6 @@ void test_legacy_names() {
 
 } // namespace
 
-// Called from test_main.cpp. Returns the number of failed checks.
 int run_gql_ws_protocol_tests() {
     test_modern_happy_path();
     test_subscribe_error();

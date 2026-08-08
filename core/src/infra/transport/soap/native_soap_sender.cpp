@@ -1,4 +1,3 @@
-// native_soap_sender.cpp — SOAP -> HTTP packaging + version header policy (SPEC_soap §4).
 #include "infra/transport/soap/native_soap_sender.hpp"
 
 #include <cctype>
@@ -78,9 +77,9 @@ std::string extractFaultString(const std::string &body) {
 
 } // namespace soap
 
-d::Status NativeSoapSender::execute(const d::RequestModel &resolved, d::IResponseSink &sink,
-                                    const d::ICancellationToken &cancel) {
-  const auto &s = std::get<d::SoapRequest>(resolved.payload());
+d::Status NativeSoapSender::executeTyped(const d::RequestModel &resolved, const d::SoapRequest &s,
+                                         d::IResponseSink &sink,
+                                         const d::ICancellationToken &cancel) {
   if (s.url().raw().empty()) {
     sink.emit(d::ResponseEvent(
         d::EvFailed{{d::ErrorKind::Protocol, "soap endpoint url required", {}}}));

@@ -1,6 +1,4 @@
-// graphql.hpp — GraphQL application layer helpers (SPEC_graphql §1-§4). INTERNAL (core/src).
-// GraphQL adds NO transport: query/mutation -> HTTP POST (reuse the native HTTP sender), subscription -> WS.
-// Operates on the DOMAIN GraphQlRequest/RequestModel (no legacy structs) so the GraphQL sender is bridge-free.
+// GraphQL adds no transport of its own: query/mutation -> HTTP POST, subscription -> WS.
 #pragma once
 
 #include "core/domain/graphql/gql_operation.hpp"
@@ -9,17 +7,13 @@
 
 namespace core::gql {
 
-// The effective operation: the request's declared one, or — when Auto — inferred from the query text
-// (leading keyword query/mutation/subscription; a `{ … }` shorthand is a query). (SPEC_graphql §2)
-// The policy itself is pure domain logic and lives there; this delegate keeps the gql:: call sites.
+// Declared operation, or — when Auto — inferred from the query text (a `{ … }` shorthand is a query).
 inline core::domain::GqlOperationType effectiveOperation(const core::domain::GraphQlRequest& g) {
     return core::domain::effectiveOperation(g);
 }
 
-// Build an equivalent HTTP RequestModel for a query/mutation: POST <url> with body
-// {query, variables, operationName} + Accept: application/graphql-response+json (SPEC_graphql §4).
-// `g.op().variables` must already be resolved ({{var}} expanded) so it parses as JSON. The envelope
-// (id/name/seq/config) is carried over from `model`.
+// POST <url> with {query, variables, operationName}. `g.op().variables` must already be {{var}}-resolved
+// so it parses as JSON; the envelope (id/name/seq/config) carries over from `model`.
 core::domain::RequestModel buildHttpModel(const core::domain::RequestModel& model);
 
 } // namespace core::gql

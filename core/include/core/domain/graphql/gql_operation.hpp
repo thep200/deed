@@ -1,4 +1,3 @@
-// core/domain/graphql/gql_operation.hpp — effective GraphQL operation policy (SPEC_graphql §2). Pure STL.
 #pragma once
 
 #include <cctype>
@@ -9,12 +8,10 @@
 
 namespace core::domain {
 
-// The effective operation: the request's declared one, or — when Auto — inferred from the query text
-// (leading keyword query/mutation/subscription; a `{ … }` shorthand is a query).
+// Declared operation, or — when Auto — inferred from the query text's leading keyword.
 inline GqlOperationType effectiveOperation(const GraphQlRequest &g) {
   if (g.op().operation != GqlOperationType::Auto) return g.op().operation;
 
-  // Scan to the first significant token, skipping whitespace, BOM, and `# line comments`.
   const std::string &q = g.op().query;
   std::size_t i = 0;
   if (q.size() >= 3 && (unsigned char)q[0] == 0xEF && (unsigned char)q[1] == 0xBB && (unsigned char)q[2] == 0xBF)

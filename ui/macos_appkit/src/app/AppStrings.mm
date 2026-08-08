@@ -1,4 +1,3 @@
-// AppStrings.mm — definitions for AppStrings.h. Edit displayed wording HERE.
 #import "app/AppStrings.h"
 
 #pragma mark - Shared buttons / labels
@@ -83,6 +82,7 @@ NSString *const StrTabConfig = @"Config";
 NSString *const StrTabSchema = @"Schema";
 NSString *const StrTabEnvelope = @"Envelope";
 NSString *const StrTabSoap = @"Soap";
+NSString *const StrTabLdapParams = @"Params";
 
 #pragma mark - Kafka client-kind toggle
 NSString *const StrKafkaProducer = @"Prod";
@@ -107,6 +107,7 @@ NSString *const StrMenuNewWs = @"New WebSocket";
 NSString *const StrMenuNewGraphQl = @"New GraphQL";
 NSString *const StrMenuNewKafka = @"New Kafka";
 NSString *const StrMenuNewSoap = @"New SOAP";
+NSString *const StrMenuNewLdap = @"New LDAP";
 NSString *const StrNewFolder = @"New Folder";
 NSString *const StrMenuCopyCurl = @"Copy as cURL";
 NSString *const StrFmtDeleteItems = @"Delete %lu items";
@@ -118,6 +119,7 @@ NSString *const StrDefaultWsName = @"New Socket";
 NSString *const StrDefaultGqlName = @"New GraphQL";
 NSString *const StrDefaultKafkaName = @"New Kafka";
 NSString *const StrDefaultSoapName = @"New SOAP";
+NSString *const StrDefaultLdapName = @"New LDAP";
 NSString *const StrDefaultImportName = @"request";
 NSString *const StrImportedGrpc = @"Imported gRPC";
 

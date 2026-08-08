@@ -1,39 +1,6 @@
 #import "windows/MainWindowControllerPrivate.h"
-#import <QuartzCore/QuartzCore.h>
 
 #include "core/domain/request/request_defaults.hpp" // defaultPayloadFor (fresh-request factory)
-
-// This file holds the core: UI building (build*), layout, per-type render, window & toast.
-// The remaining groups are split into categories: +Tree / +Editor / +Send / +Config / +Stress.
-// Shared ivars + imports live in MainWindowControllerPrivate.h.
-
-static const CGFloat kTitleH = 21;        // §2 spec: title bar fixed at 21px tall (incl. border)
-static const CGFloat kToastTopGap = 10;   // toast top slot sits BELOW the title bar (clears zoom/hide)
-
-// Build a non-anti-aliased circular alpha mask of side (2*rpx+1) device pixels (SQUARE_CORNERS=2). Used as a
-// 9-slice CALayer mask: the 4 quarter-circle corners stay pixel-exact (chunky/retro, no smoothing) while the
-// 1px center cross stretches to fill the window on resize. Caller owns the returned image (CGImageRelease).
-static CGImageRef OS9CreateCornerMask(int rpx) {
-    const int S = 2 * rpx + 1;
-    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-    CGContextRef ctx = CGBitmapContextCreate(NULL, S, S, 8, 0, cs, kCGImageAlphaPremultipliedLast);
-    CGColorSpaceRelease(cs);
-    if (!ctx) return NULL;
-    unsigned char *data = (unsigned char *)CGBitmapContextGetData(ctx);
-    const size_t bpr = CGBitmapContextGetBytesPerRow(ctx);
-    const long r2 = (long)rpx * rpx;
-    for (int y = 0; y < S; y++) {
-        for (int x = 0; x < S; x++) {
-            const long dx = x - rpx, dy = y - rpx;
-            const unsigned char a = (dx * dx + dy * dy) <= r2 ? 255 : 0;   // hard threshold -> pixel corners
-            unsigned char *p = data + (size_t)y * bpr + (size_t)x * 4;
-            p[0] = a; p[1] = a; p[2] = a; p[3] = a;                        // premultiplied white; mask uses alpha
-        }
-    }
-    CGImageRef img = CGBitmapContextCreateImage(ctx);
-    CGContextRelease(ctx);
-    return img;
-}
 
 @implementation MainWindowController
 
@@ -73,7 +40,7 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
         if (corners == 2) _cornerRadiusPts = [cfg floatFor:@"CORNER_RADIUS_PX" def:6];
     }
     _window.movableByWindowBackground = NO;
-    _window.releasedWhenClosed = NO;   // §4: controller owns _window (ARC); don't let close auto-release it
+    _window.releasedWhenClosed = NO;   // controller owns _window (ARC); don't let close auto-release it
     _window.delegate = self;
     _window.minSize = NSMakeSize([cfg floatFor:@"WINDOW_MIN_WIDTH" def:820], [cfg floatFor:@"WINDOW_MIN_HEIGHT" def:520]);
     // Bright platinum app -> force Aqua so text/fields aren't washed white by system Dark Mode.
@@ -194,10 +161,10 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     [_tree addTableColumn:col];
     _tree.outlineTableColumn = col;
     _tree.headerView = nil;
-    _tree.rowHeight = 20;                  // room for 16px icon + row separator line (SPEC §2)
+    _tree.rowHeight = 20;                  // room for 16px icon + row separator line
     _tree.indentationPerLevel = 14;        // one gutter indent per level -> child triangle under parent label
     _tree.allowsMultipleSelection = YES;   // multi-select to delete at once
-    // TASK 3: DISABLE default blue highlight -> draw a light GRAY background ourselves (row view below).
+    // DISABLE default blue highlight -> draw a light GRAY background ourselves (row view below).
     _tree.selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone;
     _tree.dataSource = self;
     _tree.delegate = self;
@@ -235,13 +202,12 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _respBuffers = [NSMutableArray array];
     _respTabButtons = [NSMutableArray array];
     _prettyMode = 0;
-    // cURL is now copied via the tree's right-click menu (copyCurlSel:) — no tab-header button.
 }
 
 // Label + body transform per the pretty button's current mode.
 - (NSString *)prettyTitle { return @[ StrViewPretty, StrViewRaw, StrViewEncode, StrViewDecode ][_prettyMode]; }
 - (NSString *)applyView:(const std::string &)body { return [self applyView:body mode:_prettyMode]; }
-// Transform body per an explicit `mode` (reads NO ivars) -> safe to call from a background thread (U2).
+// Transform body per an explicit `mode` (reads NO ivars) -> safe to call from a background thread.
 - (NSString *)applyView:(const std::string &)body mode:(int)mode {
     switch (mode) {
         case 1: return N(core::serial::formatJson(body, false));
@@ -276,9 +242,6 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
                                                  target:self action:@selector(protoModeChanged:)];
     _protoPopup.toolTip = StrTipProtoSource;
 
-    // gRPC TLS is now part of the per-request Config tab (RequestConfig.tls); no toolbar toggle.
-    // (OS9Toggle widget kept in the tree for future reuse.)
-
     // gRPC: pick the service/RPC the server provides (placed before the Send button).
     _servicePopup = [[OS9PopupButton alloc] initWithItems:@[ StrNoRpc ]
                                                    target:self action:@selector(serviceMethodChanged:)];
@@ -295,9 +258,8 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _methodPopup = [[OS9PopupButton alloc] initWithItems:@[ StrMethodGet, StrMethodPost, StrMethodPut, StrMethodPatch, StrMethodDelete, StrMethodHead, StrMethodOptions ]
                                                   target:self action:@selector(methodChanged:)];
 
-    // Kafka client-kind selector (SPEC_kafka §2.0): ONLY visible when type=Kafka, sits right before the
-    // URL/brokers field. Reuses the existing OS9Toggle (same idiom as the former gRPC TLS toggle) with a
-    // dynamic label reflecting the current side (kafkaModeToggled: flips it).
+    // Kafka client-kind selector: ONLY visible when type=Kafka, sits right before the URL/brokers field;
+    // dynamic label reflects the current side (kafkaModeToggled: flips it).
     _kafkaModeToggle = [[OS9Toggle alloc] initWithLabel:StrKafkaProducer target:self action:@selector(kafkaModeToggled:)];
 
     // URL field: NO native bezel -> wrapped in OS9SerratedInset (retro serrated corners).
@@ -359,171 +321,9 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     [_settingInset addSubview:_settingEditor];
 }
 
-#pragma mark Layout
-
-- (void)relayout {
-    NSRect cb = [_window.contentView bounds];
-    if (_cornerMask) {   // keep the 9-slice corner mask sized to the window (no implicit animation on resize)
-        [CATransaction begin]; [CATransaction setDisableActions:YES];
-        _cornerMask.frame = cb;
-        [CATransaction commit];
-    }
-    CGFloat W = cb.size.width, H = cb.size.height;
-    CGFloat titleH = kTitleH;
-    _titleBar.frame = NSMakeRect(0, 0, W, titleH);
-    _mainPane.frame = NSMakeRect(0, titleH, W, H - titleH);
-    _configPane.frame = NSMakeRect(0, titleH, W, H - titleH);
-    if (_configMode) { [self layoutConfig]; [self positionToast]; return; }
-
-    DeedConfig *cfg = [DeedConfig shared];
-    CGFloat MW = _mainPane.bounds.size.width, MH = _mainPane.bounds.size.height;
-    CGFloat pad = [cfg floatFor:@"PADDING" def:8];
-    // Outer side margins = outer edge of title icons -> panes/buttons align with close/zoom/hide.
-    CGFloat side = [OS9TitleBar iconSideInset];
-    CGFloat tabH = [cfg floatFor:@"TAB_HEIGHT" def:22];
-    CGFloat toolH = [cfg floatFor:@"TOOLBAR_HEIGHT" def:40];
-    CGFloat btnH = [cfg floatFor:@"BUTTON_HEIGHT" def:22];
-    CGFloat statusH = 18;
-    CGFloat dw = 6;
-
-    CGFloat top = pad;
-    CGFloat statusY = top + tabH + 2;
-    CGFloat panesY = statusY + statusH + 2;            // closer to status -> pane extends higher
-    CGFloat panesBottom = MH - toolH - 2;              // closer to toolbar -> pane extends lower
-
-    // clamp pane widths
-    CGFloat minTree = 140, minReq = 200, minResp = 220;
-    CGFloat avail = MW - 2 * side - 2 * dw;
-    if (_treeW < minTree) _treeW = minTree;
-    if (_treeW > avail - minReq - minResp) _treeW = avail - minReq - minResp;
-    CGFloat remain = avail - _treeW; // for req + resp
-    if (_reqW <= 0) _reqW = remain * 3 / 7;   // default: left (request) : right (response) = 3:4
-    if (_reqW < minReq) _reqW = minReq;
-    if (_reqW > remain - minResp) _reqW = remain - minResp;
-    CGFloat respW = remain - _reqW;
-
-    CGFloat treeX = side;
-    CGFloat divTreeX = treeX + _treeW;
-    CGFloat reqX = divTreeX + dw;
-    CGFloat divRespX = reqX + _reqW;
-    CGFloat respX = divRespX + dw;
-
-    // (1) gear + Open (collection path) + (2) tree (CRUD via right-click) — wrapped in serrated border
-    CGFloat wGear = [cfg floatFor:@"BTN_SETTING_W" def:26];
-    _settingButton.frame = NSMakeRect(treeX, top, wGear, tabH);
-    _openButton.frame = NSMakeRect(treeX + wGear + 4, top, _treeW - wGear - 4, tabH);
-    _treeInset.frame = NSMakeRect(treeX, statusY, _treeW, panesBottom - statusY);
-    _treeScroll.frame = NSInsetRect(_treeInset.bounds, 2, 2);
-
-    // dividers (full height of panes region)
-    _divTree.frame = NSMakeRect(divTreeX, statusY, dw, panesBottom - statusY);
-    _divResp.frame = NSMakeRect(divRespX, panesY, dw, panesBottom - panesY);
-
-    // (3) LEFT pane GROUP = request tabs (cURL moved to the tree right-click menu) + editor.
-    [self layoutTabButtons:_reqTabButtons atX:reqX y:top width:_reqW height:tabH extra:0];
-    _reqInset.frame = NSMakeRect(reqX, panesY, _reqW, panesBottom - panesY);
-    _reqText.frame = NSInsetRect(_reqInset.bounds, 2, 2);
-
-    // (4) RIGHT pane GROUP = response tabs + Pretty (same row) + editor
-    NSMutableArray<OS9BevelButton *> *rightTabGroup = [_respTabButtons mutableCopy];
-    if (_prettyButton) [rightTabGroup addObject:_prettyButton];
-    [self layoutTabButtons:rightTabGroup atX:respX y:top width:respW height:tabH extra:0];
-    _respInset.frame = NSMakeRect(respX, panesY, respW, panesBottom - panesY);
-    _respText.frame = NSInsetRect(_respInset.bounds, 2, 2);
-
-    // status line (span req + resp)
-    CGFloat slX = reqX, slW = (respX + respW) - reqX;
-    _statusBar.frame = NSMakeRect(slX, statusY, slW, statusH);
-    _statusLabel.frame = NSMakeRect(slX + 8, statusY + 1, slW - 16, statusH - 2);
-
-    // toolbar (1 row): ENV | Method/Proto | URL (stretches) | Cancel(when sending) | Send
-    // (gear moved to the tree header, left of the collection-path button)
-    CGFloat ty = MH - toolH + (toolH - btnH) / 2;
-    CGFloat x = side;
-    CGFloat wEnv = [cfg floatFor:@"BTN_ENV_W" def:120];
-    CGFloat wMethod = [cfg floatFor:@"BTN_METHOD_W" def:92];
-    CGFloat wProto = [cfg floatFor:@"BTN_PROTO_W" def:104];   // just wider than "Reflection"
-    CGFloat wService = [cfg floatFor:@"BTN_SERVICE_W" def:200];
-    CGFloat wSend = [cfg floatFor:@"BTN_SEND_W" def:54];
-    CGFloat wCancel = [cfg floatFor:@"BTN_CANCEL_W" def:64];
-
-    _envButton.frame = NSMakeRect(x, ty, wEnv, btnH); x += wEnv + 6;
-    core::RequestType _t = [self requestType];
-    BOOL grpc = (_t == core::RequestType::Grpc);
-    BOOL kafka = (_t == core::RequestType::Kafka);
-    BOOL noPopup = (_t == core::RequestType::WebSocket || _t == core::RequestType::GraphQl ||
-                    _t == core::RequestType::Soap ||
-                    kafka);   // WS/GraphQL/Kafka/SOAP: no method/proto popup
-    _methodPopup.frame = NSMakeRect(x, ty, wMethod, btnH);
-    _protoPopup.frame = NSMakeRect(x, ty, wProto, btnH);
-    _methodPopup.hidden = grpc || noPopup;   // only HTTP shows the method popup
-    _protoPopup.hidden = !grpc;
-    // WS/GraphQL/Kafka have no leading popup; HTTP advances by method width, gRPC by proto width.
-    x += (grpc ? wProto : (noPopup ? 0 : wMethod)) + 6;
-
-    // Kafka client-kind selector (SPEC_kafka §2.0): ONLY visible when type=Kafka, sits right before the
-    // brokers/URL field (i.e. right where the method/proto popup would otherwise be).
-    _kafkaModeToggle.hidden = !kafka;
-    if (kafka) {
-        BOOL isConsumer = ([self kafkaClientKind] == core::domain::KafkaClientKind::Consumer);
-        _kafkaModeToggle.on = isConsumer;
-        _kafkaModeToggle.label = isConsumer ? StrKafkaConsumer : StrKafkaProducer;
-        CGFloat wToggle = [_kafkaModeToggle preferredWidth];
-        _kafkaModeToggle.frame = NSMakeRect(x, ty, wToggle, btnH);
-        x += wToggle + 6;
-    }
-
-    // (gRPC TLS toggle removed — TLS is set in the per-request Config tab.)
-
-    _cancelButton.hidden = !_sending;
-    _servicePopup.hidden = !grpc;
-    // Right group: [servicePopup (gRPC)] [Cancel (when sending)] [Send].
-    CGFloat rightGroup = wSend + 6 + (_sending ? wCancel + 6 : 0) + (grpc ? wService + 6 : 0);
-    CGFloat urlW = (MW - side) - x - rightGroup;
-    if (urlW < 140) urlW = 140;
-    _urlInset.frame = NSMakeRect(x, ty, urlW, btnH);
-    // field sits inside the inset, leaving room for the border + vertically centered for one line.
-    CGFloat fh = ceil([[OS9Theme monoFont] ascender] - [[OS9Theme monoFont] descender]) + 2;
-    _urlField.frame = NSMakeRect(4, floor((btnH - fh) / 2), urlW - 8, fh);
-    CGFloat rx = MW - side - wSend;           // right edge of the Send button
-    _sendButton.frame = NSMakeRect(rx, ty, wSend, btnH);
-    if (_sending) { rx -= 6 + wCancel; _cancelButton.frame = NSMakeRect(rx, ty, wCancel, btnH); }
-    if (grpc) { rx -= 6 + wService; _servicePopup.frame = NSMakeRect(rx, ty, wService, btnH); }
-
-    [self positionToast];
-}
-
-- (void)layoutTabButtons:(NSArray<OS9BevelButton *> *)buttons atX:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)h extra:(CGFloat)extra {
-    if (buttons.count == 0) return;
-    CGFloat bw = width / buttons.count;
-    CGFloat cx = x;
-    for (OS9BevelButton *btn in buttons) { btn.frame = NSMakeRect(cx, y, bw - 2, h); cx += bw; }
-}
-
-- (void)layoutConfig {
-    DeedConfig *cfg = [DeedConfig shared];
-    CGFloat W = _configPane.bounds.size.width, H = _configPane.bounds.size.height;
-    CGFloat pad = [cfg floatFor:@"PADDING" def:8];
-    CGFloat side = [OS9TitleBar iconSideInset];   // align L/R margins with the title-bar close/hide icons
-    CGFloat btnH = [cfg floatFor:@"BUTTON_HEIGHT" def:22];
-    _backButton.frame = NSMakeRect(side, pad, 90, btnH);             // ← Back (top-left); title in the title bar
-    _manageEnvButton.frame = NSMakeRect(side + 90 + 6, pad, 110, btnH);   // next to Back (6pt toolbar gap)
-    _manageEnvButton.hidden = (_configKind != 1);                    // Settings only
-
-    CGFloat top = pad + btnH + pad;
-    NSRect body = NSMakeRect(side, top, W - 2 * side, H - top - pad);
-    if (_configKind == 0) {                                          // Environments
-        if (_envVC.view) { _envVC.view.frame = body; [_envVC layout]; }
-    } else {                                                         // Settings
-        _settingInset.frame = body;
-        _settingEditor.frame = NSInsetRect(_settingInset.bounds, 2, 2);   // leave room for serrated border
-    }
-}
-
 #pragma mark Conditional render by type
 
-// The current request's protocol (core::RequestType — the same enum the domain model uses). Reads the
-// domain _model directly — no legacy materialization. (Empty -> Http, harmless when no request is open.)
+// The current request's protocol. No model -> Http (harmless when no request is open).
 - (core::RequestType)requestType {
     return _model ? _model->type() : core::RequestType::Http;
 }
@@ -534,11 +334,10 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     return std::get<core::domain::KafkaRequest>(_model->payload()).kind();
 }
 
-// Toolbar Producer/Consumer toggle flipped (SPEC_kafka §2.0). BUG FIX: this used to always rebuild a FRESH
-// default spec of the other kind, discarding whatever the user had typed in Message/Config — now it archives
-// the OUTGOING kind's kafka-specific buffers + last response into _kafka{Producer,Consumer}{Req,Resp}Buffers
-// (mirrors the existing _bodyDrafts pattern for HTTP body modes) and restores the INCOMING kind's archive if
-// one exists, else falls back to a fresh default. RequestType stays Kafka throughout — "thuần UI" (spec §2.0.3).
+// Toolbar Producer/Consumer toggle flipped: archive the OUTGOING kind's kafka-specific buffers + last
+// response into _kafka{Producer,Consumer}{Req,Resp}Buffers (mirrors _bodyDrafts) and restore the INCOMING
+// kind's archive if one exists, else fall back to a fresh default — a flip must never discard typed
+// content. RequestType stays Kafka throughout (pure UI swap).
 - (void)kafkaModeToggled:(id)sender {
     if (!_model || _model->type() != core::domain::RequestType::Kafka) return;
     using namespace core::domain;
@@ -663,39 +462,6 @@ static CGImageRef OS9CreateCornerMask(int rpx) {
     _model = _model->withPayload(core::domain::GrpcRequest::create(std::move(p)).take());
 }
 
-// Build a fresh default domain payload of type `t` (used only for the initial Http default + a real
-// type-switch — load/import pass the model's existing type, so setRequestType keeps the loaded payload).
-static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::RequestType t) {
-    using namespace core::domain;
-    switch (t) {
-    case RequestType::Grpc: return defaultPayloadFor(RequestType::Grpc); // shared factory: message "{}" + example metadata hints
-    case RequestType::Soap: return defaultPayloadFor(RequestType::Soap); // shared factory: starter 1.1 envelope
-    case RequestType::WebSocket:
-        return WebSocketRequest::create({Url::create("").take(), {}, {}, Auth::none(), {}, WsSendKind::Text})
-            .take();
-    case RequestType::GraphQl: {
-        GraphQlOperation op;
-        op.query = "query {\n  \n}"; // domain requires a non-empty query
-        return GraphQlRequest::create({Url::create("").take(), op, {}, Auth::none(), GqlSubTransport::Http, ""})
-            .take();
-    }
-    case RequestType::Kafka: {
-        // BrokerList/KafkaTopic reject empty (SPEC_kafka §3) -> placeholder, same convention as GraphQL's
-        // non-empty-query default above (not an "always-empty-ok" draft like Http/WebSocket's Url).
-        KafkaProduceConfig cfg{KafkaTopic::create("demo-topic").take()};
-        KafkaMessage msg;
-        msg.value = MessagePayload{"{}"};
-        return KafkaRequest::create(BrokerList::parse("localhost:9092").take(), KafkaSecurity::plaintext(),
-                                    KafkaRequest::Mode{KafkaProduceSpec{std::move(cfg), std::move(msg)}})
-            .take();
-    }
-    default:
-        return HttpRequest::create(
-                   {HttpMethod::Get, Url::create("").take(), {}, {}, {}, Body::none(), Auth::none()})
-            .take();
-    }
-}
-
 - (void)setRequestType:(core::domain::RequestType)t {
     // Ensure _model is of type t. Loading/import pass the model's current type -> no rebuild (keeps data);
     // the initial default + any real switch -> a fresh default payload of the new type.
@@ -713,46 +479,14 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
             return core::domain::RequestConfig{core::domain::Timeout::fromMillis(toMs).take(),
                                                (bool)[dc boolFor:@"VERIFY_TLS" def:YES]};
         }();
-        _model = core::domain::RequestModel::create(id, nm, seq, cfg, DefaultPayloadOfType(t)).take();
+        _model = core::domain::RequestModel::create(id, nm, seq, cfg,
+                                                    core::domain::defaultPayloadFor(t))
+                     .take();
     }
-    // Config is the LAST request tab for every type (sits right before the cURL button).
-    if (t == core::domain::RequestType::Http) {
-        _reqTabTitles = @[ StrTabBody, StrTabQuery, StrTabHeaders, StrTabAuth, StrTabConfig ];  // "Query" (avoid confusion with path params); Body leftmost
-        _respTabTitles = @[ StrTabResponse, StrTabHeaders, StrTabRequest, StrTabCookie ];
-    } else if (t == core::domain::RequestType::WebSocket) {
-        // WS: Message = frame to send (also auto-sent on connect); Headers = handshake headers; Auth.
-        // Response pane = the in/out frame log array (reuses the streaming render).
-        _reqTabTitles = @[ StrTabMessage, StrTabHeaders, StrTabAuth, StrTabConfig ];
-        _respTabTitles = @[ StrTabMessage, StrTabRequest ];
-    } else if (t == core::domain::RequestType::GraphQl) {
-        // GraphQL: Query document + Variables (JSON) + Headers + Auth. query/mutation -> normal response pane.
-        // Schema = introspected server schema, fetched on first click (content lives in _gqlSchema* ivars,
-        // NOT in _respBuffers — it is independent of the last response). Keep it LAST: response buffers
-        // only cover the first two titles, and the applyResponseBuffers clamp falls back to Response.
-        _reqTabTitles = @[ StrTabGqlQuery, StrTabVariables, StrTabHeaders, StrTabAuth, StrTabConfig ];
-        _respTabTitles = @[ StrTabResponse, StrTabRequest, StrTabSchema ];
-    } else if (t == core::domain::RequestType::Soap) {
-        // SOAP: full XML envelope + Headers + Auth + Soap ({action, version}) + shared Config last.
-        // Response pane: body + response headers (Content-Type tells the negotiated SOAP dialect and
-        // separates a real <soap:Fault> from a proxy/gateway error page). No Request tab.
-        _reqTabTitles = @[ StrTabEnvelope, StrTabHeaders, StrTabAuth, StrTabSoap, StrTabConfig ];
-        _respTabTitles = @[ StrTabResponse, StrTabHeaders ];
-    } else if (t == core::domain::RequestType::Kafka) {
-        // Producer: Message (key/value/headers) + Kafka (topic/ack/compression/...). Consumer:
-        // ONE Kafka tab (topics/group/offset-reset/...) — no Message tab (nothing to compose, SPEC_kafka §2.2).
-        // StrTabConfig (timeout_ms/tls) is still appended LAST for every type, same as every other type.
-        if ([self kafkaClientKind] == core::domain::KafkaClientKind::Consumer) {
-            _reqTabTitles = @[ StrTabKafkaConfig, StrTabConfig ];
-            _respTabTitles = @[ StrTabMessage ]; // reuses the streaming array render (like WS); no Request tab
-        } else {
-            _reqTabTitles = @[ StrTabMessage, StrTabKafkaConfig, StrTabConfig ];
-            _respTabTitles = @[ StrTabResponse ]; // one delivery-report result (like HTTP/GraphQL); no Request tab
-        }
-    } else {
-        // gRPC: no Auth tab — call-level auth is a metadata entry (`authorization`); TLS is per-request Config.
-        _reqTabTitles = @[ StrTabMessage, StrTabMetadata, StrTabConfig ];
-        _respTabTitles = @[ StrTabMessage, StrTabRequest ];
-    }
+    // Per-type tab sets come from the binder; Config is the LAST request tab for every type.
+    RequestTypeUi *ui = TypeUiFor(t);
+    _reqTabTitles = [ui requestTabTitles:*_model];
+    _respTabTitles = [ui responseTabTitles:*_model];
     [self rebuildTabButtons];
 }
 
@@ -794,7 +528,7 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
     _reqText.editable = has;
     _sendButton.enabledState = has && !_sending;
     if (!has) {
-        // §2.1: resign input context before clearing editor/URL contents (avoid dangling context).
+        // Resign input context before clearing editor/URL contents (avoid dangling context).
         OS9SafeEndEditing(_window, _reqText);
         OS9SafeEndEditing(_window, _respText);
         _reqText.string = @""; _respText.string = @""; _urlField.stringValue = @""; _urlPrevLen = 0;
@@ -802,145 +536,5 @@ static core::domain::RequestModel::Payload DefaultPayloadOfType(core::domain::Re
     }
     [self updateTitle];
 }
-
-#pragma mark Window / misc
-
-// performClose: is a no-op on borderless windows -> call windowShouldClose: (autosaves) then close directly.
-- (void)closeWindow:(id)sender {
-    if ([self windowShouldClose:_window]) {
-        // §2.4: explicitly stop the spinner timer (the block self-cancels via weak self, but clean up now).
-        [_spinTimer invalidate]; _spinTimer = nil;
-        // §2/§4: release the input context of every text view/field BEFORE closing -> updateWindows
-        // won't re-activate the context of a view being torn down.
-        OS9SafeEndEditing(_window, nil);
-        [_reqText teardown];
-        [_respText teardown];
-        [_settingEditor teardown];
-        [_window close];
-    }
-}
-- (BOOL)windowShouldClose:(NSWindow *)sender {
-    [self autosaveCurrent];
-    // M19: stop the spinner + clear the sending flag on EVERY close path (not just the OS9 close button),
-    // so closing mid-send doesn't leave a live timer / stuck _sending state.
-    [_spinTimer invalidate]; _spinTimer = nil;
-    _sending = NO;
-    [self flushCaches];   // Fix 2: persist cache index before the window (and likely the app) goes away
-    return YES;
-}
-
-// Persist deferred cache metadata. Called on window close + applicationWillTerminate because C++ dtors
-// (which would otherwise flush) do NOT run on macOS app terminate (Fix 2).
-- (void)flushCaches {
-    if (_apiClient) _apiClient->cache().flush();
-}
-- (void)windowDidResize:(NSNotification *)note { [self relayout]; }
-
-// SQUARE_CORNERS=2: mask the content layer with a 9-slice non-AA corner image so the window has
-// pixel-rounded corners. Layer-backing the content view makes the mask clip the whole subtree.
-- (void)applyPixelCorners {
-    NSView *content = _window.contentView;
-    if (!content) return;
-    content.wantsLayer = YES;
-    const CGFloat scale = _window.backingScaleFactor > 0 ? _window.backingScaleFactor : 1.0;
-    int rpx = (int)lround(_cornerRadiusPts * scale);
-    if (rpx < 1) rpx = 1;
-    const int S = 2 * rpx + 1;
-    CGImageRef img = OS9CreateCornerMask(rpx);
-    if (!img) return;
-    if (!_cornerMask) _cornerMask = [CALayer layer];
-    _cornerMask.contents = (__bridge id)img;
-    _cornerMask.contentsScale = scale;
-    _cornerMask.contentsCenter = CGRectMake((CGFloat)rpx / S, (CGFloat)rpx / S, 1.0 / S, 1.0 / S);  // 9-slice
-    _cornerMask.magnificationFilter = kCAFilterNearest;   // stretched edges stay crisp (no blur)
-    _cornerMask.frame = content.bounds;
-    content.layer.mask = _cornerMask;
-    CGImageRelease(img);
-    _window.opaque = NO;
-    _window.backgroundColor = [NSColor clearColor];
-    [_window invalidateShadow];   // shadow follows the rounded shape
-}
-
-// Moving to a display with a different scale -> regenerate the mask at the new device resolution.
-- (void)windowDidChangeBackingProperties:(NSNotification *)note {
-    if (_cornerRadiusPts > 0) [self applyPixelCorners];
-}
-- (void)windowDidBecomeKey:(NSNotification *)note { [_titleBar setNeedsDisplay:YES]; }
-- (void)windowDidResignKey:(NSNotification *)note { [_titleBar setNeedsDisplay:YES]; }
-
-- (NSString *)abbreviatePath:(NSString *)path {
-    NSString *p = path;
-    NSString *home = NSHomeDirectory();
-    BOOL underHome = [p hasPrefix:home];
-    if (underHome) p = [p substringFromIndex:home.length];
-    NSMutableArray<NSString *> *parts = [[p pathComponents] mutableCopy];
-    [parts removeObject:@"/"];
-    if (parts.count == 0) return underHome ? @"~" : path;
-    NSMutableArray<NSString *> *out = [NSMutableArray array];
-    if (underHome) [out addObject:@"~"];
-    for (NSUInteger i = 0; i < parts.count; i++) {
-        NSString *c = parts[i];
-        [out addObject:(i == parts.count - 1) ? c : (c.length ? [c substringToIndex:1] : c)];
-    }
-    return [out componentsJoinedByString:@"/"];
-}
-
-#pragma mark Toast (flat retro, stack top-right, pushed down)
-
-- (void)toast:(NSString *)msg     { [self showToast:msg kind:0]; } // info (gray)
-- (void)toastOk:(NSString *)msg   { [self showToast:msg kind:1]; } // success (green)
-- (void)toastWarn:(NSString *)msg { [self showToast:msg kind:2]; } // fail (red)
-
-- (void)showToast:(NSString *)msg kind:(NSInteger)kind {
-    if (!_toasts) _toasts = [NSMutableArray array];
-    NSView *cv = _window.contentView;
-    OS9Toast *t = [[OS9Toast alloc] initWithMessage:msg kind:kind];
-    NSSize sz = [OS9Toast sizeForMessage:msg];
-    // start off-screen to the right, in the top slot -> reflow slides it in.
-    t.frame = NSMakeRect(cv.bounds.size.width, kTitleH + kToastTopGap, sz.width, sz.height);
-    __weak MainWindowController *ws = self;
-    __weak OS9Toast *wt = t;
-    t.onClose = ^{ [ws dismissToast:wt]; };
-    [cv addSubview:t positioned:NSWindowAbove relativeTo:nil];
-    [_toasts addObject:t];
-    while (_toasts.count > 5) {                       // cap the stack
-        OS9Toast *old = _toasts.firstObject;
-        [_toasts removeObjectAtIndex:0]; [old removeFromSuperview];
-    }
-    [self reflowToasts];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.8 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{ [ws dismissToast:wt]; });
-}
-
-- (void)dismissToast:(OS9Toast *)t {
-    if (!t || ![_toasts containsObject:t]) return;
-    [_toasts removeObject:t];
-    NSRect away = t.frame; away.origin.x = _window.contentView.bounds.size.width;  // slide right + fade
-    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
-        ctx.duration = 0.28; t.animator.frame = away; t.animator.alphaValue = 0.0;
-    } completionHandler:^{ [t removeFromSuperview]; }];
-    [self reflowToasts];   // remaining toasts slide down to fill the gap
-}
-
-// Stack toasts from the top-RIGHT downward: newest (end of array) on top (content flipped: small y = top).
-// Top slot starts under the title bar so a toast never covers the zoom/hide buttons.
-- (void)reflowToasts {
-    NSView *cv = _window.contentView;
-    CGFloat W = cv.bounds.size.width;
-    const CGFloat margin = 14, gap = 8;
-    CGFloat top = kTitleH + kToastTopGap;
-    for (NSInteger i = (NSInteger)_toasts.count - 1; i >= 0; i--) {
-        OS9Toast *t = _toasts[i];
-        CGFloat tw = t.frame.size.width, th = t.frame.size.height;
-        NSRect target = NSMakeRect(W - tw - margin, top, tw, th);
-        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx) {
-            ctx.duration = 0.2; t.animator.frame = target; t.animator.alphaValue = 1.0;
-        } completionHandler:nil];
-        top = top + th + gap;
-    }
-}
-
-- (void)positionToast { [self reflowToasts]; }
-
 
 @end

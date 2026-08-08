@@ -1,4 +1,3 @@
-// core/domain/ports/driven/i_clock.hpp — injectable monotonic clock (REFACTOR_SPEC §6.3) so timeout logic is testable.
 #pragma once
 
 #include <chrono>

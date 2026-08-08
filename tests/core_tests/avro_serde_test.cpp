@@ -1,5 +1,4 @@
-// avro_serde_test.cpp — Confluent framing + Avro<->JSON serde + Schema Registry response parsing
-// (SPEC_kafka Avro v1). Pure fixtures, no network/broker.
+// Pure fixtures, no network/broker.
 #include <cstdio>
 #include <string>
 
@@ -75,8 +74,7 @@ int run_avro_serde_tests() {
           "serde: missing fields fail");
     check(!serde::jsonToAvroBinary("{bad schema", "{}").isOk(), "serde: bad schema fails");
     check(!serde::avroBinaryToJson(kSchema, "\x01\x02", 2).isOk(), "serde: garbage binary fails");
-    // Bare union value (not Avro-JSON encoded): document jsonDecoder's verdict either way — the
-    // sender surfaces the error text verbatim, README documents the {"string": ...} convention.
+    // Bare (non-Avro-JSON) union input: no pinned verdict — just document jsonDecoder's behavior either way.
     auto bare = serde::jsonToAvroBinary(
         kSchema, R"({"name": "c", "count": 1, "note": "bare", "level": "LOW", "samples": []})");
     std::printf("  note: bare union input %s\n", bare.isOk() ? "ACCEPTED" : "rejected (Avro-JSON required)");

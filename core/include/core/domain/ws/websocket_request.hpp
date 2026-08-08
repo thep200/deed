@@ -1,4 +1,3 @@
-// core/domain/ws/websocket_request.hpp — WebSocketRequest aggregate payload (REFACTOR_SPEC §5.7).
 #pragma once
 
 #include <string>

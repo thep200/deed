@@ -8,6 +8,7 @@
     "nlohmann-json",
     "grpc",
     { "name": "librdkafka", "default-features": false, "features": ["zlib"] },
-    "avro-cpp"
+    "avro-cpp",
+    "openldap"
   ]
 }

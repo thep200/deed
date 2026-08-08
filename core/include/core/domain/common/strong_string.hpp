@@ -1,5 +1,3 @@
-// core/domain/common/strong_string.hpp — phantom-tagged string newtype (REFACTOR_SPEC §4.4) so that
-// RequestId, Token, HeaderName, … are distinct types and cannot be swapped at call sites by mistake.
 #pragma once
 
 #include <functional>
@@ -8,8 +6,7 @@
 
 namespace core::domain {
 
-// StrongString<Tag>: a value-semantic wrapper around std::string distinguished only by its Tag.
-// Two instances with different Tags do NOT implicitly convert to each other.
+// Phantom-tagged string newtype: different Tags are distinct types that never convert to each other.
 template <class Tag> class StrongString {
 public:
   StrongString() = default;
@@ -28,7 +25,6 @@ private:
 
 } // namespace core::domain
 
-// Hashable -> usable directly as an unordered_map key (orchestrator keys sagas by RequestExecutionId).
 namespace std {
 template <class Tag> struct hash<core::domain::StrongString<Tag>> {
   size_t operator()(const core::domain::StrongString<Tag> &s) const noexcept {

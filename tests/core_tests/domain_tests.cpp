@@ -1,6 +1,4 @@
-// domain_tests.cpp — REFACTOR_SPEC §11.1 domain unit tests. Header-only domain; this TU links NO core lib.
-// Each factory: a valid case + each invariant violation returns the right ErrorCode/field; sum types
-// `match` every alternative; value objects compare by value.
+// Header-only domain: this TU links NO core lib.
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -15,7 +13,10 @@
 #include "core/domain/grpc/grpc_request.hpp"
 #include "core/domain/http/http_request.hpp"
 #include "core/domain/kafka/kafka_request.hpp"
+#include "core/domain/request/request_defaults.hpp"
+#include "core/domain/request/request_model.hpp"
 #include "core/domain/request/request_type.hpp"
+#include "core/domain/ldap/ldap_request.hpp"
 #include "core/domain/soap/soap_request.hpp"
 #include "core/domain/values/header.hpp"
 #include "core/domain/values/http_method.hpp"
@@ -35,6 +36,33 @@ static int g_pass = 0, g_fail = 0;
     if (cond) { ++g_pass; }                                                                        \
     else { ++g_fail; std::printf("  FAIL: %s  (%s:%d)\n", msg, __FILE__, __LINE__); }              \
   } while (0)
+
+static void test_request_type_tokens() {
+  std::printf("[request-type tokens]\n");
+  const std::pair<core::RequestType, const char *> expect[] = {
+      {core::RequestType::Http, "http"},     {core::RequestType::Grpc, "grpc"},
+      {core::RequestType::GraphQl, "graphql"}, {core::RequestType::WebSocket, "ws"},
+      {core::RequestType::Kafka, "kafka"},   {core::RequestType::Soap, "soap"},
+      {core::RequestType::Ldap, "ldap"}};
+  for (auto &[t, tok] : expect) {
+    CHECK(core::toString(t) == tok, "toString token pinned");
+    core::RequestType back;
+    CHECK(core::parseRequestType(tok, back) && back == t, "parseRequestType round-trips");
+  }
+  core::RequestType rt;
+  CHECK(!core::parseRequestType("nope", rt), "unknown token rejected");
+}
+
+static void test_default_payloads() {
+  std::printf("[request defaults]\n");
+  for (std::size_t i = 0; i < core::kRequestTypeCount; ++i) {
+    auto t = static_cast<core::RequestType>(i);
+    auto m = RequestModel::create(RequestId(""), "x", 0,
+                                  RequestConfig{Timeout::fromMillis(1000).take(), true},
+                                  defaultPayloadFor(t));
+    CHECK(m.isOk() && m.value().type() == t, "defaultPayloadFor lands in the matching variant slot");
+  }
+}
 
 static void test_result_and_common() {
   std::printf("[result/common]\n");
@@ -117,11 +145,21 @@ static void test_auth() {
     core::RequestType rt;
     CHECK(core::parseRequestType("soap", rt) && rt == core::RequestType::Soap, "soap type parses");
   }
+  {
+    // LDAP: lenient draft (empty url OK), scope defaults Sub, type token round-trips.
+    LdapRequest::Parts lp{Url::create("").take()};
+    auto l = LdapRequest::create(std::move(lp));
+    CHECK(l.isOk(), "ldap draft creates");
+    CHECK(l.value().scope() == LdapScope::Sub, "ldap scope defaults sub");
+    CHECK(l.value().filter() == "(objectClass=*)", "ldap filter defaults match-all");
+    CHECK(core::toString(core::RequestType::Ldap) == "ldap", "ldap type token");
+    core::RequestType rt;
+    CHECK(core::parseRequestType("ldap", rt) && rt == core::RequestType::Ldap, "ldap type parses");
+  }
   auto bearer = Auth::bearer("tok").value();
   CHECK(bearer == Auth::bearer("tok").value(), "auth value equality");
   CHECK(bearer != Auth::none(), "auth inequality across alternatives");
 
-  // match handles every alternative.
   std::string kind = bearer.match([](auto &&a) -> std::string {
     using T = std::decay_t<decltype(a)>;
     if constexpr (std::is_same_v<T, AuthNone>) return "none";
@@ -183,14 +221,12 @@ static void test_grpc_graphql_ws_http() {
 
 static void test_kafka() {
   std::printf("[kafka]\n");
-  // BrokerList
   CHECK(!BrokerList::parse("").isOk(), "brokers empty rejected");
   CHECK(!BrokerList::parse("localhost").isOk(), "brokers missing port rejected");
   auto bl = BrokerList::parse("h1:9092, h2:9093");
   CHECK(bl.isOk() && bl.value().brokers().size() == 2, "brokers parse 2 entries (whitespace trimmed)");
   CHECK(bl.value().toBootstrapServers() == "h1:9092,h2:9093", "brokers toBootstrapServers");
 
-  // KafkaTopic
   CHECK(!KafkaTopic::create("").isOk(), "topic empty rejected");
   auto topic = KafkaTopic::create("demo-topic");
   CHECK(topic.isOk(), "topic ok");
@@ -221,8 +257,7 @@ static void test_kafka() {
     CHECK(g2.isOk() && g2.value().value() == "my-group", "explicit group kept");
   }
 
-  // Consumer invariants: topics non-empty; partition -1/nullopt/>=0 ok, -2 rejected; maxMessages>0;
-  // pollTimeout>0.
+  // Consumer invariants: topics non-empty; partition -1/nullopt/>=0 ok, -2 rejected; maxMessages>0; pollTimeout>0.
   {
     KafkaConsumeConfig cfg{{topic.value()}, std::nullopt, ConsumerGroup::create("").take()};
     auto ok = KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaConsumeSpec{cfg}});
@@ -252,7 +287,6 @@ static void test_kafka() {
           "consumer pollTimeout<=0 rejected");
   }
 
-  // match() dispatches the correct alternative.
   {
     KafkaConsumeConfig cfg{{topic.value()}, std::nullopt, ConsumerGroup::create("").take()};
     auto req = KafkaRequest::create(brokers, security, KafkaRequest::Mode{KafkaConsumeSpec{cfg}}).take();
@@ -267,6 +301,8 @@ static void test_kafka() {
 
 int main() {
   std::printf("== domain_tests ==\n");
+  test_request_type_tokens();
+  test_default_payloads();
   test_result_and_common();
   test_values();
   test_auth();

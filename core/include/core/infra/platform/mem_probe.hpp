@@ -1,5 +1,3 @@
-// core/infra/platform/mem_probe.hpp — measure process RAM + structured logger for the stress harness.
-// STRESS_TEST.md §3. Public header (usable by both CLI and the macOS UI that links core).
 #pragma once
 
 #include <cstdint>
@@ -9,13 +7,11 @@
 
 namespace core::memprobe {
 
-// phys_footprint (~ "Memory" column in Activity Monitor), in bytes.
-// Returns 0 if unavailable (or non-Apple platform — mach guard).
+// phys_footprint (~ Activity Monitor's "Memory"), in bytes; 0 if unavailable (non-Apple platform).
 std::uint64_t PhysFootprintBytes();
 
-// Thread-safe structured CSV logger. Each iteration writes one row (STRESS_TEST §3.2).
-// Columns: ts_ms, iter, op, phys_footprint_mb, ram_cache_bytes, disk_cache_bytes, open_request_id, idle
-// `idle=1` marks an idle checkpoint (back to no-open-request state) -> baseline analysis.
+// Thread-safe CSV logger; columns: ts_ms, iter, op, phys_footprint_mb, ram_cache_bytes, disk_cache_bytes, open_request_id, idle.
+// idle=1 marks an idle checkpoint (back to no-open-request state).
 class StructuredLogger {
 public:
     struct Row {

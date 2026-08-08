@@ -1,7 +1,3 @@
-// core/app/persistence_repositories.hpp — repository PORTS over the remaining stores (REFACTOR_SPEC §6.3/§8.3)
-// so the UI can reach environments / session / app-config through interfaces instead of Engine directly.
-// Transitional (app layer): returns the existing POD config types (core::Environment/Session/AppConfig from
-// env_config.hpp — clean value types, not part of types.hpp's transport model). Header-only forwarders.
 #pragma once
 
 #include <cstdint>
@@ -11,20 +7,16 @@
 #include <utility>
 #include <vector>
 
-#include "core/infra/cache/cache.hpp"             // ResponseRecord (cache repo getResponse) — holds domain ApiResponse
-#include "core/domain/request/request_model.hpp" // domain RequestModel (collection repo load/save/create)
-#include "core/domain/response/api_error.hpp"    // domain ApiError (cache repo putError)
-#include "core/domain/response/api_response.hpp" // domain ApiResponse (cache repo putResponse)
-#include "core/domain/environment/env_config.hpp"        // TreeNode (collection tree) + the config PODs
+#include "core/infra/cache/cache.hpp"
+#include "core/domain/request/request_model.hpp"
+#include "core/domain/response/api_error.hpp"
+#include "core/domain/response/api_response.hpp"
+#include "core/domain/environment/env_config.hpp"
 #include "core/infra/persistence/stores.hpp"
-#include "core/domain/request/request_type.hpp"      // RequestType (createRequest) — survives types.hpp removal
+#include "core/domain/request/request_type.hpp"
 
 namespace core::app {
 
-// ---- Response cache ----
-// App-layer repository over the response cache. Speaks DOMAIN ApiResponse/ApiError (REFACTOR_SPEC D); the
-// ResponseRecord it returns embeds a domain ApiResponse. The concrete adapter (NativeResponseCacheRepository,
-// owning a ResponseCache) is defined in composition_root.cpp; the header declares only the interface.
 class IResponseCacheRepository {
 public:
   virtual ~IResponseCacheRepository() = default;
@@ -38,11 +30,6 @@ public:
   virtual std::uint64_t l1UsedBytes() const = 0; // 0 when the cache is disabled
 };
 
-// ---- Collection ----
-// App-layer repository over CollectionStore. load/save/create-from-model speak the DOMAIN RequestModel
-// (REFACTOR_SPEC P6 — the UI editor holds a domain model); scan/create/tree ops use the surviving
-// TreeNode/RequestType view types. The store speaks domain natively, so the concrete adapter (in
-// composition_root.cpp) just forwards — no conversion. The header declares only the interface.
 class ICollectionRepository {
 public:
   virtual ~ICollectionRepository() = default;
@@ -50,8 +37,7 @@ public:
   virtual core::TreeNode scanTree() const = 0;
   virtual core::domain::RequestModel loadRequest(const std::string &relPath) const = 0;
   virtual std::string saveRequest(const std::string &relPath, const core::domain::RequestModel &) const = 0;
-  // UI-only per-mode body drafts (see CollectionStore::loadBodyDrafts) — keep content typed in non-active
-  // body modes across save/reload. saveRequest overload writes them; the domain model ignores them.
+  // UI-only per-mode body drafts: keep text typed in non-active body modes across save/reload; the domain model ignores them.
   virtual std::map<std::string, std::string> loadBodyDrafts(const std::string &relPath) const = 0;
   virtual std::string saveRequest(const std::string &relPath, const core::domain::RequestModel &,
                                   const std::map<std::string, std::string> &bodyDrafts) const = 0;
@@ -70,7 +56,6 @@ public:
   virtual std::string findRelPathById(const std::string &id) const = 0;
 };
 
-// ---- Environments ----
 class IEnvironmentRepository {
 public:
   virtual ~IEnvironmentRepository() = default;
@@ -91,7 +76,6 @@ private:
   core::EnvironmentStore &s_;
 };
 
-// ---- Session ----
 class ISessionRepository {
 public:
   virtual ~ISessionRepository() = default;
@@ -114,7 +98,6 @@ private:
   core::SessionStore &s_;
 };
 
-// ---- App config ----
 class IAppConfigRepository {
 public:
   virtual ~IAppConfigRepository() = default;

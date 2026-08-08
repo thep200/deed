@@ -1,29 +1,15 @@
 #include "core/infra/serialization/field_json.hpp"
 
-#include <chrono>
-
 #include <nlohmann/json.hpp>
 
-#include "infra/serialization/json_codec.hpp"  // core::codec::parseGuarded (H5 depth guard) + safe getters
-#include "infra/serialization/wire_format.hpp" // core::wire::* on-disk body-mode tokens
+#include "infra/serialization/field_json_common.hpp"
+#include "infra/serialization/wire_format.hpp"
 
 namespace core::serial {
 namespace d = core::domain;
 namespace w = core::wire;
-using nlohmann::json;
 
 namespace {
-std::string gs(const json &j, const char *k, const std::string &dflt = "") {
-  return core::codec::getStr(j, k, dflt);
-}
-bool gb(const json &j, const char *k, bool dflt) { return core::codec::getBool(j, k, dflt); }
-int gi(const json &j, const char *k, int dflt) { return core::codec::getInt(j, k, dflt); }
-json parseGuarded(const std::string &text, const char *fallback) {
-  return core::codec::parseGuarded(text.empty() ? fallback : text); // depth-guarded (H5)
-}
-template <class T> d::Result<T> parseErr(const std::string &what) {
-  return d::Result<T>::fail({d::ErrorCode::Parse, what, ""});
-}
 // Raw-body subtype -> its wire "mode" token (and the key its text is stored under).
 const char *rawSubtypeKey(d::RawSubtype s) {
   switch (s) {
@@ -33,7 +19,6 @@ const char *rawSubtypeKey(d::RawSubtype s) {
   }
   return w::kBodyJson;
 }
-// Body sub-collection parsers — keep jsonToBody a flat mode-dispatch (clang-tidy function-size).
 std::vector<d::FormField> formFieldsFrom(const json &j) {
   std::vector<d::FormField> fields;
   if (auto it = j.find("formUrlEncoded"); it != j.end() && it->is_array())
@@ -56,7 +41,6 @@ std::vector<d::MultipartPart> multipartPartsFrom(const json &j) {
 }
 } // namespace
 
-// ---- Headers ----
 std::string headersToJson(const d::HeaderList &list) {
   json a = json::array();
   for (const auto &h : list.items())
@@ -80,7 +64,6 @@ d::Result<d::HeaderList> jsonToHeaders(const std::string &text) {
   }
 }
 
-// ---- Query params ----
 std::string paramsToJson(const d::QueryParamList &list) {
   json a = json::array();
   for (const auto &p : list.items())
@@ -104,9 +87,7 @@ d::Result<d::QueryParamList> jsonToParams(const std::string &text) {
   }
 }
 
-// ---- Auth ----
-// ONE flat shape, discriminated only by "type": fields sit NEXT TO the discriminator
-// ({"type":"basic","username":...}), no per-type sub-object.
+// One flat shape discriminated by "type": fields sit next to the discriminator, no per-type sub-object.
 std::string authToJson(const d::Auth &auth) {
   json j;
   auth.match([&](auto &&a) {
@@ -168,7 +149,6 @@ d::Result<d::Auth> jsonToAuth(const std::string &text) {
   }
 }
 
-// ---- Body ----
 std::string bodyToJson(const d::Body &body) {
   json j;
   body.match([&](auto &&b) {
@@ -226,7 +206,6 @@ d::Result<d::Body> jsonToBody(const std::string &text) {
   }
 }
 
-// ---- Editor body view (unwrapped per-mode) ----
 EditorBody bodyToEditor(const d::Body &body) {
   EditorBody eb{w::kBodyJson, ""};
   body.match([&](auto &&b) {
@@ -248,9 +227,8 @@ EditorBody bodyToEditor(const d::Body &body) {
   });
   return eb;
 }
-// Binary mode's editor content is either {"filePath"|"path": "..."} / a bare JSON string / or a plain path
-// typed as-is — extracted out of bodyFromEditor (Step 3 flatten: was a 3rd nesting level inside it, try ->
-// if/else-if, for a single mode branch) so the dispatcher below stays a flat sequence of guard clauses.
+
+// Accepts {"filePath"|"path": ...}, a bare JSON string, or a plain path typed as-is.
 static std::string binaryFilePathFromEditor(const std::string &content) {
   try {
     auto j = json::parse(content);
@@ -289,334 +267,12 @@ d::Result<d::Body> bodyFromEditor(const std::string &mode, const std::string &co
   }
 }
 
-// ---- gRPC metadata ----
-std::string metadataToJson(const d::GrpcMetadata &md) {
-  json a = json::array();
-  for (const auto &e : md.entries())
-    a.push_back({{"key", e.key}, {"value", e.value}, {"enabled", e.enabled ? 1 : 0}});
-  return a.dump(2);
-}
-d::Result<d::GrpcMetadata> jsonToMetadata(const std::string &text) {
-  try {
-    auto j = parseGuarded(text, "[]");
-    if (!j.is_array()) return parseErr<d::GrpcMetadata>("metadata must be a JSON array");
-    std::vector<d::MetadataEntry> entries;
-    for (const auto &e : j) {
-      if (!e.is_object()) continue;
-      entries.push_back({gs(e, "key"), gs(e, "value"), gb(e, "enabled", true)});
-    }
-    return d::GrpcMetadata::create(std::move(entries));
-  } catch (const std::exception &e) {
-    return parseErr<d::GrpcMetadata>(e.what());
-  }
-}
-
-// ---- Response headers (display) ----
 std::string responseHeadersToJson(const std::vector<d::ResponseHeader> &headers) {
   json a = json::array();
   for (const auto &h : headers) a.push_back({{"key", h.name}, {"value", h.value}});
   return a.dump(2);
 }
 
-// ---- Kafka record (display) ----
-std::string kafkaRecordToDisplayJson(const d::KafkaRecord &r) {
-  json j;
-  j["topic"] = r.topic;
-  j["partition"] = r.partition;
-  j["offset"] = r.offset;
-  j["key"] = r.key ? json(*r.key) : json(nullptr);
-  if (r.valueIsNull) {
-    j["value"] = nullptr;
-  } else {
-    try {
-      j["value"] = json::parse(r.value); // embed parsed JSON when possible (SPEC_kafka §2.2)
-    } catch (...) {
-      j["value"] = r.value; // else raw string
-    }
-  }
-  if (!r.valueEncoding.empty()) j["valueEncoding"] = r.valueEncoding; // e.g. "avro (id 7)"
-  json hs = json::array();
-  for (const auto &h : r.headers)
-    if (h.enabled) hs.push_back({{"key", h.key}, {"value", h.value}});
-  j["headers"] = hs;
-  j["timestampMs"] = r.timestampMs;
-  j["size"] = r.size;
-  // error_handler_t::replace: value/headers hold VERBATIM bytes — invalid UTF-8 must render as U+FFFD,
-  // not throw out of the noexcept UiObserver::onEvent (std::terminate).
-  return j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace);
-}
-
-// ---- Kafka editor tabs (SPEC_kafka §2/§4) ----
-namespace {
-// Schema Registry block ({url, username, password}); absent/empty url = not configured.
-json schemaRegistryToJson(const d::SchemaRegistryRef &r) {
-  return json{{"url", r.url}, {"username", r.username}, {"password", r.password}};
-}
-d::SchemaRegistryRef schemaRegistryFromJson(const json &j) {
-  d::SchemaRegistryRef r;
-  if (auto it = j.find("schemaRegistry"); it != j.end() && it->is_object()) {
-    r.url = gs(*it, "url");
-    r.username = gs(*it, "username");
-    r.password = gs(*it, "password");
-  }
-  return r;
-}
-template <class T> json kafkaKvToJson(const std::vector<T> &list) {
-  json a = json::array();
-  for (const auto &e : list) a.push_back({{"key", e.key}, {"value", e.value}, {"enabled", e.enabled ? 1 : 0}});
-  return a;
-}
-template <class T> std::vector<T> kafkaKvFromJson(const json &arr) {
-  std::vector<T> out;
-  if (arr.is_array())
-    for (const auto &e : arr)
-      if (e.is_object()) out.push_back(T{gs(e, "key"), gs(e, "value"), gb(e, "enabled", true)});
-  return out;
-}
-const char *kafkaAcksStr(d::Acks a) {
-  switch (a) {
-  case d::Acks::None: return "0";
-  case d::Acks::Leader: return "1";
-  case d::Acks::All: return "all";
-  }
-  return "all";
-}
-d::Acks kafkaAcksFrom(const std::string &s) {
-  if (s == "0") return d::Acks::None;
-  if (s == "1") return d::Acks::Leader;
-  return d::Acks::All;
-}
-const char *kafkaCompressionStr(d::Compression c) {
-  switch (c) {
-  case d::Compression::None: return "none";
-  case d::Compression::Gzip: return "gzip";
-  case d::Compression::Snappy: return "snappy";
-  case d::Compression::Lz4: return "lz4";
-  case d::Compression::Zstd: return "zstd";
-  }
-  return "none";
-}
-d::Compression kafkaCompressionFrom(const std::string &s) {
-  if (s == "gzip") return d::Compression::Gzip;
-  if (s == "snappy") return d::Compression::Snappy;
-  if (s == "lz4") return d::Compression::Lz4;
-  if (s == "zstd") return d::Compression::Zstd;
-  return d::Compression::None;
-}
-} // namespace
-
-std::string kafkaMessageToJson(const d::KafkaMessage &m) {
-  json j;
-  j["key"] = m.key ? m.key->value : std::string();
-  // Embed `value` as a REAL nested JSON value (object/array/...), not a JSON-encoded string — the value is
-  // always JSON now (no raw/binary mode), so show it the way the user will actually edit it.
-  try {
-    j["value"] = json::parse(m.value.value);
-  } catch (...) {
-    j["value"] = m.value.value; // not valid JSON yet (empty draft / mid-edit) -> show verbatim as a string
-  }
-  j["headers"] = kafkaKvToJson(m.headers);
-  return j.dump(2, ' ', false, nlohmann::json::error_handler_t::replace); // mid-edit bytes must not throw
-}
-d::Result<d::KafkaMessage> jsonToKafkaMessage(const std::string &text) {
-  try {
-    auto j = parseGuarded(text, "{}");
-    d::KafkaMessage m;
-    std::string key = gs(j, "key");
-    if (!key.empty()) m.key = d::MessageKey{key};
-    if (auto it = j.find("value"); it != j.end()) {
-      // Real JSON -> re-serialize to the text sent to Kafka. Plain string -> use as-is (draft
-      // mid-edit; the writer stores unparseable drafts verbatim).
-      m.value.value = it->is_string() ? it->get<std::string>() : it->dump(2);
-    }
-    m.headers = kafkaKvFromJson<d::KafkaHeader>(j.value("headers", json::array()));
-    return d::Result<d::KafkaMessage>::ok(std::move(m));
-  } catch (const std::exception &e) {
-    return parseErr<d::KafkaMessage>(e.what());
-  }
-}
-
-std::string kafkaProduceConfigToJson(const d::KafkaProduceConfig &c) {
-  json j{{"topic", c.topic.value()},
-        {"partition", c.partition.value},
-        {"acks", kafkaAcksStr(c.acks)},
-        {"compression", kafkaCompressionStr(c.compression)},
-        {"messageTimeoutMs", c.messageTimeout.count()},
-        {"lingerMs", c.linger.count()},
-        {"retries", c.retries},
-        {"idempotence", c.idempotence},
-        {"clientId", c.clientId},
-        // Always emitted (defaults included) so the keys are discoverable in the Kafka tab.
-        {"valueFormat", c.valueFormat == d::KafkaValueFormat::Avro ? "avro" : "json"},
-        {"schemaRegistry", schemaRegistryToJson(c.schemaRegistry)},
-        {"extra", kafkaKvToJson(c.extra)}};
-  return j.dump(2);
-}
-d::Result<d::KafkaProduceConfig> jsonToKafkaProduceConfig(const std::string &text) {
-  try {
-    auto j = parseGuarded(text, "{}");
-    auto topic = d::KafkaTopic::create(gs(j, "topic"));
-    if (!topic) return d::Result<d::KafkaProduceConfig>::fail(topic.error());
-    d::KafkaProduceConfig c{topic.take()};
-    c.partition = d::KafkaPartition{gi(j, "partition", d::KafkaPartition::kAuto)};
-    c.acks = kafkaAcksFrom(gs(j, "acks", "all"));
-    c.compression = kafkaCompressionFrom(gs(j, "compression", "none"));
-    c.messageTimeout = std::chrono::milliseconds(gi(j, "messageTimeoutMs", 30000));
-    c.linger = std::chrono::milliseconds(gi(j, "lingerMs", 0));
-    c.retries = gi(j, "retries", 3);
-    c.idempotence = gb(j, "idempotence", false);
-    c.clientId = gs(j, "clientId", "deed");
-    c.valueFormat = gs(j, "valueFormat", "json") == "avro" ? d::KafkaValueFormat::Avro
-                                                           : d::KafkaValueFormat::Json;
-    c.schemaRegistry = schemaRegistryFromJson(j); // absent -> not configured
-    c.extra = kafkaKvFromJson<d::KafkaExtra>(j.value("extra", json::array()));
-    return d::Result<d::KafkaProduceConfig>::ok(std::move(c));
-  } catch (const std::exception &e) {
-    return parseErr<d::KafkaProduceConfig>(e.what());
-  }
-}
-
-std::string kafkaConsumeConfigToJson(const d::KafkaConsumeConfig &c) {
-  json topics = json::array();
-  for (const auto &t : c.topics) topics.push_back(t.value());
-  json j{{"topics", topics},
-        {"group", c.group.value()},
-        {"offsetReset", c.offsetReset == d::OffsetReset::Earliest ? "earliest" : "latest"},
-        {"partition", c.partition ? c.partition->value : d::KafkaPartition::kAuto},
-        {"autoCommit", c.autoCommit},
-        {"maxMessages", c.maxMessages ? json(*c.maxMessages) : json(nullptr)},
-        {"pollTimeoutMs", c.pollTimeout.count()},
-        {"clientId", c.clientId},
-        {"schemaRegistry", schemaRegistryToJson(c.schemaRegistry)},
-        {"extra", kafkaKvToJson(c.extra)}};
-  return j.dump(2);
-}
-d::Result<d::KafkaConsumeConfig> jsonToKafkaConsumeConfig(const std::string &text) {
-  try {
-    auto j = parseGuarded(text, "{}");
-    std::vector<d::KafkaTopic> topics;
-    if (auto it = j.find("topics"); it != j.end() && it->is_array())
-      for (const auto &e : *it)
-        if (e.is_string()) {
-          auto t = d::KafkaTopic::create(e.get<std::string>());
-          if (!t) return d::Result<d::KafkaConsumeConfig>::fail(t.error());
-          topics.push_back(t.take());
-        }
-    auto group = d::ConsumerGroup::create(gs(j, "group"));
-    if (!group) return d::Result<d::KafkaConsumeConfig>::fail(group.error());
-    int partitionRaw = gi(j, "partition", d::KafkaPartition::kAuto);
-    std::optional<d::KafkaPartition> partition;
-    if (partitionRaw != d::KafkaPartition::kAuto) partition = d::KafkaPartition{partitionRaw};
-    d::KafkaConsumeConfig c{std::move(topics), partition, group.take()};
-    c.offsetReset = gs(j, "offsetReset", "latest") == "earliest" ? d::OffsetReset::Earliest : d::OffsetReset::Latest;
-    c.autoCommit = gb(j, "autoCommit", true);
-    if (auto it = j.find("maxMessages"); it != j.end() && it->is_number()) c.maxMessages = it->get<int>();
-    c.pollTimeout = std::chrono::milliseconds(gi(j, "pollTimeoutMs", 500));
-    c.clientId = gs(j, "clientId", "deed");
-    c.schemaRegistry = schemaRegistryFromJson(j);
-    c.extra = kafkaKvFromJson<d::KafkaExtra>(j.value("extra", json::array()));
-    return d::Result<d::KafkaConsumeConfig>::ok(std::move(c));
-  } catch (const std::exception &e) {
-    return parseErr<d::KafkaConsumeConfig>(e.what());
-  }
-}
-
-// ---- SOAP editor tab (SPEC_soap §6) ----
-std::string soapConfigToJson(const d::SoapRequest &s) {
-  json j{{"action", s.action()},
-        {"version", s.version() == d::SoapVersion::V1_2 ? "1.2" : "1.1"}};
-  return j.dump(2);
-}
-d::Result<SoapConfig> jsonToSoapConfig(const std::string &text) {
-  try {
-    auto j = parseGuarded(text, "{}");
-    SoapConfig c;
-    c.action = gs(j, "action");
-    std::string v = gs(j, "version", "1.1");
-    if (v == "1.2") c.version = d::SoapVersion::V1_2;
-    else if (v != "1.1") return parseErr<SoapConfig>("unknown soap version: " + v + " (want 1.1 or 1.2)");
-    return d::Result<SoapConfig>::ok(std::move(c));
-  } catch (const std::exception &e) {
-    return parseErr<SoapConfig>(e.what());
-  }
-}
-
-// ---- Generic JSON text helpers ----
-
-// Conservative hand-rolled XML indenter (SPEC_soap §5): tag-level tokenizer, no parser, no deps.
-// Anything unusual (CDATA/comments/DOCTYPE/mismatched nesting) -> return the input VERBATIM — this
-// is a display aid and must never corrupt what the server actually sent.
-std::string formatXml(const std::string &text) {
-  auto first = text.find_first_not_of(" \t\r\n");
-  if (first == std::string::npos || text[first] != '<') return text;
-  if (text.find("<![CDATA[") != std::string::npos || text.find("<!--") != std::string::npos ||
-      text.find("<!DOCTYPE") != std::string::npos)
-    return text;
-
-  std::string out;
-  out.reserve(text.size() + text.size() / 4);
-  int depth = 0;
-  std::size_t i = first;
-  auto indent = [&](int d) {
-    out += '\n';
-    out.append(static_cast<std::size_t>(d) * 2, ' ');   // one append, not one += per level
-  };
-  bool firstTag = true;
-  while (i < text.size()) {
-    std::size_t lt = text.find('<', i);
-    if (lt == std::string::npos) break;
-    // Inter-tag text: keep non-whitespace content INLINE with its element (no reformat).
-    std::string between = text.substr(i, lt - i);
-    bool textContent = between.find_first_not_of(" \t\r\n") != std::string::npos;
-    if (textContent) out += between;
-    std::size_t gt = text.find('>', lt);
-    if (gt == std::string::npos) return text; // malformed -> verbatim
-    std::string tag = text.substr(lt, gt - lt + 1);
-    bool closing = tag.size() > 1 && tag[1] == '/';
-    bool selfClose = tag.size() > 1 && tag[tag.size() - 2] == '/';
-    bool decl = tag.size() > 1 && (tag[1] == '?' || tag[1] == '!');
-    if (closing) {
-      --depth;
-      if (depth < 0) return text; // mismatch -> verbatim
-      if (!textContent) indent(depth);
-      out += tag;
-    } else {
-      if (!firstTag && !textContent) indent(depth);
-      out += tag;
-      if (!decl && !selfClose) ++depth;
-    }
-    firstTag = false;
-    i = gt + 1;
-  }
-  if (depth != 0) return text; // unbalanced -> verbatim
-  return out.substr(out.size() > 0 && out[0] == '\n' ? 1 : 0);
-}
-
-std::string formatJson(const std::string &text, bool pretty) {
-  try {
-    auto j = json::parse(text);
-    return pretty ? j.dump(2) : j.dump();
-  } catch (...) {
-    // Not JSON — an XML body (SOAP response, XML API) still deserves Pretty (SPEC_soap §5).
-    if (pretty) return formatXml(text);
-    return text;
-  }
-}
-std::string jsonEncodeString(const std::string &text) {
-  json j = text;
-  return j.dump();
-}
-std::string jsonDecodeString(const std::string &text) {
-  try {
-    auto j = json::parse(text);
-    if (j.is_string()) return j.get<std::string>();
-    return text;
-  } catch (...) {
-    return text;
-  }
-}
-
-// ---- Config ----
 std::string configToJson(const d::RequestConfig &c) {
   json j;
   j["timeout_ms"] = c.timeout.millis();
@@ -632,26 +288,6 @@ d::Result<d::RequestConfig> jsonToConfig(const std::string &text) {
     auto t = d::Timeout::fromMillis(ms);
     if (!t) return d::Result<d::RequestConfig>::fail(t.error());
     return d::Result<d::RequestConfig>::ok(d::RequestConfig{t.take(), gb(j, "tls", true)});
-  } catch (const std::exception &e) {
-    return parseErr<d::RequestConfig>(e.what());
-  }
-}
-
-// ---- Config (Kafka only — no "tls" key) ----
-std::string kafkaRequestConfigToJson(const d::RequestConfig &c) {
-  json j;
-  j["timeout_ms"] = c.timeout.millis();
-  return j.dump(2);
-}
-d::Result<d::RequestConfig> jsonToKafkaRequestConfig(const std::string &text) {
-  try {
-    auto j = parseGuarded(text, "{}");
-    if (!j.is_object()) return parseErr<d::RequestConfig>("config must be a JSON object");
-    long long ms = 30000;
-    if (auto it = j.find("timeout_ms"); it != j.end() && it->is_number()) ms = it->get<long long>();
-    auto t = d::Timeout::fromMillis(ms);
-    if (!t) return d::Result<d::RequestConfig>::fail(t.error());
-    return d::Result<d::RequestConfig>::ok(d::RequestConfig{t.take(), false}); // Kafka: no TLS toggle yet
   } catch (const std::exception &e) {
     return parseErr<d::RequestConfig>(e.what());
   }

@@ -1,4 +1,3 @@
-// env_crypto — encrypt-at-rest for env values flagged "Enc" (EnvKey.secret).
 // Format: "enc:v1:" + base64(nonce12 || ciphertext || tag16), AES-256-GCM, key = SHA-256(passphrase).
 #pragma once
 

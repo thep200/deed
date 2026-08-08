@@ -1,9 +1,7 @@
-// SciTextView — thin wrapper around ScintillaView (docs/RENDERING_AND_ASSETS.md §3.6).
-// Hides the SCI_* API from the rest; used for both the request pane (editable) and response (read-only).
+// Thin ScintillaView wrapper hiding the SCI_* API; used for the editable request pane and read-only response.
 #import <Cocoa/Cocoa.h>
 
-// Which lexer/style set the pane runs. JSON is the default (all tabs historically); XML is used for
-// the SOAP Envelope tab and XML-looking response bodies (SPEC_soap highlight).
+// Lexer/style set for the pane. JSON is the default; XML is for the SOAP Envelope tab and XML-looking response bodies.
 typedef NS_ENUM(NSInteger, SciLanguage) {
     SciLanguageJson,
     SciLanguageXml,
@@ -16,28 +14,20 @@ typedef NS_ENUM(NSInteger, SciLanguage) {
 
 - (instancetype)initEditable:(BOOL)editable;          // create + configure JSON + Platinum theme
 - (void)setFontName:(NSString *)name size:(CGFloat)size;
-// Switch the lexer + its style set (idempotent — same language is a no-op). JSON and XML share the
-// same Scintilla style-ID space (SCE_JSON_* and SCE_H_* are both 0-13), so styles are re-applied
-// per language on every switch.
+// Same language is a no-op. SCE_JSON_* and SCE_H_* share style IDs 0-13 -> styles re-applied per switch.
 - (void)setLanguage:(SciLanguage)lang;
 - (BOOL)hasFocus;                                     // is the editor holding the caret?
-// Free the text + undo buffers (LAZY_TREE §8.3): clear text then empty the undo buffer.
-// Call when switching/closing a request so old content isn't kept in RAM.
+// Clear text + empty the undo buffer — call on request switch/close so old content isn't kept in RAM.
 - (void)clearContents;
 
-// --- Streaming render (SPEC_grpc_streaming §7) ---
-// beginStreaming: clear + seed an empty-but-VALID array "[\n]" so the JSON is well-formed from the very
-//   first frame, then enter streaming-write mode (follow-tail on).
-// insertStreamChunk: insert one coalesced chunk JUST BEFORE the trailing "]" -> the array stays valid the
-//   whole time (the closing bracket is always present).
-// appendStreamChunk: raw programmatic append at the end (used to seed); toggles read-only off/on.
-// endStreamingValid: leave streaming mode; fold=YES may fold/validate the JSON array.
+// Streaming render: beginStreaming seeds a VALID empty array "[\n]" (follow-tail on); insertStreamChunk
+// inserts JUST BEFORE the trailing "]" so the JSON stays well-formed mid-stream; appendStreamChunk is a
+// raw programmatic append (read-only toggled off/on); endStreamingValid leaves streaming (fold=YES may fold).
 - (void)beginStreaming;
 - (void)insertStreamChunk:(NSString *)chunk;
 - (void)appendStreamChunk:(NSString *)chunk;
 - (void)endStreamingValid:(BOOL)fold;
-// Safe teardown (CRASH_FIX_LIFECYCLE §2.2): resign input context + detach the Scintilla delegate
-// (unsafe_unretained) before destruction -> don't send notifications to a dead object. Idempotent;
-// also called automatically in dealloc.
+// Resign input context + detach the (unsafe_unretained) Scintilla delegate before destruction so
+// notifications never hit a dead object. Idempotent; also runs in dealloc.
 - (void)teardown;
 @end

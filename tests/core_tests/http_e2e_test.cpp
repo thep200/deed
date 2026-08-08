@@ -1,7 +1,4 @@
-// http_e2e_test.cpp — REFACTOR_SPEC P5 end-to-end: a REAL HTTP request travels through the new domain
-// stack (CoreApiClient -> RequestOrchestrator -> SendRequestSaga -> LegacySenderAdapter -> cpr) and back as
-// domain ResponseEvents. Talks to the Go test server (tests/testserver) — no external network. Covers HTTP
-// GET/POST, {{var}} resolution, GraphQL-over-HTTP, and an unreachable host. Base URL is argv[1].
+// e2e against the Go test server (tests/testserver) — no external network; base URL is argv[1].
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -23,8 +20,7 @@ void check(bool ok, const char *msg) {
   else { ++g_fail; std::printf("  FAIL: %s\n", msg); }
 }
 
-// Collects the saga's events (pool executor -> events arrive on a background thread); waitTerminal() blocks
-// until a terminal event (EvCompleted/EvFailed/EvClosed) or timeout.
+// Collects the saga's events (they arrive on a pool thread); waitTerminal() blocks until a terminal event or timeout.
 struct Collector final : IRequestObserver {
   std::mutex mu;
   std::condition_variable cv;
@@ -115,8 +111,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  // 3. {{var}} resolution at the send boundary (blocker #1 closed): set the env scope, send a URL that is
-  //    entirely a placeholder, and confirm the request actually reached the resolved host.
+  // 3. {{var}} resolution at the send boundary: a URL that is entirely a placeholder must reach the resolved host.
   {
     VariableScope scope;
     scope.values["base"] = base;
@@ -131,7 +126,7 @@ int main(int argc, char **argv) {
     client->setVariableScope({}); // reset for later cases
   }
 
-  // 3b. GraphQL over HTTP through the new stack (GraphQlSender POSTs {query,variables} to /graphql).
+  // 3b. GraphQL over HTTP (GraphQlSender POSTs {query,variables} to /graphql).
   {
     GraphQlRequest::Parts gp{Url::create(base + "/graphql").take(), {}, {}, Auth::none(),
                              GqlSubTransport::Http, ""};
@@ -149,8 +144,7 @@ int main(int argc, char **argv) {
     if (c) check(c->summary.body.find("echo") != std::string::npos, "GraphQL response echoed query");
   }
 
-  // 3d. Native HTTP sender applies Bearer auth AND resolves {{var}} inside the token (A1 echoes the
-  //     Authorization header back). Sanity for the native auth path.
+  // 3d. Native HTTP sender applies Bearer auth and resolves {{var}} inside the token (server echoes Authorization back).
   {
     VariableScope scope;
     scope.values["tok"] = "secret-h";
@@ -170,8 +164,7 @@ int main(int argc, char **argv) {
     client->setVariableScope({});
   }
 
-  // 3e. Native GraphQL sender applies auth, with {{var}} in the token resolved by the DOMAIN resolver.
-  //     Gate for the resolver fix: without g.auth resolution the server echoes literal "Bearer {{tok}}".
+  // 3e. GraphQL sender applies auth with {{var}} in the token resolved (regression: literal "Bearer {{tok}}" reached the server).
   {
     VariableScope scope;
     scope.values["tok"] = "secret-g";
@@ -192,8 +185,7 @@ int main(int argc, char **argv) {
     client->setVariableScope({});
   }
 
-  // 3f. SSE (text/event-stream) through the new stack: receive N events as EvMessage, then cancel (a real
-  //     SSE client reconnects on clean close, so we don't wait for a natural terminal).
+  // 3f. SSE: receive N events as EvMessage, then cancel (a real SSE client reconnects on clean close, so no natural terminal).
   {
     auto obs = std::make_shared<Collector>();
     auto req = httpReq(HttpMethod::Get, base + "/sse?count=3", Body::none(),
@@ -209,10 +201,9 @@ int main(int argc, char **argv) {
     check(obs->failed() != nullptr || obs->completed() != nullptr, "SSE reached a terminal after cancel");
   }
 
-  // 3g. GraphQL subscription over WebSocket (graphql-transport-ws): connection_init/ack, subscribe, then
-  //     3 "next" events (EvMessage) and a "complete" (terminal EvCompleted).
+  // 3g. GraphQL subscription over WebSocket (graphql-transport-ws): 3 "next" events then "complete".
   {
-    std::string wsBase = base; // http://host:port -> ws://host:port
+    std::string wsBase = base;
     auto p = wsBase.find("://");
     if (p != std::string::npos) wsBase = "ws" + wsBase.substr(p);
     GraphQlRequest::Parts gp{Url::create(wsBase + "/graphqlws").take(), {}, {}, Auth::none(),

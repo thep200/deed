@@ -1,17 +1,6 @@
-// AppStrings.h — THE SINGLE SOURCE for every user-facing text string in the app.
-//
-// Goal: gather all text (button labels, dialog titles/bodies, toasts, menus, tabs,
-// placeholders, error/validation messages, default names...) in ONE place for easy
-// management, review, and consistent wording.
-//
-// Conventions:
-//  - Constants `extern NSString *const Str...` (defined in AppStrings.mm) -> one linked copy.
-//  - Constants prefixed `StrFmt...` are FORMAT strings (used with +stringWithFormat:);
-//    keep argument order/types intact (%@, %lu, %s...).
-//  - Identical strings with the same meaning SHARE one constant (e.g. Cancel/OK/Delete).
-//
-// Intentionally excluded: internal keys/identifiers (mode "json", key "Global"...),
-// JSON data templates, icon glyphs, and pure-symbol format fragments (e.g. "%@ | %@").
+// THE single source for user-facing strings. `StrFmt...` = format strings for +stringWithFormat: —
+// keep argument order/types intact. Identical strings with the same meaning SHARE one constant.
+// Internal keys/identifiers (mode "json", key "Global"...) and pure-symbol fragments stay out.
 #pragma once
 
 #import <Foundation/Foundation.h>
@@ -98,13 +87,13 @@ extern NSString *const StrTabConfig;
 extern NSString *const StrTabSchema; // GraphQL response pane: introspected server schema
 extern NSString *const StrTabEnvelope; // SOAP: full XML envelope editor
 extern NSString *const StrTabSoap;     // SOAP: {action, version} config
+extern NSString *const StrTabLdapParams; // LDAP: bind/base/filter/group/limits JSON
 
 #pragma mark - Kafka client-kind toggle (SPEC_kafka §2.0)
 extern NSString *const StrKafkaProducer;
 extern NSString *const StrKafkaConsumer;
-// Kafka-specific settings tab (topic/ack/compression.../topics/group/...) — DISTINCT from the shared
-// per-request StrTabConfig (timeout_ms/tls) that every request type also gets, appended last (§ see
-// populateEditorsFromModel / syncModelFromEditors's "last buffer = shared RequestConfig" invariant).
+// Kafka-specific settings tab — DISTINCT from the shared per-request StrTabConfig (timeout_ms/tls)
+// that every type also gets appended LAST ("last buffer = shared RequestConfig" invariant).
 extern NSString *const StrTabKafkaConfig;
 
 #pragma mark - Body mode (dropdown)
@@ -125,6 +114,7 @@ extern NSString *const StrMenuNewWs;
 extern NSString *const StrMenuNewGraphQl;
 extern NSString *const StrMenuNewKafka;
 extern NSString *const StrMenuNewSoap;
+extern NSString *const StrMenuNewLdap;
 extern NSString *const StrNewFolder;     // menu + default folder name
 extern NSString *const StrMenuCopyCurl;  // right-click: copy request as cURL/grpcurl
 extern NSString *const StrFmtDeleteItems;
@@ -136,6 +126,7 @@ extern NSString *const StrDefaultWsName;
 extern NSString *const StrDefaultGqlName;
 extern NSString *const StrDefaultKafkaName;
 extern NSString *const StrDefaultSoapName;
+extern NSString *const StrDefaultLdapName;
 extern NSString *const StrDefaultImportName;   // fallback when a name cannot be inferred
 extern NSString *const StrImportedGrpc;
 
@@ -176,7 +167,7 @@ extern NSString *const StrFmtEnvExists;     // duplicate-env dialog (with name)
 
 #pragma mark - Toast / status
 extern NSString *const StrToastOpenFolderFirst;
-extern NSString *const StrToastNoEnvs;      // env dropdown with zero envs (manage moved to Settings)
+extern NSString *const StrToastNoEnvs;      // env dropdown with zero envs
 extern NSString *const StrToastUnaryOnly;
 extern NSString *const StrToastWsEmptyFrame;
 extern NSString *const StrToastWsQueueFull;
@@ -195,13 +186,13 @@ extern NSString *const StrFetchingSchema;
 extern NSString *const StrStatusCancelled;
 extern NSString *const StrStatusNetworkError;
 
-// --- gRPC streaming: RPC picker tags (streaming direction) ---
+// gRPC RPC picker tags (streaming direction).
 extern NSString *const StrGrpcTagUnary;          // [Unary]
 extern NSString *const StrGrpcTagServerStream;   // [S-> C]
 extern NSString *const StrGrpcTagClientStream;   // [S <-C]
 extern NSString *const StrGrpcTagBidiStream;     // [S<->C]
 
-// --- gRPC streaming: status line (fields separated by '|') ---
+// Streaming status line (fields separated by '|').
 extern NSString *const StrFmtReqElapsed;         // live elapsed only (unary in-flight)
 extern NSString *const StrFmtStreamLive;         // live elapsed | size | events (streaming in-flight)
 extern NSString *const StrFmtStreamOk;           // "OK%@ | %@ | %llu events | %lldms"  (trunc | size | events | ms)

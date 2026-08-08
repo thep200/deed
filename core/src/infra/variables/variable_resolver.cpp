@@ -3,15 +3,13 @@
 namespace core {
 
 namespace {
-// Try to expand a "{{name}}" placeholder starting at tpl[i]. On a match, append the resolved value
-// (or the literal "{{X}}" if the key is missing) to `r` and return the index just past "}}".
-// Returns npos when tpl[i] is not the start of a complete placeholder (caller copies one char).
+// Missing key keeps the literal "{{X}}" and records it. Returns the index past "}}", or npos when
+// tpl[i] is not a complete placeholder (caller copies one char).
 size_t tryExpandPlaceholder(const std::string& tpl, size_t i, size_t n,
                             const std::map<std::string, std::string>& vars, ResolveResult& r) {
     if (!(i + 1 < n && tpl[i] == '{' && tpl[i + 1] == '{')) return std::string::npos;
     size_t close = tpl.find("}}", i + 2);
     if (close == std::string::npos) return std::string::npos;
-    // trim whitespace around the name
     std::string name = tpl.substr(i + 2, close - (i + 2));
     size_t a = name.find_first_not_of(" \t");
     size_t b = name.find_last_not_of(" \t");

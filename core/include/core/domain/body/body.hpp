@@ -1,6 +1,3 @@
-// core/domain/body/body.hpp — Body sum type (REFACTOR_SPEC §5.3).
-// The 8 legacy string modes collapse into 5 explicit alternatives: None, Raw(json/text/xml), FormUrlEncoded,
-// Multipart, Binary. JSON validity of Raw{Json} is checked at the use-case layer (IJsonValidator), never here.
 #pragma once
 
 #include <string>
@@ -17,6 +14,7 @@ enum class RawSubtype { Json, Text, Xml };
 struct BodyNone {
   bool operator==(const BodyNone &) const { return true; }
 };
+// Raw{Json} validity is checked at the use-case layer (IJsonValidator), never in the domain.
 struct BodyRaw {
   RawSubtype subtype = RawSubtype::Json;
   std::string text; // kept verbatim

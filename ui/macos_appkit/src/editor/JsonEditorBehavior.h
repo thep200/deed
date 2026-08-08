@@ -1,7 +1,4 @@
-// JsonEditorBehavior — JSON editing behaviors for Scintilla (docs/EDITOR_BEHAVIORS.md).
-// Only for EDITABLE fields; read-only responses don't need it.
-// Gathers auto-close / auto-indent / skip-over / brace-match logic into one class,
-// separate from UI construction. SciTextView routes SCN_CHARADDED/SCN_UPDATEUI here.
+// Auto-close / auto-indent / brace-match for EDITABLE Scintilla panes only; SciTextView routes SCN_CHARADDED/SCN_UPDATEUI here.
 #import <Cocoa/Cocoa.h>
 
 @class ScintillaView;

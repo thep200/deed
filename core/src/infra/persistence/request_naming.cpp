@@ -9,11 +9,10 @@ namespace core {
 
 namespace {
 
-// Separator between the order key and the rest of the name. MUST sort below every base62 digit
-// ('+' = 43 < '0' = 48) so a shorter key still compares before the keys that extend it.
+// Order-key separator MUST sort below every base62 digit ('+' = 43 < '0' = 48) so a shorter key
+// still compares before the keys that extend it.
 constexpr char kOrderSep = '+';
 
-// Strip a trailing ".json" extension (case-insensitive) if present.
 std::string stripJsonExt(const std::string& name) {
     const std::string ext = ".json";
     if (name.size() >= ext.size()) {
@@ -27,30 +26,41 @@ std::string stripJsonExt(const std::string& name) {
 } // namespace
 
 namespace {
-// Parse the "http_<method>_<slug>" / "grpc_<slug>" part (after the id is split off). Returns ok + fills type/method/slug.
+
+// GraphQl's file token is "gql" (NOT the wire token "graphql") because existing files on disk use it.
+constexpr const char* kFileTokens[] = {"http", "grpc", "gql", "ws", "kafka", "soap", "ldap"};
+constexpr bool kHasMethodSegment[] = {true, false, false, false, false, false, false};
+static_assert(sizeof(kFileTokens) / sizeof(kFileTokens[0]) == kRequestTypeCount);
+static_assert(sizeof(kHasMethodSegment) / sizeof(kHasMethodSegment[0]) == kRequestTypeCount);
+
+const char* fileTokenOf(RequestType t) { return kFileTokens[static_cast<std::size_t>(t)]; }
+
+bool typeFromFileToken(const std::string& token, RequestType& out) {
+    for (std::size_t i = 0; i < kRequestTypeCount; ++i)
+        if (token == kFileTokens[i]) {
+            out = static_cast<RequestType>(i);
+            return true;
+        }
+    return false;
+}
+
+// Parse the "http_<method>_<slug>" / "<type>_<slug>" part (after the id is split off).
 bool parseTypeRest(const std::string& rest, ParsedRequestName& out) {
     std::size_t sep = rest.find('_');
     if (sep == std::string::npos) return false;
-    std::string type = rest.substr(0, sep);
-    if (type == "grpc" || type == "ws" || type == "gql" || type == "kafka" || type == "soap") {
-        out.type = (type == "ws")   ? RequestType::WebSocket
-                 : (type == "gql")  ? RequestType::GraphQl
-                 : (type == "kafka") ? RequestType::Kafka
-                 : (type == "soap")  ? RequestType::Soap
-                                     : RequestType::Grpc;
-        out.slug = rest.substr(sep + 1);            // everything left = slug
-        out.method.clear();
-        return !out.slug.empty();
-    }
-    if (type == "http") {
-        std::size_t methodSep = rest.find('_', sep + 1);   // [http, method, slugRest]
+    RequestType t;
+    if (!typeFromFileToken(rest.substr(0, sep), t)) return false;
+    out.type = t;
+    if (kHasMethodSegment[static_cast<std::size_t>(t)]) {
+        std::size_t methodSep = rest.find('_', sep + 1);   // [type, method, slugRest]
         if (methodSep == std::string::npos) return false;
-        out.type = RequestType::Http;
         out.method = rest.substr(sep + 1, methodSep - (sep + 1));
         out.slug = rest.substr(methodSep + 1);      // slug keeps its '_'
         return !out.method.empty() && !out.slug.empty();
     }
-    return false;
+    out.method.clear();
+    out.slug = rest.substr(sep + 1);
+    return !out.slug.empty();
 }
 } // namespace
 
@@ -93,15 +103,13 @@ std::string encodeRequestFilename(const std::string& id, RequestType type,
                                   const std::string& order) {
     std::string slug = fsutil::slugify(displayName);   // [a-z0-9-], '-' replaces spaces
     std::string prefix = withOrderPrefix(order, id + "_");   // [order+]id, id always before the type
-    if (type == RequestType::Grpc) return prefix + "grpc_" + slug + ".json";   // NO method
-    if (type == RequestType::WebSocket) return prefix + "ws_" + slug + ".json"; // NO method
-    if (type == RequestType::GraphQl) return prefix + "gql_" + slug + ".json";  // NO method
-    if (type == RequestType::Kafka) return prefix + "kafka_" + slug + ".json";  // NO method
-    if (type == RequestType::Soap) return prefix + "soap_" + slug + ".json";    // NO method
+    std::string token = fileTokenOf(type);
+    if (!kHasMethodSegment[static_cast<std::size_t>(type)])
+        return prefix + token + "_" + slug + ".json";
     std::string m;
     for (unsigned char c : method) m += static_cast<char>(std::tolower(c));
     if (m.empty()) m = "get";
-    return prefix + "http_" + m + "_" + slug + ".json";
+    return prefix + token + "_" + m + "_" + slug + ".json";
 }
 
 std::string normalizeDisplayName(const std::string& slug) {
@@ -117,7 +125,7 @@ std::string normalizeDisplayName(const std::string& slug) {
         }
         // other special chars -> drop
     }
-    while (!s.empty() && s.back() == ' ') s.pop_back();   // trim trailing
+    while (!s.empty() && s.back() == ' ') s.pop_back();
     if (!s.empty()) s[0] = static_cast<char>(std::toupper((unsigned char)s[0]));  // sentence-case
     return s;
 }

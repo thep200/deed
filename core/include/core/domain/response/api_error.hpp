@@ -1,4 +1,3 @@
-// core/domain/response/api_error.hpp — failure result for a send (REFACTOR_SPEC §5.9).
 #pragma once
 
 #include <optional>

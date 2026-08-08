@@ -1,4 +1,3 @@
-// core/domain/values/path_variable.hpp — PathVariable value object + PathVariableList (REFACTOR_SPEC §5.1).
 #pragma once
 
 #include <cctype>
@@ -13,9 +12,7 @@ namespace core::domain {
 
 struct PathVariableTag {};
 
-// Invariant: when enabled, key must be a non-empty identifier (it binds a `:key` segment in the URL).
-// The url<->variable cross-check (every `:seg` has a binding) is a use-case-layer concern, not enforced
-// here, because a single PathVariable has no URL context.
+// An enabled key must be a non-empty identifier (binds a `:key` URL segment); the url<->variable cross-check is a use-case-layer concern.
 class PathVariable : public detail::KeyValueEntry<PathVariableTag> {
 public:
   static Result<PathVariable> create(std::string key, std::string value, bool enabled = true) {

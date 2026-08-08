@@ -1,5 +1,3 @@
-// core/domain/graphql/gql_schema.hpp — introspection result VO: two views of the same server schema
-// (SDL text for reading, pretty introspection JSON for the raw toggle). Pure data, filled by infra.
 #pragma once
 
 #include <string>

@@ -1,4 +1,3 @@
-// core/domain/grpc/grpc_request.hpp — GrpcRequest aggregate payload (REFACTOR_SPEC §5.5).
 #pragma once
 
 #include <string>
@@ -20,15 +19,13 @@ public:
     std::string service; // "pkg.Service"
     std::string method;  // RPC name
     GrpcMethodType methodType = GrpcMethodType::Unary;
-    JsonText message = JsonText::emptyObject(); // request message as JSON text
+    JsonText message = JsonText::emptyObject();
     GrpcMetadata metadata = GrpcMetadata::empty();
     ProtoSource protoSource = ProtoSource::reflection();
     TlsConfig tls = TlsConfig::disabled();
   };
 
-  // target/service/method may all be empty on a DRAFT (no host typed / no RPC picked yet) — emptiness is a
-  // send-time concern, not a construction invariant (consistent with Url/RequestId allowing empty drafts).
-  // The orchestrator/sender blocks an actual send with an empty target/method.
+  // target/service/method may be empty on a DRAFT: emptiness is a send-time concern; the sender blocks an empty send.
   static Result<GrpcRequest> create(Parts p) {
     return Result<GrpcRequest>::ok(GrpcRequest(std::move(p)));
   }

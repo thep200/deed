@@ -1,7 +1,3 @@
-// core/domain/values/key_value_entry.hpp — internal shared shape for the (key,value,enabled) value
-// objects (REFACTOR_SPEC §5.1). Header / QueryParam / PathVariable are DISTINCT public types (they make
-// implicit concepts explicit, DDD) but share storage/accessors/equality via this Tag-parameterised base
-// to avoid duplication. Each public type derives and adds its OWN create() with its OWN invariants.
 #pragma once
 
 #include <string>
@@ -9,6 +5,7 @@
 
 namespace core::domain::detail {
 
+// Shared storage for the distinct (key,value,enabled) VOs; each public type adds its OWN create() and invariants.
 template <class Tag> class KeyValueEntry {
 public:
   const std::string &key() const noexcept { return key_; }

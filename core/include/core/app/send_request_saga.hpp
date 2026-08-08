@@ -1,6 +1,3 @@
-// core/app/send_request_saga.hpp — process manager for ONE send (REFACTOR_SPEC §7.2).
-// Drives resolve -> validate -> pick sender -> execute, emitting ResponseEvents to the observer; writes the
-// cache on completion. Touches NO JSON and NO transport lib — only domain objects + ports.
 #pragma once
 
 #include <atomic>
@@ -19,7 +16,6 @@
 
 namespace core::app {
 
-// Lifecycle phases (REFACTOR_SPEC §7.1). Exposed for tests/telemetry.
 enum class SagaState { Idle, Validating, Preparing, Active, Streaming, Completed, Failed, Cancelled };
 
 class SendRequestSaga {
@@ -37,8 +33,7 @@ public:
   // Runs the lifecycle synchronously on the calling (worker) thread, emitting to `observer`.
   void run(domain::IRequestObserver &observer);
 
-  // Cancel: trip the token AND, for a live duplex/stream session, ask the bound sender to close so a
-  // blocked execute() (e.g. WebSocket) unblocks and run() can finish. Safe to call from another thread.
+  // Trips the token AND closes a live stream so a blocked execute() unblocks; safe from another thread.
   void cancel();
   SagaState state() const noexcept { return state_; }
   bool terminal() const noexcept {

@@ -51,7 +51,6 @@ d::Result<std::string> jsonToAvroBinary(const std::string &schemaJson, const std
     avro::GenericReader reader(schema, jd);
     reader.read(datum);
 
-    // GenericDatum -> Avro binary.
     std::ostringstream sink;
     auto out = avro::ostreamOutputStream(sink);
     avro::EncoderPtr be = avro::binaryEncoder();
@@ -71,7 +70,6 @@ d::Result<std::string> avroBinaryToJson(const std::string &schemaJson, const cha
   try {
     avro::ValidSchema schema = avro::compileJsonSchemaFromString(schemaJson);
 
-    // Avro binary -> GenericDatum.
     avro::DecoderPtr bd = avro::binaryDecoder();
     auto bin = avro::memoryInputStream(reinterpret_cast<const std::uint8_t *>(data), len);
     bd->init(*bin);
@@ -79,7 +77,6 @@ d::Result<std::string> avroBinaryToJson(const std::string &schemaJson, const cha
     avro::GenericReader reader(schema, bd);
     reader.read(datum);
 
-    // GenericDatum -> JSON text (Avro-JSON encoding).
     std::ostringstream sink;
     auto out = avro::ostreamOutputStream(sink);
     avro::EncoderPtr je = avro::jsonEncoder(schema);

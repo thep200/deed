@@ -53,7 +53,7 @@ NSImage *OS9SendImage(CGFloat size) {
         [body lineToPoint:NSMakePoint(s*0.40, s*0.50)];   // center notch
         [body lineToPoint:NSMakePoint(s*0.12, s*0.18)];   // bottom-left corner
         [body closePath];
-        body.lineWidth = 0.6;                              // thinner (was 1.0)
+        body.lineWidth = 0.6;
         body.lineJoinStyle = NSLineJoinStyleMiter;
         [[NSColor blackColor] set];
         [body stroke];

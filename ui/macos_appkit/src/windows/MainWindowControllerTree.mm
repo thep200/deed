@@ -27,8 +27,8 @@
     [self autosaveCurrent];
     [_expandedFolders removeAllObjects];   // new collection: reset fold state (folded by default)
     _root = path.UTF8String;
-    // REFACTOR_SPEC: CoreApiClient owns its own stores + response cache (no Engine). .env tunables (read by
-    // DeedConfig; Core never reads .env) map into the self-sufficient Config.
+    // CoreApiClient owns its own stores + response cache. .env tunables (read by DeedConfig;
+    // Core never reads .env) map into its Config.
     core::app::CoreApiClient::Config cfg;
     cfg.collectionRoot = _root;
     DeedConfig *dc = [DeedConfig shared];
@@ -37,7 +37,7 @@
     cfg.diskCacheMaxMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MAX" def:0];
     cfg.diskCacheMinMb = (int)[dc intFor:@"DISK_CACHE_SIZE_MIN" def:0];
     cfg.ramCacheThresholdKb = (int)[dc intFor:@"RAM_CACHE_THRESHOLD_KB" def:0];
-    // WebSocket tunables from .env (SPEC_websocket §9; 0 -> WsSender default).
+    // WebSocket tunables from .env (0 -> WsSender default).
     cfg.wsPingIntervalMs = (int)[dc intFor:@"WS_PING_INTERVAL_MS" def:0];
     cfg.wsIdleTimeoutMs = (int)[dc intFor:@"WS_IDLE_TIMEOUT_MS" def:0];
     cfg.wsCloseTimeoutMs = (int)[dc intFor:@"WS_CLOSE_TIMEOUT_MS" def:0];
@@ -45,7 +45,7 @@
     cfg.wsMaxFrameMb = (int)[dc intFor:@"WS_MAX_FRAME_MB" def:0];
     cfg.wsSendQueueMaxFrames = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_FRAMES" def:0];
     cfg.wsSendQueueMaxMb = (int)[dc intFor:@"WS_SEND_QUEUE_MAX_MB" def:0];
-    // gRPC streaming ceilings from .env (SPEC gRPC §9; 0 -> GrpcSender default).
+    // gRPC streaming ceilings from .env (0 -> GrpcSender default).
     cfg.streamMaxEvents = (long long)[dc intFor:@"STREAM_MAX_EVENTS" def:0];
     cfg.streamMaxBytesMb = (int)[dc intFor:@"STREAM_MAX_BYTES_MB" def:0];
     // New-request per-request defaults from .env (Core never reads .env; 0 -> Core built-in 30-min timeout).
@@ -84,11 +84,8 @@
     return YES;
 }
 
-// Load a folder's children on demand (one readdir of that level — §3). No recursion.
-// M13: this runs synchronously on the main thread, but it scans ONLY the expanded level (lazy, never the
-// whole tree), so the cost is bounded to one directory's entries — acceptable for the expected collection
-// size. If a single folder is ever expected to hold thousands of requests, move this scan to a background
-// queue with a placeholder row + async reload (a larger rearchitecture).
+// Load a folder's children on demand (one readdir of that level, no recursion). Synchronous on the
+// main thread, but it scans ONLY the expanded level — cost bounded to one directory's entries.
 - (void)loadChildrenOf:(TreeItem *)folder {
     if (!folder || folder.childrenLoaded || !_apiClient) return;
     [folder.children removeAllObjects];
@@ -100,7 +97,7 @@
 }
 
 - (void)reloadTree {
-    // T6: reloadData resets selection -> the selected folder/request highlight vanishes on Cmd+S.
+    // reloadData resets selection -> the selected folder/request highlight vanishes on Cmd+S.
     // Save selected relPath BEFORE reload, restore by relPath AFTER reload (index may change).
     NSString *selRel = nil;
     NSInteger selRow = _tree.selectedRow;
@@ -111,7 +108,7 @@
 
     [_roots removeAllObjects];
     if (_apiClient) {
-        try {                               // scan ROOT level only; child folders folded by default (§3)
+        try {                               // scan ROOT level only; child folders folded by default
             for (const auto &c : _apiClient->collection().scanLevel(""))
                 [_roots addObject:TreeItemFromNode(c)];
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
@@ -172,7 +169,7 @@
 // relPath (preserving loaded children + that branch's open state), create new only for new entries.
 // Returns YES if the child SET/ORDER changed (item added/removed/reordered) -> the caller must re-query
 // children (reloadChildren:YES). NO = same items in same order (only leaf metadata refreshed in place) ->
-// the caller can just redraw the existing rows, avoiding a recursive subtree rebuild (perf — §C2).
+// the caller can just redraw the existing rows, avoiding a recursive subtree rebuild (perf).
 - (BOOL)mergeScanLevel:(const std::string &)rel into:(NSMutableArray<TreeItem *> *)items {
     if (!_apiClient) return NO;
     std::vector<core::TreeNode> nodes;
@@ -205,7 +202,7 @@
     return NO;
 }
 
-// Incremental update for one changed level (§T1) — does NOT tear down the whole tree.
+// Incremental update for one changed level — does NOT tear down the whole tree.
 - (void)refreshTreeLevel:(NSString *)parentRel {
     if (!_apiClient) return;
     if (parentRel.length == 0) {                 // mutation at ROOT
@@ -226,17 +223,18 @@
         [_tree reloadItem:f reloadChildren:YES];
         return;
     }
-    // §C2: only re-query (and rebuild) f's whole subtree when the child set/order changed; otherwise just
+    // Only re-query (and rebuild) f's whole subtree when the child set/order changed; otherwise just
     // redraw the existing direct rows in place — avoids tearing down every visible descendant row view.
     BOOL changed = [self mergeScanLevel:f.relPath.UTF8String into:f.children];
     if (changed) {
         [_tree reloadItem:f reloadChildren:YES]; // re-query only f's CHILDREN, other branches intact
+        [self restoreExpansion:f.children];      // renamed children come back as fresh, collapsed items
     } else {
         for (TreeItem *c in f.children) [_tree reloadItem:c reloadChildren:NO];
     }
 }
 
-// Remap old->new relPath prefix in _expandedFolders (folder rename/move) — keep open state (§T3).
+// Remap old->new relPath prefix in _expandedFolders (folder rename/move) — keep open state.
 - (void)remapExpandedFoldersFrom:(NSString *)oldRel to:(NSString *)newRel {
     if (oldRel.length == 0) return;
     NSMutableSet<NSString *> *updated = [NSMutableSet set];
@@ -261,11 +259,15 @@
 // Double-click: empty area -> quick new HTTP request; on a row -> rename via Platinum prompt.
 - (void)treeDoubleClicked:(id)sender {
     NSInteger row = _tree.clickedRow;
-    if (row < 0) { [self newHttp:nil]; return; }   // empty area
+    if (row < 0) {   // empty area -> new HTTP request
+        RequestTypeUi *http = TypeUiFor(core::RequestType::Http);
+        [self createRequest:http.type name:http.defaultRequestName];
+        return;
+    }
     [self promptRenameItem:[_tree itemAtRow:row]];
 }
 
-// Rename via Platinum dialog (CUSTOM_DIALOG §6.1): prompt + validate, then sync the filename (LAZY_TREE §4).
+// Rename via Platinum dialog: prompt + validate, then sync the filename.
 - (void)promptRenameItem:(TreeItem *)t {
     if (!t || t.relPath.length == 0 || !_apiClient) return;
     NSString *newName = [OS9Dialog promptWithTitle:StrRename
@@ -287,14 +289,14 @@
     NSString *parentRel = [oldRel stringByDeletingLastPathComponent];
     try {
         std::string newRel = _apiClient->collection().rename(oldRel.UTF8String, newName.UTF8String);
-        if (t.isFolder) [self remapExpandedFoldersFrom:oldRel to:N(newRel)];  // §T3: keep open state
+        if (t.isFolder) [self remapExpandedFoldersFrom:oldRel to:N(newRel)];  // keep open state
         if (wasCurrent) {
             // Sync the name into the open model: otherwise a later Save writes the OLD name -> filename rollback.
             if (_model) _model = _model->withName(newName.UTF8String);
             _currentRel = newRel;
             [self updateTitle];
         }
-        [self refreshTreeLevel:parentRel];   // §T1: rescan only the level holding the item, not the whole tree
+        [self refreshTreeLevel:parentRel];   // rescan only the level holding the item, not the whole tree
         if (wasCurrent) [self revealAndSelectRequestById:N(_currentId) relPath:N(_currentRel)];
         [self toastOk:StrToastRenamed];
     } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
@@ -326,7 +328,7 @@
 }
 // Folders are ALWAYS expandable (cheap, no disk read); requests are not.
 - (BOOL)outlineView:(NSOutlineView *)ov isItemExpandable:(id)item { return ((TreeItem *)item).isFolder; }
-// TASK 3: row view self-draws gray background when selected (NSOutlineView virtualization/reuse).
+// Row view self-draws gray background when selected (NSOutlineView virtualization/reuse).
 - (NSTableRowView *)outlineView:(NSOutlineView *)ov rowViewForItem:(id)item {
     OS9RowView *rv = [ov makeViewWithIdentifier:@"os9row" owner:self];
     if (!rv) { rv = [[OS9RowView alloc] initWithFrame:NSZeroRect]; rv.identifier = @"os9row"; }
@@ -366,7 +368,7 @@
     [self loadRequestAtRel:t.relPath];
 }
 
-// TASK 2B: open/scroll to + select the shown request — open ONLY ancestor branches (O(depth), no
+// Open/scroll to + select the shown request — open ONLY ancestor branches (O(depth), no
 // full-tree scan, no content read; uses id from filename to avoid name collisions).
 - (void)revealAndSelectRequestById:(NSString *)reqId relPath:(NSString *)relPath {
     if (relPath.length == 0 || !_tree) return;
@@ -405,7 +407,7 @@
     _revealingSelection = NO;
 }
 
-// --- Drag-and-drop: move request/folder into a folder ---
+// Drag-and-drop: move request/folder into a folder.
 - (id<NSPasteboardWriting>)outlineView:(NSOutlineView *)ov pasteboardWriterForItem:(id)item {
     TreeItem *t = item;
     if (t.relPath.length == 0) return nil;
@@ -444,31 +446,41 @@
     return parentRel.length ? [self loadedFolderItemForRel:parentRel] : nil;
 }
 
+// Share of a folder row's height, at each end, that means "insert here" instead of "drop inside".
+static const CGFloat kFolderInsertBand = 0.3;
+
 - (NSDragOperation)outlineView:(NSOutlineView *)ov validateDrop:(id<NSDraggingInfo>)info
                    proposedItem:(id)item proposedChildIndex:(NSInteger)idx {
+    DeedOutlineView *dov = (DeedOutlineView *)ov;
     TreeItem *t = item;
-    // A request holds nothing, but AppKit proposes it as the parent whenever the cursor is over the
-    // MIDDLE of its row — most of the row's height. Rejecting that left only a hairline between rows
-    // as a valid target ("first drag does nothing"). Retarget onto the request's own parent, before
-    // or after it depending on which half the cursor is in.
-    if (t && !t.isFolder) {
-        BOOL below = NO;
-        NSPoint p = [ov convertPoint:[info draggingLocation] fromView:nil];
-        [(DeedOutlineView *)ov dropRowAtPoint:p belowMidline:&below];
-        TreeItem *parent = [self parentFolderItemOf:t.relPath];
-        NSArray<TreeItem *> *sibs = parent ? parent.children : _roots;
-        NSInteger at = [sibs indexOfObject:t];
-        if (at == NSNotFound) { [(DeedOutlineView *)ov hideDropFeedback]; return NSDragOperationNone; }
-        item = parent;
-        t = parent;
-        idx = at + (below ? 1 : 0);
+    // Empty area below the last row: AppKit proposes the outline view itself, which has no row to draw
+    // feedback on. Read it as "append at the root level" so the drop shows a bar like any other.
+    if (!t && idx == NSOutlineViewDropOnItemIndex) idx = (NSInteger)_roots.count;
+    // AppKit proposes the hovered row as the drop PARENT across most of its height, leaving only a
+    // hairline between rows to insert at ("first drag does nothing"). Map the row explicitly: a request
+    // holds nothing so it splits at the midline; a folder keeps a middle band meaning "drop inside".
+    if (t && idx == NSOutlineViewDropOnItemIndex) {
+        CGFloat f = [dov rowFractionAtPoint:[ov convertPoint:[info draggingLocation] fromView:nil]];
+        if (f < 0) { [dov hideDropFeedback]; return NSDragOperationNone; }
+        CGFloat band = t.isFolder ? kFolderInsertBand : 0.5;   // a request has no middle band to keep
+        // An EXPANDED folder gives up its lower band: the slot after it sits below its whole subtree,
+        // so the bar would land nowhere near the cursor. Its body still means "drop inside".
+        BOOL after = f > 1 - band && (!t.isFolder || ![ov isItemExpanded:t]);
+        if (f <= band || after) {
+            TreeItem *parent = [self parentFolderItemOf:t.relPath];
+            NSArray<TreeItem *> *sibs = parent ? parent.children : _roots;
+            NSInteger at = [sibs indexOfObject:t];
+            if (at == NSNotFound) { [dov hideDropFeedback]; return NSDragOperationNone; }
+            item = parent;
+            t = parent;
+            idx = at + (after ? 1 : 0);
+        }
     }
     NSString *destRel = t ? t.relPath : @"";
     if ([self dropTarget:destRel isInsideAnyOf:[self draggedRelPathsFrom:info]]) {
-        [(DeedOutlineView *)ov hideDropFeedback];   // folder into itself / its own subtree
+        [dov hideDropFeedback];   // folder into itself / its own subtree
         return NSDragOperationNone;
     }
-    DeedOutlineView *dov = (DeedOutlineView *)ov;
     if (idx == NSOutlineViewDropOnItemIndex) {      // hovering the folder body -> drop inside it
         [ov setDropItem:item dropChildIndex:NSOutlineViewDropOnItemIndex];
         [dov showDropOnRow:[ov rowForItem:item]];
@@ -495,215 +507,91 @@
     for (TreeItem *c in t.children) n += 1 + [self visibleDescendantCountOf:c in:ov];
     return n;
 }
+// Direct folder children of a level as currently LOADED ("" = root); empty when the level is closed.
+- (NSArray<NSString *> *)folderRelsInLoadedLevel:(NSString *)levelRel {
+    NSArray<TreeItem *> *items = _roots;
+    if (levelRel.length) {
+        TreeItem *f = [self loadedFolderItemForRel:levelRel];
+        if (!f || !f.childrenLoaded) return @[];
+        items = f.children;
+    }
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (TreeItem *t in items)
+        if (t.isFolder && t.relPath.length) [out addObject:t.relPath];
+    return out;
+}
+
+// The name after the order-key prefix — the only part of a filename that re-keying leaves alone.
+static NSString *TreeRestOfRel(NSString *rel) {
+    return N(core::splitOrderPrefix(S([rel lastPathComponent])).rest);
+}
+
+// A first drop into a level that had no order keys re-keys every sibling, so folder relPaths change
+// under us. Match old to new by that stable part so open folders do not snap shut.
+- (void)remapExpandedFolders:(NSArray<NSString *> *)oldRels inLevel:(NSString *)levelRel {
+    if (!oldRels.count || !_apiClient) return;
+    NSMutableDictionary<NSString *, NSString *> *byRest = [NSMutableDictionary dictionary];
+    try {
+        for (const auto &n : _apiClient->collection().scanLevel(S(levelRel)))
+            if (n.isFolder) byRest[TreeRestOfRel(N(n.relPath))] = N(n.relPath);
+    } catch (const std::exception &e) { [self toastWarn:N(e.what())]; return; }
+    for (NSString *oldRel in oldRels) {
+        NSString *fresh = byRest[TreeRestOfRel(oldRel)];
+        if (fresh && ![fresh isEqualToString:oldRel]) [self remapExpandedFoldersFrom:oldRel to:fresh];
+    }
+}
+
+// Display slot of a relPath inside its level; -1 when it is no longer there.
+- (NSInteger)levelIndexOfRel:(NSString *)rel inLevel:(NSString *)levelRel {
+    if (!_apiClient) return -1;
+    NSInteger i = 0;
+    try {
+        for (const auto &n : _apiClient->collection().scanLevel(S(levelRel))) {
+            if ([N(n.relPath) isEqualToString:rel]) return i;
+            ++i;
+        }
+    } catch (const std::exception &) {}
+    return -1;
+}
+
 - (BOOL)outlineView:(NSOutlineView *)ov acceptDrop:(id<NSDraggingInfo>)info item:(id)item childIndex:(NSInteger)idx {
     [(DeedOutlineView *)ov hideDropFeedback];
     if (!_apiClient) return NO;
     TreeItem *dest = item;
     std::string destFolder = (dest && dest.isFolder) ? std::string(dest.relPath.UTF8String) : std::string();
+    BOOL reordering = (idx != NSOutlineViewDropOnItemIndex);
     BOOL any = NO;
     NSString *lastRel = nil;                                   // reselect the drop result afterwards
     NSInteger slot = idx;                                      // insertion slot, advances per item
     NSMutableSet<NSString *> *affected = [NSMutableSet setWithObject:N(destFolder)];  // destination level
+    NSArray<NSString *> *foldersBefore = [self folderRelsInLoadedLevel:N(destFolder)];
     for (NSPasteboardItem *pb in [[info draggingPasteboard] pasteboardItems]) {
         NSString *src = [pb stringForType:kTreeDragType];
         if (!src.length) continue;
         NSString *srcParent = [src stringByDeletingLastPathComponent];
         try {
-            // Between rows -> reorder (one rename, keeps the slot); onto a folder -> plain move.
-            std::string newRel = (idx == NSOutlineViewDropOnItemIndex)
-                                     ? _apiClient->collection().move(src.UTF8String, destFolder)
-                                     : _apiClient->collection().reorder(src.UTF8String, destFolder,
-                                                                        (int)slot++);
+            // Between rows -> reorder (keeps the slot); onto a folder -> plain move, appended at the end.
+            std::string newRel = reordering
+                                     ? _apiClient->collection().reorder(src.UTF8String, destFolder, (int)slot)
+                                     : _apiClient->collection().move(src.UTF8String, destFolder);
             [self remapExpandedFoldersFrom:src to:N(newRel)];  // folder: keep open (no-op for files)
             [affected addObject:srcParent];                    // source level also changes
             lastRel = N(newRel);
             any = YES;
+            // The level just changed, so the incoming slot is stale: put the next dragged item right
+            // below this one instead of guessing from the pre-drop layout.
+            if (reordering) slot = [self levelIndexOfRel:lastRel inLevel:N(destFolder)] + 1;
         } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
     }
     if (any) {
+        [self remapExpandedFolders:foldersBefore inLevel:N(destFolder)];
         // A first drop into a never-ordered level keys the whole level, so the OPEN request may have
         // been renamed too — re-resolve it by id before anything writes to the old path.
         [self resyncCurrentRelById];
-        for (NSString *p in affected) [self refreshTreeLevel:p];  // §T1: only the touched levels
+        for (NSString *p in affected) [self refreshTreeLevel:p];  // only the touched levels
         if (lastRel.length) [self reselectTreeByRel:lastRel];     // reloadData drops the selection
     }
     return any;
-}
-
-#pragma mark Tree context menu (right-click) + multi-select
-
-- (void)showContextMenuForRow:(NSInteger)row atWindowPoint:(NSPoint)pt {
-    if (!_apiClient) return;
-    // Right-click on an unselected item -> select just that item.
-    if (row >= 0 && ![_tree.selectedRowIndexes containsIndex:row])
-        [_tree selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
-    if (row < 0) [_tree deselectAll:nil]; // empty area -> operate at tree root
-
-    NSMutableArray<OS9MenuEntry *> *items = [NSMutableArray array];
-    NSUInteger selCount = _tree.selectedRowIndexes.count;
-    __weak MainWindowController *ws = self;
-
-    // Multi-select -> Delete only.
-    if (selCount > 1) {
-        NSString *title = [NSString stringWithFormat:StrFmtDeleteItems, (unsigned long)selCount];
-        [items addObject:[OS9MenuEntry entry:title action:^{ [ws deleteSelectedMulti:nil]; }]];
-        OS9ShowContextMenu(items, _tree, pt);
-        return;
-    }
-
-    TreeItem *t = (row >= 0) ? [_tree itemAtRow:row] : nil;
-    if (t == nil || t.isFolder) {
-        // Empty area or folder -> add request/folder.
-        [items addObject:[OS9MenuEntry entry:StrMenuNewHttp    action:^{ [ws newHttp:nil]; }]];
-        [items addObject:[OS9MenuEntry entry:StrMenuNewGrpc    action:^{ [ws newGrpc:nil]; }]];
-        [items addObject:[OS9MenuEntry entry:StrMenuNewWs      action:^{ [ws newWs:nil]; }]];
-        [items addObject:[OS9MenuEntry entry:StrMenuNewGraphQl action:^{ [ws newGraphQl:nil]; }]];
-        [items addObject:[OS9MenuEntry entry:StrMenuNewKafka   action:^{ [ws newKafka:nil]; }]];
-        [items addObject:[OS9MenuEntry entry:StrMenuNewSoap    action:^{ [ws newSoap:nil]; }]];
-        [items addObject:[OS9MenuEntry entry:StrNewFolder      action:^{ [ws newFolder:nil]; }]];
-        if (t != nil) { // folder also allows rename/dup/delete
-            [items addObject:[OS9MenuEntry separator]];
-            [items addObject:[OS9MenuEntry entry:StrRename    action:^{ [ws renameSel:nil]; }]];
-            [items addObject:[OS9MenuEntry entry:StrDuplicate action:^{ [ws dupSel:nil]; }]];
-            [items addObject:[OS9MenuEntry entry:StrDelete    action:^{ [ws deleteSel:nil]; }]];
-        }
-    } else {
-        // Request -> (cURL for HTTP/gRPC) rename / duplicate / delete.
-        // §curl: WebSocket and GraphQL have no cURL equivalent -> only HTTP/gRPC get the item.
-        if (t.requestType == core::RequestType::Http || t.requestType == core::RequestType::Grpc) {
-            NSString *rel = t.relPath;   // copy THIS request (not whatever is open in the editor)
-            [items addObject:[OS9MenuEntry entry:StrMenuCopyCurl action:^{ [ws copyCurlForRel:rel]; }]];
-            [items addObject:[OS9MenuEntry separator]];
-        }
-        [items addObject:[OS9MenuEntry entry:StrRename    action:^{ [ws renameSel:nil]; }]];
-        [items addObject:[OS9MenuEntry entry:StrDuplicate action:^{ [ws dupSel:nil]; }]];
-        [items addObject:[OS9MenuEntry entry:StrDelete    action:^{ [ws deleteSel:nil]; }]];
-    }
-    OS9ShowContextMenu(items, _tree, pt);
-}
-
-// Copy a tree request as cURL/grpcurl (right-click). Copies the RIGHT-CLICKED request, not
-// necessarily the one open in the editor. If it IS the open request, defer to copyAsCurl: so any
-// unsaved editor edits are included.
-- (void)copyCurlForRel:(NSString *)rel {
-    if (!_apiClient || rel.length == 0) return;
-    if (_hasRequest && _currentRel == S(rel)) { [self copyAsCurl:nil]; return; }
-    try {
-        core::domain::RequestModel m = _apiClient->collection().loadRequest(rel.UTF8String);
-        std::string curl = _apiClient->exportCurl(m);
-        NSPasteboard *pb = [NSPasteboard generalPasteboard];
-        [pb clearContents];
-        [pb setString:N(curl) forType:NSPasteboardTypeString];
-        [self toastOk:StrToastCopiedCurl];
-    } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
-}
-
-// Purge the response cache of a deleted request (both tiers — §7). §T2: id TAKEN FROM FILENAME (zero-read)
-// via parseRequestFilename/scanLevel; ONLY fall back to reading (and possibly writing) content for
-// legacy files missing the id in their name -> avoid reading/writing the whole folder right before delete.
-- (void)purgeCacheAtRel:(NSString *)rel isFolder:(BOOL)isFolder {
-    if (!_apiClient || rel.length == 0) return;
-    if (!isFolder) {
-        core::ParsedRequestName p = core::parseRequestFilename(rel.lastPathComponent.UTF8String);
-        std::string id = p.id;
-        if (id.empty()) {                         // legacy file with no id in name -> read content
-            try { id = _apiClient->collection().loadRequest(rel.UTF8String).id().get(); } catch (...) {}
-        }
-        if (!id.empty()) _apiClient->cache().removeResponse(id);
-        return;
-    }
-    try {
-        for (const auto &c : _apiClient->collection().scanLevel(rel.UTF8String)) {
-            if (c.isFolder) [self purgeCacheAtRel:N(c.relPath) isFolder:YES];
-            else if (!c.id.empty()) _apiClient->cache().removeResponse(c.id);  // id from scanLevel (zero-read)
-            else [self purgeCacheAtRel:N(c.relPath) isFolder:NO];   // legacy -> content-reading branch
-        }
-    } catch (...) {}
-}
-
-- (void)deleteSelectedMulti:(id)sender {
-    NSMutableArray<TreeItem *> *items = [NSMutableArray array];
-    [_tree.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
-        TreeItem *t = [_tree itemAtRow:idx];
-        if (t.relPath.length) [items addObject:t];
-    }];
-    if (items.count == 0) return;
-    NSInteger r = [OS9Dialog confirmWithTitle:StrDelete
-                                      message:[NSString stringWithFormat:StrFmtConfirmDeleteMulti,
-                                               (unsigned long)items.count]
-                                      buttons:@[ StrCancel, StrDelete ]
-                                defaultButton:1 cancelButton:0 icon:OS9AlertNone parent:_window];
-    if (r != 1) return;
-    [self closeEditorIfDeleted:items];    // prevent autosave from recreating the just-deleted file
-    NSMutableSet<NSString *> *parents = [NSMutableSet set];
-    for (TreeItem *t in items) [parents addObject:[t.relPath stringByDeletingLastPathComponent]];
-    for (TreeItem *t in items) [self purgeCacheAtRel:t.relPath isFolder:t.isFolder];
-    for (TreeItem *t in items) { try { _apiClient->collection().remove(t.relPath.UTF8String); } catch (...) {} }
-    for (NSString *p in parents) [self refreshTreeLevel:p];   // §T1: only the affected parent levels
-}
-- (std::string)selectedFolderRel {
-    NSInteger row = _tree.selectedRow;
-    if (row < 0) return "";
-    TreeItem *t = [_tree itemAtRow:row];
-    if (t.isFolder) return t.relPath.UTF8String;
-    return [t.relPath stringByDeletingLastPathComponent].UTF8String;
-}
-- (void)newHttp:(id)s { [self createRequest:core::RequestType::Http name:StrDefaultRequestName]; }
-- (void)newGrpc:(id)s { [self createRequest:core::RequestType::Grpc name:StrDefaultRpcName]; }
-- (void)newWs:(id)s { [self createRequest:core::RequestType::WebSocket name:StrDefaultWsName]; }
-- (void)newGraphQl:(id)s { [self createRequest:core::RequestType::GraphQl name:StrDefaultGqlName]; }
-- (void)newKafka:(id)s { [self createRequest:core::RequestType::Kafka name:StrDefaultKafkaName]; }
-- (void)newSoap:(id)s { [self createRequest:core::RequestType::Soap name:StrDefaultSoapName]; }
-// Default name, NO popup. Rename later via inline-rename in the tree. loadRequestAtRel
-// autosaves the open request before switching.
-- (void)createRequest:(core::RequestType)t name:(NSString *)name {
-    if (!_apiClient) { [self toastWarn:StrToastOpenFolderFirst]; return; }
-    try {
-        std::string folderRel = [self selectedFolderRel];
-        std::string rel = _apiClient->collection().createRequest(folderRel, t, name.UTF8String);
-        [self refreshTreeLevel:N(folderRel)];   // §T1: rescan only the target folder (reveal opens it if closed)
-        [self loadRequestAtRel:N(rel)];
-        [self toastOk:[NSString stringWithFormat:StrFmtToastCreated, name]];
-    } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
-}
-- (void)newFolder:(id)s {
-    if (!_apiClient) { [self toastWarn:StrToastOpenFolderFirst]; return; }
-    try {
-        std::string folderRel = [self selectedFolderRel];
-        _apiClient->collection().createFolder(folderRel, StrNewFolder.UTF8String);
-        [self refreshTreeLevel:N(folderRel)];
-    } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
-}
-// Rename: edit inline in the tree, no popup.
-- (void)renameSel:(id)s {
-    NSInteger row = _tree.selectedRow; if (row < 0) return;
-    [self promptRenameItem:[_tree itemAtRow:row]];
-}
-- (void)dupSel:(id)s {
-    NSInteger row = _tree.selectedRow; if (row < 0) return;
-    TreeItem *t = [_tree itemAtRow:row];
-    [self autosaveCurrent];   // flush current edits first (avoid dangling state)
-    NSString *parentRel = [t.relPath stringByDeletingLastPathComponent];
-    try {
-        std::string dupRel = _apiClient->collection().duplicate(t.relPath.UTF8String);
-        [self refreshTreeLevel:parentRel];   // §T1: the copy is at the same level -> rescan only that level
-        if (!t.isFolder) [self loadRequestAtRel:N(dupRel)];   // open the copy -> correct _currentRel
-        [self toastOk:StrToastDuplicated];
-    } catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
-}
-- (void)deleteSel:(id)s {
-    NSInteger row = _tree.selectedRow; if (row < 0) return;
-    TreeItem *t = [_tree itemAtRow:row];
-    NSInteger r = [OS9Dialog confirmWithTitle:StrDelete
-                                      message:[NSString stringWithFormat:StrFmtConfirmDelete, t.name]
-                                      buttons:@[ StrCancel, StrDelete ]
-                                defaultButton:1 cancelButton:0 icon:OS9AlertNone parent:_window];
-    if (r != 1) return;
-    [self closeEditorIfDeleted:@[ t ]];   // prevent autosave from recreating the just-deleted file
-    [self purgeCacheAtRel:t.relPath isFolder:t.isFolder];
-    NSString *parentRel = [t.relPath stringByDeletingLastPathComponent];
-    try { _apiClient->collection().remove(t.relPath.UTF8String); [self refreshTreeLevel:parentRel]; }
-    catch (const std::exception &e) { [self toastWarn:N(e.what())]; }
 }
 
 @end

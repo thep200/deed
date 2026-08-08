@@ -18,7 +18,7 @@
     JsonEditorBehavior *_behavior; // JSON editing behavior; nil for read-only fields
     NSString *_fontFace;  // Scintilla font family (default = OS9Theme configured font, fallback Monaco)
     CGFloat _fontPt;      // Scintilla font size
-    BOOL _streaming;      // streaming-write mode (SPEC_grpc_streaming §7)
+    BOOL _streaming;      // streaming-write mode
     BOOL _followTail;     // auto-scroll to the end as chunks arrive (paused if the user scrolls up)
     SciLanguage _language; // active lexer/style set (default Json — the historical behavior)
 }
@@ -42,7 +42,7 @@
 - (void)msg:(unsigned int)m w:(uptr_t)w l:(sptr_t)l { [_sci message:m wParam:w lParam:l]; }
 - (sptr_t)q:(unsigned int)m w:(uptr_t)w l:(sptr_t)l { return [_sci message:m wParam:w lParam:l]; }
 
-// §2.2: deactivate Scintilla's input context then DETACH the delegate (unsafe_unretained) BEFORE
+// Deactivate Scintilla's input context then DETACH the delegate (unsafe_unretained) BEFORE
 // the view is destroyed. Otherwise ScintillaView may fire a notification into a freed self, or
 // updateWindows may reactivate the dead content view's input context -> use-after-free.
 - (void)teardown {
@@ -74,7 +74,7 @@
     [self applyPlatinumTheme];
     [_sci setEditable:_editable];
     [self msg:SCI_SETREADONLY w:(_editable ? 0 : 1) l:0];
-    // Response (read-only): do NOT collect undo -> large responses don't bloat the undo buffer (§8.3).
+    // Response (read-only): do NOT collect undo -> large responses don't bloat the undo buffer.
     if (!_editable) [self msg:SCI_SETUNDOCOLLECTION w:0 l:0];
 
     // RETRO scrollbar: use OS9Scroller (like the folder tree) instead of the system scroller.
@@ -185,7 +185,7 @@
     [self msg:SCI_SETREADONLY w:0 l:0];            // unlock so we can set
     [_sci setString:string ?: @""];
     [self msg:SCI_SETREADONLY w:(_editable ? 0 : 1) l:0];
-    [self msg:SCI_EMPTYUNDOBUFFER w:0 l:0];        // §8.3: drop undo history -> don't keep the old text copy
+    [self msg:SCI_EMPTYUNDOBUFFER w:0 l:0];        // drop undo history -> don't keep the old text copy
     [self msg:SCI_SETSCROLLWIDTH w:1 l:0];         // reset scroll width
     [self msg:SCI_GOTOPOS w:0 l:0];
     _programmatic = NO;

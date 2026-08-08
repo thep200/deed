@@ -1,6 +1,4 @@
-// blocking_fetch.hpp — one-shot out-of-band HTTP call on the calling thread. INTERNAL (core/src).
-// Wraps the CaptureSink + local-NativeHttpSender pattern (gql_introspection / oauth2 precedent): the
-// LOCAL sender means the shared senders' active cancel token is never touched (no cross-cancel).
+// One-shot out-of-band HTTP call on the calling thread; a LOCAL sender so the shared senders' cancel state is never touched.
 #pragma once
 
 #include "core/domain/common/result.hpp"
@@ -10,8 +8,7 @@
 
 namespace core::infra {
 
-// Executes `model` (must be an Http payload) and returns the terminal response. EvFailed or no
-// terminal event -> Result::fail(Network). HTTP status is NOT interpreted — callers decide what >=400 means.
+// `model` must carry an Http payload. EvFailed / no terminal -> fail(Network); HTTP status is NOT interpreted.
 core::domain::Result<core::domain::ApiResponse>
 blockingFetch(const core::domain::RequestModel &model, const core::domain::ICancellationToken &cancel);
 

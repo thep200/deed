@@ -1,7 +1,3 @@
-// mapper_roundtrip_test.cpp — REFACTOR_SPEC §8.1/§11.2 acceptance gate.
-// For each request type: build a domain RequestModel, serialize to the on-disk JSON schema, parse it back,
-// and assert the domain value is recovered exactly (toJson(model) -> fromJson -> == model). Also verifies a
-// hand-written HTTP JSON document (the real file schema) parses into the expected domain value.
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -110,6 +106,29 @@ static void test_soap() {
   roundtrip(m2.value(), "soap 1.2 + oauth2 + headers roundtrip");
 }
 
+static void test_ldap() {
+  LdapRequest::Parts p{Url::create("ldap://dir.test:389").take()};
+  auto m1 = RequestModel::create(RequestId("req_ldap_1"), "Dir", 11, cfg(),
+                                 LdapRequest::create(std::move(p)).take());
+  roundtrip(m1.value(), "ldap defaults roundtrip");
+
+  LdapRequest::Parts p2{Url::create("ldaps://dir.test:636").take()};
+  p2.bindDn = "cn=svc,dc=x";
+  p2.bindPassword = "pw";
+  p2.baseDn = "ou=people,dc=x";
+  p2.scope = LdapScope::One;
+  p2.filter = "(uid={{user}})";
+  p2.attributes = {"cn", "mail", "memberOf"};
+  p2.group = "cn=admins,dc=x";
+  p2.testPassword = "{{user_pw}}";
+  p2.sizeLimit = 5;
+  p2.timeLimit = 2;
+  p2.pageSize = 250;
+  auto m2 = RequestModel::create(RequestId("req_ldap_2"), "Check User", 12, cfg(),
+                                 LdapRequest::create(std::move(p2)).take());
+  roundtrip(m2.value(), "ldap full (group + bind-test) roundtrip");
+}
+
 static void test_kafka_producer() {
   auto brokers = BrokerList::parse("localhost:9092").take();
   KafkaProduceConfig pcfg{KafkaTopic::create("demo-topic").take()};
@@ -137,9 +156,7 @@ static void test_kafka_consumer() {
   roundtrip(m.value(), "kafka consumer roundtrip");
 }
 
-// Both sides persist (SPEC_kafka §2.0.3): the inactive kind rides along as KafkaRequest::inactiveDraft —
-// toggling Producer/Consumer then quitting must not lose the side the user left. Round-trip both
-// directions (producer active + consumer draft, and the reverse).
+// Both sides persist: the inactive kind rides along as inactiveDraft — toggling Producer/Consumer then quitting must not lose the other side.
 static void test_kafka_inactive_draft() {
   auto brokers = BrokerList::parse("localhost:9092").take();
   KafkaProduceConfig pcfg{KafkaTopic::create("produce-topic").take()};
@@ -164,7 +181,6 @@ static void test_kafka_inactive_draft() {
   auto m2 = RequestModel::create(RequestId("req_kafka_d2"), "ConsumeDraft", 8, cfg(), consumerActive);
   roundtrip(m2.value(), "kafka consumer-active + producer-draft roundtrip");
 
-  // Same-kind draft violates the invariant -> create() must reject it.
   RT_CHECK(!KafkaRequest::create(brokers, KafkaSecurity::plaintext(),
                                  KafkaRequest::Mode{KafkaConsumeSpec{ccfg}},
                                  KafkaRequest::Mode{KafkaConsumeSpec{ccfg}})
@@ -172,8 +188,7 @@ static void test_kafka_inactive_draft() {
            "kafka same-kind inactiveDraft rejected");
 }
 
-// SPEC_kafka.md §4's exact sample JSON (timeout_ms adjusted: 0 is invalid per Timeout::fromMillis, see
-// the implementation plan's documented deviation — the consumer sample uses a normal positive default).
+// The spec's exact sample JSON, with timeout_ms adjusted to a positive value (0 is invalid per Timeout::fromMillis).
 static void test_parse_kafka_samples() {
   RequestJsonMapper mapper;
   const std::string producer = R"({
@@ -243,13 +258,11 @@ static void test_parse_kafka_samples() {
     RT_CHECK(c.config.group.value() == "deed-tail-local", "sample group");
   }
 
-  // round-trip stability: toJson(fromJson(x)) parsed again == same domain value (spec §4 acceptance gate).
   if (rp.isOk()) roundtrip(rp.value(), "kafka producer sample re-roundtrip");
   if (rc.isOk()) roundtrip(rc.value(), "kafka consumer sample re-roundtrip");
 }
 
 static void test_parse_real_schema() {
-  // The exact on-disk schema (envelope + http block). fromJson must yield the expected domain value.
   const std::string doc = R"({
     "schemaVersion": 1, "id": "req_x", "name": "Get", "type": "http", "seq": 0,
     "config": {"timeout_ms": 3000, "tls": true},
@@ -266,8 +279,7 @@ static void test_parse_real_schema() {
   }
 }
 
-// On-disk-format compat: the native mapper must read EXISTING files written by the legacy json_codec —
-// WS onOpenSend as a string[] (kind = defaultSendKind), gql subTransport "ws"/"sse" + wsProtocol alias.
+// Back-compat: files written by the legacy codec must still parse (WS onOpenSend string[], gql wsProtocol alias).
 static void test_parse_legacy_ws_gql() {
   RequestJsonMapper mapper;
   const std::string ws = R"({
@@ -298,6 +310,31 @@ static void test_parse_legacy_ws_gql() {
   }
 }
 
+// A present-but-unknown "type" must be a hard parse error (used to silently become empty HTTP).
+static void test_unknown_type_rejected() {
+  RequestJsonMapper mapper;
+  const std::string doc = R"({
+    "id": "u", "name": "U", "type": "mqtt", "seq": 0,
+    "config": {"timeout_ms": 3000, "tls": true}
+  })";
+  auto r = mapper.fromJson(doc);
+  RT_CHECK(!r.isOk(), "unknown type token -> parse error");
+  if (!r.isOk())
+    RT_CHECK(r.error().message.find("mqtt") != std::string::npos, "error names the bad token");
+}
+
+// Legacy files may lack "type" entirely -> must keep parsing as HTTP.
+static void test_missing_type_defaults_http() {
+  RequestJsonMapper mapper;
+  const std::string doc = R"({
+    "id": "l", "name": "Legacy", "seq": 0, "config": {"timeout_ms": 3000, "tls": true},
+    "http": {"method": "GET", "url": "https://h/x", "params": [], "headers": [], "pathVariables": [],
+             "body": {"mode": "none"}, "auth": {"type": "none"}}
+  })";
+  auto r = mapper.fromJson(doc);
+  RT_CHECK(r.isOk() && r.value().type() == RequestType::Http, "missing type field -> http");
+}
+
 int run_mapper_roundtrip_tests() {
   std::printf("[mapper_roundtrip]\n");
   test_http();
@@ -306,12 +343,15 @@ int run_mapper_roundtrip_tests() {
   test_ws();
   test_graphql();
   test_soap();
+  test_ldap();
   test_kafka_producer();
   test_kafka_consumer();
   test_kafka_inactive_draft();
   test_parse_kafka_samples();
   test_parse_real_schema();
   test_parse_legacy_ws_gql();
+  test_missing_type_defaults_http();
+  test_unknown_type_rejected();
   std::printf("  mapper: %d passed, %d failed\n", rt_pass, rt_fail);
   return rt_fail;
 }

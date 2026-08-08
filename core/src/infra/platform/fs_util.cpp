@@ -36,8 +36,7 @@ void writeFileAtomic(const std::string& path, const std::string& content) {
         fs::create_directories(target.parent_path());
     }
 
-    // Unique temp name per writer (H6): two concurrent writers to the same path must not share a ".tmp"
-    // and clobber each other. pid + a process-local counter makes it unique.
+    // Unique temp name (pid + counter): concurrent writers to the same path must not share a ".tmp".
     static std::atomic<unsigned long long> ctr{0};
     long long pid =
 #ifndef _WIN32
@@ -51,8 +50,7 @@ void writeFileAtomic(const std::string& path, const std::string& content) {
     auto cleanup = [&] { std::error_code e; fs::remove(tmp, e); };
 
 #ifndef _WIN32
-    // POSIX: write + fsync the data before rename, then fsync the parent dir so a crash after rename can't
-    // leave a zero-length/stale file (H6).
+    // fsync the data before rename, then fsync the parent dir, so a crash can't leave a zero-length/stale file.
     int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) throw std::runtime_error("cannot open temp file: " + tmp.string());
     const char* p = content.data();
@@ -72,7 +70,7 @@ void writeFileAtomic(const std::string& path, const std::string& content) {
     std::error_code ec;
     fs::rename(tmp, target, ec);   // atomic on the same filesystem
     if (ec) {
-        // Cross-FS (or other) failure: copy onto the target, then drop the temp. Clean up on every path (L6).
+        // Cross-FS (or other) failure: copy onto the target, then drop the temp.
         std::error_code ec2;
         fs::copy_file(tmp, target, fs::copy_options::overwrite_existing, ec2);
         cleanup();

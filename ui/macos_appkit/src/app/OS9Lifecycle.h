@@ -1,12 +1,5 @@
-// OS9Lifecycle — first-responder / input-context teardown contract (docs/CRASH_FIX_LIFECYCLE.md §2).
-//
-// Root crash: a text view/field still acting as first responder gets its content cleared/destroyed,
-// or the window holding it is closed, WITHOUT first deactivating NSTextInputContext -> the next
-// event loop's -[NSApplication updateWindows] re-activates the freed input context -> EXC_BAD_ACCESS
-// (worse with Vietnamese IME input since the IMK/TSM path lingers longer).
-//
-// Invariant: BEFORE destroying/changing/clearing a text view/field, or closing a window holding a
-// text field -> call OS9SafeEndEditing while the object is still ALIVE to commit + release the input context cleanly.
+// Deactivate NSTextInputContext BEFORE clearing/destroying a focused text view (or closing its window):
+// otherwise the next -updateWindows re-activates the freed context -> EXC_BAD_ACCESS (worse under Vietnamese IME).
 #import <Cocoa/Cocoa.h>
 
 // Call BEFORE clearing/replacing a text view, or before closing a window with a text field.

@@ -5,7 +5,7 @@
 
 #include "core/infra/import/importer.hpp"
 #include "infra/import/shell_tokenize.hpp"
-#include "infra/transport/shared/dto_common.hpp" // surviving KeyValue / MultipartPart DTOs (parse scratch only)
+#include "infra/transport/shared/dto_common.hpp"
 #include "infra/transport/shared/url_util.hpp"
 
 namespace core {
@@ -14,9 +14,7 @@ namespace d = core::domain;
 
 namespace {
 
-// ---- mutable parse scratch (decoupled from any persisted type) ------------------------------------------
-// The per-token handlers fill this; buildHttpDomain() then converts it to an immutable domain RequestModel.
-// Reuses the surviving KeyValue / MultipartPart value DTOs (dto_common.hpp). It is NOT the persisted model.
+// Mutable parse scratch only — not the persisted model; buildHttpDomain() converts it to the domain RequestModel.
 struct SBody {
     std::string mode = "none"; // none|json|text|xml|form-urlencoded|multipart|binary
     std::string json, text, xml;
@@ -37,13 +35,12 @@ struct SHttp {
     int timeoutMs = 0; bool timeoutMsSet = false;
     bool verifyTls = true; bool verifyTlsSet = false;
 };
-// unknown-flag / error accumulator threaded through the handlers.
+// unknown-flag / error accumulator.
 struct Acc {
     std::vector<std::string> unknown;
     std::string error;
 };
 
-// Split "key: value" from -H.
 KeyValue parseHeader(const std::string& raw) {
     KeyValue kv;
     kv.enabled = true;
@@ -59,8 +56,7 @@ bool isJsonLike(const std::string& s) {
     return !t.empty() && (t.front() == '{' || t.front() == '[');
 }
 
-// Well-formed base64? (M15) Non-empty, length multiple of 4, only alphabet/'=' (padding only at the end).
-// Guards against treating a garbled Basic token as valid credentials.
+// Non-empty, length %4, alphabet/'=' with padding only at the end — guards against garbled Basic tokens.
 bool looksBase64(const std::string& s) {
     if (s.empty() || s.size() % 4 != 0) return false;
     bool padding = false;
@@ -74,9 +70,8 @@ bool looksBase64(const std::string& s) {
     return true;
 }
 
-// Decode base64 (skip unknown chars/whitespace; stop at '='). Used to split Basic user:pass.
+// Lenient decode: skips unknown chars/whitespace, stops at '='.
 std::string base64Decode(const std::string& in) {
-    // Decode table built ONCE (was a 256-entry vector alloc+fill on every call).
     static const std::vector<int> T = [] {
         const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         std::vector<int> t(256, -1);
@@ -95,9 +90,7 @@ std::string base64Decode(const std::string& in) {
     return out;
 }
 
-// Route a RECOGNIZED Authorization header value into the pane's Auth tab (instead of the headers list).
-// Bearer -> bearer token; valid Basic -> base64-decode to user:pass. Returns false for an unknown scheme
-// or malformed Basic — the caller keeps the raw header in the headers list (no "apikey" type anymore).
+// Bearer / valid Basic -> Auth tab; false for unknown scheme or malformed Basic (caller keeps the raw header).
 bool applyAuthHeader(SAuth& auth, const std::string& rawValue) {
     std::string v = trim(rawValue);
     size_t sp = v.find(' ');
@@ -124,7 +117,6 @@ void pushHeader(SHttp& h, const char* key, const std::string& value) {
     h.headers.push_back(kv);
 }
 
-// One -F/--form field: "key=value" (value "@path" -> file part, else text part).
 void addMultipart(SHttp& h, const std::string& f) {
     size_t eq = f.find('=');
     MultipartPart p;
@@ -136,7 +128,6 @@ void addMultipart(SHttp& h, const std::string& f) {
     h.body.mode = "multipart";
 }
 
-// Split "a=b&c=d" into KeyValue pairs (value empty when '=' is missing). Empty input -> empty vector.
 std::vector<KeyValue> splitKvPairs(const std::string& joined) {
     std::vector<KeyValue> out;
     size_t pos = 0;
@@ -154,7 +145,6 @@ std::vector<KeyValue> splitKvPairs(const std::string& joined) {
     return out;
 }
 
-// Mutable accumulators threaded through the per-token handlers.
 struct CurlParseState {
     SHttp& h;
     Acc& acc;
@@ -183,7 +173,7 @@ bool isIgnoredCurlFlag(const std::string& flag) {
            flag == "-o" || flag == "--output" || flag == "-O" || flag == "--remote-name";
 }
 
-// Each handler returns true if it recognized `flag`. Grouped to keep every chain small.
+// Each handler returns true if it recognized `flag`.
 bool curlAuthMethodFlag(const std::string& flag, const std::string& value, CurlParseState& st) {
     SHttp& h = st.h;
     if (flag == "-X" || flag == "--request") { h.method = value; st.explicitMethod = true; }
@@ -246,12 +236,11 @@ bool curlOptionFlag(const std::string& flag, const std::string& value, CurlParse
     return true;
 }
 
-// Process one token: split an inline --flag=value, fetch a value for value-flags, then dispatch.
 void applyCurlToken(const std::vector<std::string>& tokens, size_t& i, CurlParseState& st) {
     const std::string& tk = tokens[i];
     std::string flag = tk;
     std::string value;
-    bool hasInline = false; // M14: track presence, not emptiness (so `--data=` -> empty value, not next token)
+    bool hasInline = false; // track presence, not emptiness (`--data=` -> empty value, not the next token)
     if (tk.rfind("--", 0) == 0) {
         size_t eq = tk.find('=');
         if (eq != std::string::npos) { flag = tk.substr(0, eq); value = tk.substr(eq + 1); hasInline = true; }
@@ -264,12 +253,11 @@ void applyCurlToken(const std::vector<std::string>& tokens, size_t& i, CurlParse
     if (curlDataFlag(flag, value, st)) return;
     if (curlOptionFlag(flag, value, st)) return;
 
-    if (!tk.empty() && tk[0] == '-') st.acc.unknown.push_back(tk); // unknown flag
+    if (!tk.empty() && tk[0] == '-') st.acc.unknown.push_back(tk);
     else if (st.h.url.empty()) st.h.url = tk;                      // first bare token = URL
     else st.acc.unknown.push_back(tk);
 }
 
-// Merge collected -d/--data (and --data-urlencode) into the request body or query (for -G).
 void applyCurlData(CurlParseState& st) {
     SHttp& h = st.h;
     if (!st.dataParts.empty()) {
@@ -292,7 +280,6 @@ void applyCurlData(CurlParseState& st) {
     }
 }
 
-// ---- scratch -> immutable domain RequestModel (no legacy RequestModel, no request_bridge) ----------------
 d::Auth authToDomain(const SAuth& a) {
     if (a.type == "bearer") { auto r = d::Auth::bearer(a.bearerToken); return r ? r.take() : d::Auth::none(); }
     if (a.type == "basic") {
@@ -352,12 +339,12 @@ d::RequestModel buildHttpDomain(const SHttp& h, const std::string& name) {
 } // namespace
 
 bool CurlImporter::canHandle(const std::string& input) const {
-    std::string t = lower(trim(input.substr(0, 16)));   // only need the prefix; don't copy a huge paste (L8)
+    std::string t = lower(trim(input.substr(0, 16)));   // only need the prefix; don't copy a huge paste
     return t.rfind("curl", 0) == 0;
 }
 
 ImportParseResult CurlImporter::parse(const std::string& input) const {
-    Acc acc; // local accumulator for unknown/error
+    Acc acc;
     auto tokens = shellTokenize(input);
     if (tokens.empty() || lower(tokens[0]) != "curl")
         return {false, std::nullopt, {}, "not a cURL command"};
@@ -367,13 +354,11 @@ ImportParseResult CurlImporter::parse(const std::string& input) const {
     for (size_t i = 1; i < tokens.size(); ++i) applyCurlToken(tokens, i, st);
     applyCurlData(st);
 
-    // Infer method if not declared: body -> POST, otherwise GET.
     if (!st.explicitMethod) h.method = (h.body.mode != "none") ? "POST" : "GET";
 
     if (h.url.empty())
         return {false, std::nullopt, {}, "no URL found in cURL command"};
 
-    // Query after '?' -> split into params (decoded), remaining url is raw.
     urlutil::splitUrlQuery(h.url, h.params);
 
     return {true, buildHttpDomain(h, "Imported cURL"), acc.unknown, ""};

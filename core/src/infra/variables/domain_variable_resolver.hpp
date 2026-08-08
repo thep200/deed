@@ -1,7 +1,3 @@
-// core/src/infra/variables/domain_variable_resolver.hpp — IVariableResolver over the proven
-// core::VariableResolver (REFACTOR_SPEC §6.3, closes the new stack's variable-resolution gap).
-// Resolves {{vars}} by bridging domain -> legacy struct, substituting each string field with the existing
-// pure resolver, then bridging back. Reuses battle-tested logic instead of re-implementing it.
 #pragma once
 
 #include "core/domain/ports/driven/i_variable_resolver.hpp"

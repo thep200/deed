@@ -1,6 +1,4 @@
-// FLAT retro toast: background always gray, only the dashed border is colored by kind
-// (colors from assets/color.png): info=blue-gray, success=green, fail=red.
-// Has a status icon on the left + ✕ button on the right.
+// Flat retro toast: background stays gray, only the dashed border is colored by kind (colors from assets/color.png).
 #import <Cocoa/Cocoa.h>
 
 @interface OS9Toast : NSView

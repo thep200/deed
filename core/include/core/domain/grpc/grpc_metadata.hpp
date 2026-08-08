@@ -1,4 +1,3 @@
-// core/domain/grpc/grpc_metadata.hpp — gRPC metadata with the wire invariants (REFACTOR_SPEC §5.5).
 #pragma once
 
 #include <cctype>

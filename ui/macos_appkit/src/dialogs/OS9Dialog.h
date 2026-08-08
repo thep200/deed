@@ -1,6 +1,4 @@
-// OS9Dialog — self-drawn Platinum-style modal popup (replaces system NSAlert). CUSTOM_DIALOG.md.
-// Two synchronous APIs: confirm (returns button index) and prompt (returns new text or nil).
-// Reuses OS9Theme/OS9BevelButton; does NOT touch NSOpenPanel/NSSavePanel.
+// Self-drawn Platinum modal (no system NSAlert), synchronous; does NOT touch NSOpenPanel/NSSavePanel.
 #import <Cocoa/Cocoa.h>
 
 typedef NS_ENUM(NSInteger, OS9AlertIcon) {

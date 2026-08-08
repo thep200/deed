@@ -13,17 +13,17 @@
 
 - (void)sendRequest:(id)sender {
     // Hot path: do ONLY what's needed to send (no env reads / aliasify / persistence here —
-    // alias substitution is an import-time concern, §9.5). Keep this lean for performance.
+    // alias substitution is an import-time concern). Keep this lean for performance.
     if (!_hasRequest || !_apiClient) return;
-    // WebSocket is a session, not a one-shot send: the action toggles Connect / Send-frame (SPEC_websocket §6).
+    // WebSocket is a session, not a one-shot send: the action toggles Connect / Send-frame.
     if ([self requestType] == core::RequestType::WebSocket) { [self wsSendOrConnect]; return; }
     if (_sending) return;
     // Only HTTP has a URL query string to split; GraphQL's "Query" tab is the document, not params.
     if ([self requestType] == core::RequestType::Http) [self parseUrlQueryIntoQueryTab];
     if (![self syncModelFromEditors:NO]) return;
 
-    // Route by interaction kind (SPEC_grpc_streaming §4). Methods that STREAM responses (server-streaming
-    // + bidi) -> openStream(); unary and client-streaming (one response) -> send().
+    // Route by interaction kind: server-streaming + bidi STREAM responses -> streamViaApiClient;
+    // unary and client-streaming (one response) -> sendViaApiClient.
     core::InteractionKind kind =
         _model ? _apiClient->interactionOf(*_model) : core::InteractionKind::Unary;
     BOOL streamsResponses = (kind == core::InteractionKind::ServerStream ||
@@ -35,9 +35,6 @@
     [self relayout];
     [self updateStatus:@""];
 
-    // REFACTOR_SPEC P6: ALL sends go through the IApiClient stack (orchestrator/saga/domain senders).
-    // Server-stream (gRPC server-streaming / HTTP SSE) -> streamViaApiClient; unary HTTP/gRPC/GraphQL ->
-    // sendViaApiClient. WebSocket is handled above (wsSendOrConnect). No legacy Engine send path remains.
     if (streamsResponses) {
         _streaming = YES;
         [self streamViaApiClient];
@@ -48,8 +45,7 @@
     [self beginRequestTiming];   // live elapsed (+ size while streaming) on the status line
 }
 
-// New send path (REFACTOR_SPEC P6): convert the legacy model to domain, feed the active env vars, and send
-// through IApiClient. A UiObserver translates the domain ResponseEvents back into the existing
+// Unary send through IApiClient. A UiObserver translates domain ResponseEvents back into the
 // onCoreResponse/onCoreError handlers (keyed by a synthesized handle so the stale-callback guard still works).
 - (void)sendViaApiClient {
     [self refreshVarsForSend];   // {{vars}} resolve against the current active environment
@@ -145,13 +141,11 @@
     _cancelStage = 0;
 }
 
-// WebSocket action button (§6): connect if idle, else send the Message editor as a frame.
-// REFACTOR_SPEC P6: WebSocket runs entirely through IApiClient (connect/send-frame/disconnect).
 - (void)wsSendOrConnect {
     [self wsViaApiClient];
 }
 
-// WebSocket via IApiClient (§6): connect if idle, else push the Message editor as a frame through the
+// WebSocket via IApiClient: connect if idle, else push the Message editor as a frame through the
 // open session. Inbound frames + close arrive via the streaming UiObserver -> onStream* handlers.
 - (void)wsViaApiClient {
     if (_apiWsActive && !_apiExec.empty()) {
@@ -187,7 +181,7 @@
     NSLog(@"[smoke] onCoreResponse status=%d bytes=%lld", resp.statusCode, (long long)resp.body.size());
     [self finishSending];
     _lastResp = resp; _hasResp = YES;
-    [self rebuildResponseBuffersAsync];   // format off the main thread -> large response won't freeze UI (U2)
+    [self rebuildResponseBuffersAsync];   // format off the main thread -> large response won't freeze UI
     int64_t endMs = (int64_t)([[NSDate date] timeIntervalSince1970] * 1000.0);  // end mark = time received
     [self updateStatusFromResponse:resp error:NO endMs:endMs];
     [self cacheResponseAsync:resp forId:_currentId];   // store cache (background) — keyed by id
@@ -204,15 +198,15 @@
     [self finishSending];
     [self displayErrorKind:err.kind message:N(err.message) elapsedMs:[self measuredElapsedMs]];
     [self toastWarn:[NSString stringWithFormat:@"%@: %@", N(core::domain::toString(err.kind)), N(err.message)]];
-    [self cacheErrorAsync:err forId:_currentId];       // cache errors too, to restore the exact state (§7)
+    [self cacheErrorAsync:err forId:_currentId];       // cache errors too, to restore the exact state
 }
 
 #pragma mark Streaming (SPEC_grpc_streaming §7)
 
-// '[' — reset the response pane into streaming-write mode. (transport arg is display/telemetry only — INV-1)
+// '[' — reset the response pane into streaming-write mode. (transport arg is display/telemetry only)
 - (void)onStreamOpenTransport:(int)transport token:(uint64_t)token {
     (void)transport;
-    if (token != _streamToken) return;   // C2: a stale stream's open -> ignore
+    if (token != _streamToken) return;   // a stale stream's open -> ignore
     _hasResp = NO;
     _streamEvents = 0;
     _streamBytes = 0;   // reset live size counter for this stream
@@ -224,23 +218,23 @@
     [self liveTick];              // paint the live status (elapsed | size | events) immediately
 }
 
-// Coalesced append (already comma-joined "ev_N" members per Appendix A). Update the live counters;
+// Coalesced append (already comma-joined members). Update the live counters;
 // the live timer (liveTick) renders the status line so frequent chunks don't each touch the label (perf).
 - (void)onStreamChunk:(NSString *)chunk events:(uint64_t)totalEvents token:(uint64_t)token {
-    if (token != _streamToken || !_streaming || !chunk.length) return;   // C2: drop a prior stream's chunk
-    [_respText insertStreamChunk:chunk];   // inserted before the trailing "]" -> stays valid live (doc is the array, H3)
+    if (token != _streamToken || !_streaming || !chunk.length) return;   // drop a prior stream's chunk
+    [_respText insertStreamChunk:chunk];   // inserted before the trailing "]" -> stays valid live
     _streamEvents = totalEvents;
     _streamBytes += (int64_t)[chunk lengthOfBytesUsingEncoding:NSUTF8StringEncoding];   // running size (live)
 }
 
-// ']' + finalize status; swap the live text for the normal formatted buffers; cache the array (§8).
+// ']' + finalize status; swap the live text for the normal formatted buffers; cache the array.
 - (void)onStreamClose:(core::StreamStatus)status code:(int)code message:(NSString *)message
                events:(uint64_t)events elapsedMs:(long long)elapsedMs truncated:(BOOL)truncated
                 token:(uint64_t)token {
-    if (token != _streamToken) return;   // C2: a stale stream's close must not touch the current request's panes
+    if (token != _streamToken) return;   // a stale stream's close must not touch the current request's panes
     // The pane already shows a closed, valid array (seeded "[\n]"; each event was inserted before the
     // trailing "]"). The Scintilla document IS the assembled array — read it back here instead of keeping
-    // a second NSMutableString copy growing alongside it during the stream (H3).
+    // a second NSMutableString copy growing alongside it during the stream.
     [_respText endStreamingValid:YES];
 
     _streaming = NO;
@@ -260,7 +254,7 @@
     // Build a neutral domain ApiResponse from the assembled array so the normal tab/cache pipeline takes over.
     core::domain::ApiResponse resp;
     resp.statusCode = 0;
-    resp.body = S(_respText.string);   // the live doc already holds the valid [ … ] array (H3)
+    resp.body = S(_respText.string);   // the live doc already holds the valid [ … ] array
     resp.elapsed = std::chrono::milliseconds(effElapsedMs);
 
     _lastResp = resp;
@@ -313,14 +307,14 @@
     for (NSUInteger i = 0; i < _respTabTitles.count; i++) [_respBuffers addObject:@""];
     if (_respBuffers.count) _respBuffers[0] = [NSString stringWithFormat:@"[%@] %@", k, msg ?: @""];
     _activeRespTab = 0;
-    _respText.string = _respBuffers.count ? _respBuffers[0] : @"";   // L1: guard empty buffers
+    _respText.string = _respBuffers.count ? _respBuffers[0] : @"";   // guard empty buffers
     [self highlightActiveTab:_respTabButtons active:0];
 }
 
-// Write cache on a BACKGROUND thread (§6: put async, don't block UI). Engine is thread-safe.
+// Write cache on a BACKGROUND thread (async put, don't block UI); the cache is thread-safe.
 - (void)cacheResponseAsync:(const core::domain::ApiResponse &)resp forId:(const std::string &)reqId {
     if (reqId.empty()) return;
-    __block core::domain::ApiResponse copy = resp;   // cache speaks domain now (REFACTOR_SPEC D)
+    __block core::domain::ApiResponse copy = resp;   // own a copy across the background hop
     std::string id = reqId;
     __weak MainWindowController *ws = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
@@ -366,167 +360,5 @@
     }];
 }
 - (void)stopSendSpinner { [_spinTimer invalidate]; _spinTimer = nil; }
-
-#pragma mark Live request timing (elapsed + size)
-
-// Reset live counters + start the status ticker. Cheap: ONE repeating timer (~20Hz) that recomputes the
-// line from a monotonic start mark + running counters — chunks don't write the label themselves (perf).
-- (void)beginRequestTiming {
-    _reqStartTime = NSProcessInfo.processInfo.systemUptime;   // monotonic (immune to wall-clock changes)
-    _streamBytes = 0;
-    _streamEvents = 0;
-    [self stopLiveTimer];
-    __weak MainWindowController *ws = self;
-    _liveTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 repeats:YES block:^(NSTimer *t) {
-        MainWindowController *s = ws; if (!s) { [t invalidate]; return; }
-        [s liveTick];
-    }];
-    _liveTimer.tolerance = 0.02;   // let the runloop coalesce wakeups (perf)
-    [self liveTick];               // paint frame 0 now (don't wait for the first interval)
-}
-
-- (void)stopLiveTimer { [_liveTimer invalidate]; _liveTimer = nil; }
-
-// One live status frame: elapsed ms always; for streams also the running size + event count.
-- (void)liveTick {
-    if (!_sending) return;   // defensive: never paint after the request settled
-    NSString *t = [self elapsedText:[self measuredElapsedMs]];
-    if (_streaming)
-        _statusLabel.stringValue = [NSString stringWithFormat:StrFmtStreamLive, t,
-                                    [self humanSize:_streamBytes], (unsigned long long)_streamEvents];
-    else
-        _statusLabel.stringValue = [NSString stringWithFormat:StrFmtReqElapsed, t];
-    _statusLabel.textColor = [NSColor blackColor];
-}
-
-- (NSString *)humanSize:(int64_t)bytes {
-    return (bytes >= 1024) ? [NSString stringWithFormat:@"%.1fkb", bytes / 1024.0]
-                           : [NSString stringWithFormat:@"%lldb", (long long)bytes];
-}
-
-// Elapsed-time display: milliseconds up to 1000ms, then switch to WHOLE seconds, no decimals
-// (e.g. 850ms -> "850ms", 1234ms -> "1s", 2999ms -> "2s"). Single source so the live ticker +
-// final/stream/error status all format alike.
-- (NSString *)elapsedText:(long long)ms {
-    if (ms < 0) ms = 0;
-    if (ms > 1000) return [NSString stringWithFormat:@"%llds", ms / 1000];
-    return [NSString stringWithFormat:@"%lldms", ms];
-}
-
-// Elapsed measured by the UI's own monotonic start mark (set in beginRequestTiming, kept after
-// finishSending). Used when the settled response/error carries no duration — e.g. a user-pressed Cancel,
-// where the sender reports 0ms — so the status shows the REAL time instead of 0ms.
-- (long long)measuredElapsedMs {
-    long long ms = (long long)((NSProcessInfo.processInfo.systemUptime - _reqStartTime) * 1000.0);
-    return ms < 0 ? 0 : ms;
-}
-
-// Compute the display buffers (format JSON body/headers/cookie) — the HEAVY part, does NOT touch UI ->
-// callable from a background thread. Depends only on params (r/type/prettyMode), reads no ivars.
-- (NSArray<NSString *> *)computeResponseBuffersFor:(const core::domain::ApiResponse &)r
-                                              type:(core::RequestType)type
-                                        prettyMode:(int)prettyMode {
-    using namespace core;
-    NSMutableArray<NSString *> *bufs = [NSMutableArray array];
-    [bufs addObject:[self applyView:r.body mode:prettyMode]];   // body per Pretty/Raw/Encode/Decode
-    // The "Request" tab once showed the response's resolvedRequestDump; the domain ApiResponse doesn't
-    // carry it (the resolved request is derivable from the model). Empty until that's wired UI-side.
-    if (type == RequestType::Http) {
-        [bufs addObject:N(core::serial::responseHeadersToJson(r.headers))];
-        [bufs addObject:@""];   // Request tab (resolved request) — see note above
-        NSMutableString *ck = [NSMutableString string];
-        for (const auto &c : r.cookies)
-            [ck appendFormat:@"%s=%s  (domain=%s path=%s expires=%s)\n", c.name.c_str(), c.value.c_str(),
-                             c.domain.c_str(), c.path.c_str(), c.expires.c_str()];
-        [bufs addObject:(ck.length ? ck : StrNoSetCookie)];
-    } else if (type == RequestType::Soap) {
-        // SOAP: body + response headers; no Request tab (buffer order matches the 2 titles).
-        [bufs addObject:N(core::serial::responseHeadersToJson(r.headers))];
-    } else if (type != RequestType::Kafka) {
-        [bufs addObject:@""];   // Request tab (resolved request) — see note above
-    }
-    // Kafka has no Request tab (removed per product decision) -> body buffer only, no trailing empty slot.
-    return bufs;
-}
-
-// Attach computed buffers to UI + select the remembered tab (LIGHT, runs on main thread).
-- (void)applyResponseBuffers:(NSArray<NSString *> *)bufs {
-    [_respBuffers removeAllObjects];
-    [_respBuffers addObjectsFromArray:bufs];
-    // Schema tab (GraphQL) is NOT buffer-backed: if it is the remembered tab and a schema is cached,
-    // keep showing it (a send must not yank the user off the schema). Unfetched -> clamp below -> tab 0.
-    NSInteger si = [_respTabTitles indexOfObject:StrTabSchema];
-    if (si != NSNotFound && _gqlSchemaFetched && [_rightPaneActiveTabKey isEqualToString:StrTabSchema] &&
-        [self requestType] == core::RequestType::GraphQl) {
-        _activeRespTab = si;
-        [self displayGqlSchemaPane];
-        [self highlightActiveTab:_respTabButtons active:si];
-        return;
-    }
-    // Reapply the right pane's remembered tab (semantic key); no match -> first tab.
-    NSInteger ri = [self tabIndexForKey:_rightPaneActiveTabKey inTitles:_respTabTitles];
-    if (ri >= (NSInteger)_respBuffers.count) ri = 0;
-    _activeRespTab = ri;
-    _respText.string = _respBuffers.count ? _respBuffers[ri] : @"";
-    [self applyRespPaneLanguageFor:(_respBuffers.count ? _respBuffers[ri] : @"")];
-    [self highlightActiveTab:_respTabButtons active:ri];
-}
-
-// Synchronous: used for cheap re-renders (change view mode, change tab, stress).
-- (void)rebuildResponseBuffers {
-    [self applyResponseBuffers:[self computeResponseBuffersFor:_lastResp type:[self requestType] prettyMode:_prettyMode]];
-}
-
-// Asynchronous: format the response OFF the main thread then apply on main (U2 — large response won't freeze UI).
-// Drop the result if a new request arrived (compare _currentHandle) -> avoid showing stale buffers.
-- (void)rebuildResponseBuffersAsync {
-    core::domain::ApiResponse r = _lastResp;    // copy for safe background use (main won't mutate concurrently)
-    core::RequestType type = [self requestType];
-    int pm = _prettyMode;
-    uint64_t handle = _currentHandle;
-    __weak MainWindowController *ws = self;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        MainWindowController *s = ws; if (!s) return;
-        NSArray<NSString *> *bufs = [s computeResponseBuffersFor:r type:type prettyMode:pm];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            MainWindowController *s2 = ws; if (!s2) return;
-            if (handle != s2->_currentHandle) return;   // a new request was sent/received -> drop stale buffers
-            [s2 applyResponseBuffers:bufs];
-        });
-    });
-}
-
-#pragma mark Status line
-
-- (void)updateStatus:(NSString *)text {
-    _statusLabel.stringValue = text ?: @"";
-    _statusLabel.textColor = [NSColor blackColor];
-}
-
-// Time HH:mm:ss.SSS (millisecond precision) from epoch ms. <=0 -> placeholder.
-- (NSString *)clockFromEpochMs:(int64_t)ms {
-    // L2: NSDateFormatter is NOT thread-safe and this instance is shared. MAIN-THREAD ONLY — callers run on
-    // the main queue (status updates). Do NOT call from computeResponseBuffersFor: or any background worker.
-    NSAssert([NSThread isMainThread], @"clockFromEpochMs: must be called on the main thread (shared formatter)");
-    if (ms <= 0) return @"--:--:--.---";
-    static NSDateFormatter *fmt;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ fmt = [NSDateFormatter new]; fmt.dateFormat = @"HH:mm:ss.SSS"; });
-    return [fmt stringFromDate:[NSDate dateWithTimeIntervalSince1970:ms / 1000.0]];
-}
-
-// status | size | time | start - end. endMs = time response received; start = end - elapsed.
-- (void)updateStatusFromResponse:(const core::domain::ApiResponse &)r error:(BOOL)isErr endMs:(int64_t)endMs {
-    long elapsedMs = (long)r.elapsed.count();
-    NSString *code = r.statusCode ? [NSString stringWithFormat:@"%d", r.statusCode] : StrOK;
-    NSString *size = [self humanSize:(int64_t)r.body.size()];
-    int64_t startMs = (endMs > 0) ? endMs - (int64_t)elapsedMs : 0;   // derive the start mark
-    NSString *range = [NSString stringWithFormat:@"%@ - %@",
-                       [self clockFromEpochMs:startMs], [self clockFromEpochMs:endMs]];
-    _statusLabel.stringValue = [NSString stringWithFormat:@"%@ | %@ | %@ | %@", code, size,
-                                                          [self elapsedText:elapsedMs], range];
-    _statusLabel.textColor = (r.statusCode >= 400) ? [NSColor colorWithCalibratedRed:0.6 green:0.0 blue:0.0 alpha:1.0]
-                                                   : [NSColor colorWithCalibratedRed:0.0 green:0.45 blue:0.0 alpha:1.0];
-}
 
 @end

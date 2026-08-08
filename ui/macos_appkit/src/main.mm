@@ -1,4 +1,3 @@
-// main.mm — AppKit app entry point (Phase 2). Sets up NSApplication + menu + main window.
 #import <Cocoa/Cocoa.h>
 
 #import "app/AppController.h"

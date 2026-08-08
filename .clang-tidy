@@ -1,6 +1,5 @@
-# SPEC_refactor §7 — lint config encoding the §3.3 thresholds so CI flags regressions.
-# Scope: core C++ (.cpp/.hpp). Obj-C++ is linted by the compiler's -Wall -Wextra + nullability.
-# Run: clang-tidy -p build <file>   (compile_commands.json is emitted by CMake — see CMAKE_EXPORT_COMPILE_COMMANDS).
+# Scope: core C++ (.cpp/.hpp); core builds with -Wall -Wextra -Wswitch (core/CMakeLists.txt).
+# Run: clang-tidy -p build <file>   (compile_commands.json is emitted by CMake).
 Checks: >
   -*,
   readability-else-after-return,

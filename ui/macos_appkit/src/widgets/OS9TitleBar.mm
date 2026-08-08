@@ -1,8 +1,4 @@
-// OS9 Platinum title bar — pixel-accurate drawing per docs/PROMPT_os9_titlebar_objcpp.md.
-// 5 states: Active (default) + Close/Zoom/Collapse pressed + Inactive.
-// Active: close pinned left; right cluster Zoom (left) + Collapse (far right);
-//         pinstripe breaks around the centered bold title.
-// Inactive: flat #D6D6D6 background, NO pinstripe, NO buttons, gray centered title only.
+// Pixel-accurate Platinum title bar: active = pinstripe + 3 bevel buttons; inactive = flat, no buttons.
 #import "widgets/OS9TitleBar.h"
 #import "theme/OS9Theme.h"
 #import "icons/OS9Glyphs.h"
@@ -73,9 +69,8 @@ typedef NS_ENUM(int, OS9TBButton) { OS9TBNone = 0, OS9TBClose, OS9TBZoom, OS9TBH
                         floor((self.bounds.size.height - sz.height) / 2), tw, sz.height);
     }
 
-    // Pinstripe band: split into 2 regions (left/right) around the title; empty -> 1 continuous band.
-    // The two bands mirror each other so their lit "heads" both face the centered title (symmetric pair):
-    // left band mirrored (lit edge on its right), right band normal (lit edge on its left).
+    // Pinstripe split into 2 bands around the title (empty title -> 1 continuous band); the bands
+    // mirror each other so their lit "heads" both face the centered title.
     if (_title.length && tr.size.width > 0) {
         CGFloat gapL = NSMinX(tr) - kTitlePad, gapR = NSMaxX(tr) + kTitlePad;
         [self drawGripFrom:sx to:gapL mirrored:YES];

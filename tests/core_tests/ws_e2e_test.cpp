@@ -1,8 +1,4 @@
-// ws_e2e_test.cpp — REFACTOR_SPEC native-rewrite (WebSocket) end-to-end. A REAL duplex WS session travels
-// through the new domain stack: CoreApiClient -> RequestOrchestrator -> SendRequestSaga -> WsSenderAdapter ->
-// (native) wsRun/libcurl WS -> local echo server, with inbound frames surfacing as domain EvMessage and the
-// close as EvClosed. Also asserts the native sender applies resolved Bearer auth on the handshake. Base ws
-// URL is argv[1] (e.g. ws://127.0.0.1:PORT).
+// e2e against the local WS echo server; base ws URL is argv[1] (e.g. ws://127.0.0.1:PORT).
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -25,8 +21,7 @@ void check(bool ok, const char *msg) {
   else { ++g_fail; std::printf("  FAIL: %s\n", msg); }
 }
 
-// WS frames arrive as JSON envelopes: {"dir":"in|out","type":"text",...,"data":"..."}. We assert on the
-// INBOUND echo frames (dir:in) carrying the expected data.
+// Frames arrive as JSON envelopes {"dir":"in|out",...,"data":"..."}; assertions match INBOUND (dir:in) echoes.
 struct Collector final : IRequestObserver {
   std::mutex mu;
   std::condition_variable cv;
@@ -66,7 +61,6 @@ int main(int argc, char **argv) {
   cfg.collectionRoot = root.string();
   auto client = core::app::CoreApiClient::create(std::move(cfg));
 
-  // WS request that sends "ping" on open.
   WebSocketRequest::Parts p{Url::createWithSchemes(url, {"ws", "wss"}).take()};
   p.onOpenSend = {WsMessage{WsSendKind::Text, "ping"}};
   RequestConfig rc{Timeout::fromMillis(15000).take(), true};
@@ -94,9 +88,7 @@ int main(int argc, char **argv) {
     check(obs->waitClosed(), "WS closed -> terminal event");
   }
 
-  // 4. Auth on the handshake: a Bearer token resolved from {{var}} -> the native sender applies it to the
-  //    handshake, the server echoes the Authorization header back as the first inbound frame. Gate for the
-  //    native WS path + the resolver's WS-auth coverage.
+  // 4. Handshake auth: a Bearer token resolved from {{var}} is applied to the handshake; the server echoes Authorization back.
   {
     VariableScope scope;
     scope.values["tok"] = "secret-w";

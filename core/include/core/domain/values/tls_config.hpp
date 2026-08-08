@@ -1,6 +1,3 @@
-// core/domain/values/tls_config.hpp — TlsConfig value object (REFACTOR_SPEC §5.1).
-// A clientCert without a clientKey is a *soft* concern (warning, not a hard invariant) so create() never
-// fails on it — callers may inspect hasClientCertWithoutKey() to surface a warning.
 #pragma once
 
 #include <string>

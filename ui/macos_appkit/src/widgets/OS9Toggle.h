@@ -1,5 +1,4 @@
-// OS9Toggle — a retro Platinum slide switch (label + square sliding knob). Click anywhere to flip it
-// left/right (off/on). Fires target/action on change, like NSButton. Used for the gRPC TLS toggle.
+// Retro Platinum slide switch: click anywhere flips it; fires target/action like NSButton.
 #import <Cocoa/Cocoa.h>
 
 @interface OS9Toggle : NSControl

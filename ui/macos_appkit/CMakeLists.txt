@@ -26,6 +26,7 @@ add_executable(deed MACOSX_BUNDLE
   src/app/AppStrings.mm
   src/app/DeedConfig.mm
   src/theme/OS9Theme.mm
+  src/theme/OS9ThemeTitleBar.mm
   src/icons/OS9Glyphs.mm
   src/widgets/OS9BevelButton.mm
   src/widgets/OS9PopupButton.mm
@@ -42,14 +43,30 @@ add_executable(deed MACOSX_BUNDLE
   src/widgets/OS9StyleMenu.mm
   src/widgets/OS9Dropdown.mm
   src/widgets/OS9EnvGrid.mm
+  src/widgets/OS9EnvGridDraw.mm
+  src/widgets/OS9EnvGridInput.mm
   src/editor/SciTextView.mm
   src/editor/JsonEditorBehavior.mm
   src/dialogs/OS9Dialog.mm
   src/windows/TreeViews.mm
+  src/windows/typeui/RequestTypeUi.mm
+  src/windows/typeui/HttpTypeUi.mm
+  src/windows/typeui/GrpcTypeUi.mm
+  src/windows/typeui/GraphQlTypeUi.mm
+  src/windows/typeui/WsTypeUi.mm
+  src/windows/typeui/KafkaTypeUi.mm
+  src/windows/typeui/SoapTypeUi.mm
+  src/windows/typeui/LdapTypeUi.mm
   src/windows/MainWindowController.mm
+  src/windows/MainWindowControllerLayout.mm
+  src/windows/MainWindowControllerWindow.mm
   src/windows/MainWindowControllerTree.mm
+  src/windows/MainWindowControllerTreeMenu.mm
   src/windows/MainWindowControllerEditor.mm
+  src/windows/MainWindowControllerBodyTabs.mm
+  src/windows/MainWindowControllerImport.mm
   src/windows/MainWindowControllerSend.mm
+  src/windows/MainWindowControllerPresent.mm
   src/windows/MainWindowControllerConfig.mm
   src/windows/EnvWindowController.mm
 )

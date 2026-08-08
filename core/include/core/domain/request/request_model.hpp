@@ -1,7 +1,3 @@
-// core/domain/request/request_model.hpp — RequestModel aggregate root (REFACTOR_SPEC §5.8).
-// The single domain entity every upper layer (saga, sender, UI) manipulates; NO ONE sees JSON. Its type is
-// inferred from the payload variant index, so an Http payload IS an HTTP request — no separate type tag to
-// drift out of sync.
 #pragma once
 
 #include <string>
@@ -13,6 +9,7 @@
 #include "core/domain/grpc/grpc_request.hpp"
 #include "core/domain/http/http_request.hpp"
 #include "core/domain/kafka/kafka_request.hpp"
+#include "core/domain/ldap/ldap_request.hpp"
 #include "core/domain/request/request_config.hpp"
 #include "core/domain/request/request_id.hpp"
 #include "core/domain/request/request_type.hpp"
@@ -26,11 +23,10 @@ using RequestType = ::core::RequestType;
 class RequestModel {
 public:
   // Order MUST match RequestType so type() == variant index (new types append at the end).
-  using Payload =
-      std::variant<HttpRequest, GrpcRequest, GraphQlRequest, WebSocketRequest, KafkaRequest, SoapRequest>;
+  using Payload = std::variant<HttpRequest, GrpcRequest, GraphQlRequest, WebSocketRequest,
+                               KafkaRequest, SoapRequest, LdapRequest>;
 
-  // id may be empty: an imported/draft request has no identity until it is persisted (the store assigns
-  // one on save), exactly like a draft Url. Identity is a persistence concern, not a construction invariant.
+  // id may be empty: a draft has no identity until persisted (the store assigns one on save).
   static Result<RequestModel> create(RequestId id, std::string name, int seq, RequestConfig cfg,
                                      Payload payload) {
     return Result<RequestModel>::ok(
@@ -47,7 +43,6 @@ public:
 
   template <class V> decltype(auto) match(V &&v) const { return std::visit(std::forward<V>(v), payload_); }
 
-  // Immutable updates ("modify" = make a new value).
   RequestModel withName(std::string name) const {
     RequestModel c = *this;
     c.name_ = std::move(name);

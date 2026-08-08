@@ -1,9 +1,7 @@
-// TreeViews — view/model helpers for MainWindowController's collection tree (split from controller).
-// TreeItem (NSOutlineView model), DeedOutlineView (context menu), TreeCellView (retro icon),
-// OS9RowView (gray highlight). No dependency on controller ivars -> stands alone.
+// Collection-tree view/model helpers; no dependency on controller ivars.
 #import <Cocoa/Cocoa.h>
 
-#include "core/domain/environment/env_config.hpp" // TreeNode (+ RequestType via request_type.hpp) — survives types.hpp removal
+#include "core/domain/environment/env_config.hpp" // TreeNode (+ RequestType via request_type.hpp)
 
 // Pasteboard type for drag-and-drop moving of a request within the tree.
 extern NSString *const kTreeDragType;
@@ -19,11 +17,11 @@ extern NSString *const kTreeDragType;
 @property(nonatomic, copy) NSString *mark;   // line-leading marker: HTTP method, or "gRPC"
 @property(nonatomic) BOOL grpc;
 @property(nonatomic) core::RequestType requestType;   // request kind (folders: unused) — drives cURL menu item
-@property(nonatomic) BOOL childrenLoaded;   // lazy: children loaded only on expand (§3)
+@property(nonatomic) BOOL childrenLoaded;   // lazy: children loaded only on expand
 @property(nonatomic, strong) NSMutableArray<TreeItem *> *children;
 @end
 
-// Build ONE item from single-level metadata — NO recursion into children (lazy §3).
+// Build ONE item from single-level metadata — NO recursion into children.
 TreeItem *TreeItemFromNode(const core::TreeNode &n);
 
 #pragma mark - DeedOutlineView (dynamic right-click context menu)
@@ -37,8 +35,9 @@ TreeItem *TreeItemFromNode(const core::TreeNode &n);
 - (void)showDropInsertAtRow:(NSInteger)row level:(NSInteger)level;
 - (void)showDropOnRow:(NSInteger)row;
 - (void)hideDropFeedback;
-// Row under a point in the view's own coords, and whether the point sits in its lower half.
-- (NSInteger)dropRowAtPoint:(NSPoint)p belowMidline:(BOOL *)below;
+// Where a point sits inside its row, in the view's own coords: 0 = top edge, 1 = bottom edge.
+// -1 when the point is not over a row.
+- (CGFloat)rowFractionAtPoint:(NSPoint)p;
 @end
 
 #pragma mark - TreeCellView (self-drawn retro folder/doc icon)

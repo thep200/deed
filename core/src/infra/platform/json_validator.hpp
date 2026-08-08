@@ -1,5 +1,3 @@
-// core/src/infra/platform/json_validator.hpp — IJsonValidator impl (REFACTOR_SPEC §8). Uses the depth-guarded
-// parser; this is INFRA, so touching nlohmann here is allowed (the golden rule only forbids it in domain/app).
 #pragma once
 
 #include "infra/serialization/json_codec.hpp"

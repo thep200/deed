@@ -1,7 +1,7 @@
 ![Deed main](assets/images/main.png)
 
 <h1 align="center">Deed ✨</h1>
-<p align="center"> A lightweight, native macOS API client in retro Mac OS 9 style that speaks REST/HTTP, SSE, gRPC, WebSocket, GraphQL, and Kafka from a single <=50 MB binary. </p>
+<p align="center"> A lightweight, native macOS API client in retro Mac OS 9 style that speaks REST/HTTP, SSE, gRPC, WebSocket, GraphQL, SOAP, Kafka, and LDAP from a single <=50 MB binary. </p>
 
 ![Author](https://img.shields.io/static/v1?label=author&message=Thep200&color=0284c7)
 ![License](https://img.shields.io/static/v1?label=init-date&message=01-05-2026&color=7e22ce)
@@ -15,6 +15,9 @@
 - [Configuration](#configuration)
   - [Global config](#global-config)
   - [Environments](#environments)
+  - [Secrets at rest](#secrets-at-rest)
+- [Collections](#collections)
+  - [Ordering and drag-and-drop](#ordering-and-drag-and-drop)
 - [Request type](#request-type)
   - [How a send works](#how-a-send-works)
   - [Config](#config)
@@ -35,6 +38,7 @@
     - [Producer](#producer)
     - [Consumer](#consumer)
     - [Avro (Schema Registry)](#avro-schema-registry)
+  - [LDAP](#ldap)
 - [Releases](#releases)
 
 # Overview
@@ -48,6 +52,7 @@ Supports:
 - GraphQL (query, mutation, subscription, schema introspection)
 - SOAP (1.1 & 1.2)
 - Kafka (producer & consumer, Avro via Schema Registry)
+- LDAP (search, group check, credential check; StartTLS & paged results)
 
 # Installation
 
@@ -67,12 +72,13 @@ Currently, I'm still shipping deed files as `.app`. Please download the latest v
 - GraphQL (incl. schema introspection — Schema tab)
 - SOAP 1.1 / 1.2 (XML pretty-print, fault-aware)
 - Kafka (incl. Avro values via Confluent Schema Registry)
+- LDAP / LDAPS (StartTLS, paged results, group + credential checks)
 - Auth: Basic, Bearer, OAuth2 (client credentials / password, token fetched & cached automatically)
-- Lazy load collection tree
+- Lazy load collection tree, drag-and-drop ordering
 - Request editor (JSON / XML syntax highlight)
 - Response viewer (JSON / XML syntax highlight + pretty-print)
-- Environment & Alias
-- Import curl, gRPC
+- Environment & Alias, with a shared `Global` env and AES-256-GCM encryption for the values you mark
+- Import curl, grpcurl, GraphQL, ldapsearch
 
 # Techstack
 
@@ -83,6 +89,8 @@ Currently, I'm still shipping deed files as `.app`. Please download the latest v
 - gRPC C++ + Protobuf
 - librdkafka
 - Apache Avro (avro-cpp)
+- OpenLDAP (libldap)
+- OpenSSL
 - nlohmann/json
 - CMake + Ninja
 
@@ -90,12 +98,15 @@ Currently, I'm still shipping deed files as `.app`. Please download the latest v
 
 ## Global config
 
+The gear button opens **Settings**, a plain JSON editor:
+
 ```json
 {
   "font_name": "Monaco 9",
   "font_size": 21,
   "ram_cache_size": 32,
-  "disk_cache_size": 256
+  "disk_cache_size": 256,
+  "encryption_key": ""
 }
 ```
 
@@ -104,13 +115,15 @@ Deed caches responses in two tiers, RAM and disk:
 * The RAM cache can be set up to **128 MB**.
 * The disk cache can be set up to **512 MB**.
 
-`ram_cache_size` and `disk_cache_size` are the levels you choose; anything higher than the limits above is capped automatically.
+`ram_cache_size` and `disk_cache_size` are the levels you choose; anything higher than the limits above is capped automatically. `encryption_key` is covered in [Secrets at rest](#secrets-at-rest).
 
 ## Environments
 
-There are no global environments yet — it may be added later. When you import a cURL or gRPC command, Deed automatically creates the matching aliases for you.
+Environments live in `environments/` inside the collection, one JSON file per environment. **Manage env** (next to Back in Settings) opens the grid where you add aliases and switch the active environment.
 
-Use `{{key}}` anywhere a value is accepted (URL, headers, query, auth, gRPC metadata, …) to insert an environment value. If a key doesn't exist it's left as-is (`{{key}}`) and flagged; if it exists but is empty it becomes an empty string.
+`Global.json` is a reserved base environment: its keys are always in scope, whichever environment is active, and the active one wins on a key they both define. It never shows up in the environment selector — edit it in the grid like any other. When you import a cURL, grpcurl, GraphQL, or ldapsearch command, Deed automatically creates the matching aliases for you.
+
+Use `{{key}}` anywhere a value is accepted (URL, headers, query, auth, gRPC metadata, LDAP params, …) to insert an environment value. If a key doesn't exist it's left as-is (`{{key}}`) and flagged; if it exists but is empty it becomes an empty string.
 
 An environment file is just a list of keys:
 
@@ -121,18 +134,50 @@ An environment file is just a list of keys:
     {
       "key": "baseUrl",
       "value": "https://api.example.com",
-      "enabled": 1
+      "enabled": 1,
+      "secret": 0
     },
     {
       "key": "token",
-      "value": "eyJhbGciOiJI...",
-      "enabled": 1
+      "value": "enc:v1:9Xk2…",
+      "enabled": 1,
+      "secret": 1
     }
   ]
 }
 ```
 
-> **NOTE:** Secrets are **not** encrypted yet, so double-check your environment files before syncing them to GitHub.
+## Secrets at rest
+
+Set `encryption_key` in Settings to any passphrase, then flip the **Enc** toggle on the aliases you want protected. Those values are written to disk as `enc:v1:<base64>` — AES-256-GCM, key derived with SHA-256 — so you can commit the whole collection without leaking tokens. Everything else stays plain text.
+
+- Encryption is **per alias**: nothing happens to the rest of the file, and the toggle is the only thing that triggers it. Changing `encryption_key` later re-encrypts nothing — re-toggle **Enc** on the aliases you want moved to the new key.
+- Values whose plaintext hasn't changed keep their stored ciphertext byte for byte, so saving an environment doesn't churn the file in git.
+- Open the collection with the wrong (or no) passphrase and the value stays visible as `enc:v1:…` instead of being lost or blanked. Sending while a `{{var}}` is still unreadable shows a warning toast — the request goes out with the ciphertext in place, so fix the passphrase before trusting the result.
+
+> The passphrase itself lives in your local app config, never in the collection. Request files (OAuth2 client secrets, Kafka registry credentials, LDAP bind passwords, …) are still stored as plain text — put those in an environment alias and reference `{{var}}`.
+
+# Collections
+
+A collection is just a folder. Every request is one small JSON file, every folder is a real directory, so the whole thing lives in git and diffs cleanly.
+
+Deed reads the tree from filenames alone — it never opens a request file to draw the tree — so a collection with thousands of requests still expands instantly. Filenames follow one grammar:
+
+```
+a3+k3n8qv2rt5wd_http_get_list-users.json     <order>+<id>_<type>[_<method>]_<slug>.json
+a4+auth                                       <order>+<slug>          (folders)
+```
+
+The `<id>` is stable: renaming, moving, or reordering a request never changes it, so the app can always find the request you had open. `.session/` and `.secrets/` are added to the collection's `.gitignore` automatically.
+
+## Ordering and drag-and-drop
+
+Folders and requests share one order sequence per level, held in the `<order>+` prefix — a fractional index, so **moving one entry renames one file** and leaves its siblings untouched.
+
+- Drag a row and drop it between two rows to place it exactly there. A request row splits at its midline — upper half inserts above it, lower half below. A folder row keeps its middle for "move inside this folder"; its top edge inserts above it, and its bottom edge inserts below it while the folder is collapsed (an open folder keeps its whole body as "move inside", since the slot after it sits under everything it contains). Dropping in the empty area below the last row appends at the top level.
+- New requests, new folders, and imports land at the **bottom** of their level. A duplicate lands directly under its original.
+- Renaming or saving a request keeps its slot.
+- A collection created before ordering existed has no keys at all. The first drop into such a folder assigns keys to every entry in it, in the order already on screen, so nothing visibly jumps — after that it's one rename per move like everywhere else.
 
 # Request type
 
@@ -153,7 +198,7 @@ Every request type follows the same path when you press **Send**:
 
 What comes back depends on the request's shape:
 
-- **One-shot requests** (HTTP, GraphQL query/mutation, gRPC unary & client-streaming, Kafka producer) show a single response on the right, plus status, elapsed time, and size in the status bar.
+- **One-shot requests** (HTTP, SOAP, GraphQL query/mutation, gRPC unary & client-streaming, Kafka producer, LDAP) show a single response on the right, plus status, elapsed time, and size in the status bar.
 - **Streaming requests** (SSE, gRPC server-streaming/bidi, WebSocket, GraphQL subscription, Kafka consumer) open a live session: each incoming message is appended to the right pane as it arrives, with running counters for elapsed / events / size. The session stays open until the server ends it or you press **Cancel** (for WebSocket that's a polite disconnect).
 
 Responses are also cached (RAM + disk, see [Global config](#global-config)), so reopening a request shows its last response instantly — even after an app restart.
@@ -170,7 +215,7 @@ The **Config** tab (the last left-hand tab, on every request type) holds two set
 ```
 
 - `timeout_ms` — how long to wait before giving up. For HTTP/GraphQL it's the request timeout, for gRPC the deadline, for WebSocket the idle timeout. For a Kafka producer the effective delivery timeout is the **smaller** of this and the Kafka tab's `messageTimeoutMs`.
-- `tls` — verify the server's TLS certificate (for gRPC, connect over a secure channel). The Kafka Config tab only has `timeout_ms` (no TLS toggle yet).
+- `tls` — verify the server's TLS certificate (for gRPC, connect over a secure channel; for LDAP it also covers the StartTLS upgrade). The Kafka Config tab only has `timeout_ms` (no TLS toggle yet).
 
 New requests start with the defaults from `.env` (`DEFAULT_TIMEOUT_MS`, `VERIFY_TLS`) — 30 minutes and TLS verification on, out of the box.
 
@@ -368,6 +413,8 @@ You can also paste a `grpcurl` command into the URL field and Deed imports it as
 
 Queries and mutations are sent over HTTP and show one response. A **subscription** runs over WebSocket using the `graphql-transport-ws` protocol (the legacy `subscriptions-transport-ws` is also supported) and streams events into the right pane until you press **Cancel** — set `"subTransport": "ws"` in the saved request file to switch the transport over.
 
+Paste a bare GraphQL document (`query { … }` / `mutation { … }` / `subscription { … }`) into the URL field and Deed imports it as a new GraphQL request — fill in the endpoint afterwards.
+
 **Schema (introspection)** — the right pane has a **Schema** tab. First click POSTs the standard introspection query to the endpoint (with the request's headers/auth) and renders the server schema as SDL; the **Pretty/Raw** button toggles between SDL and the raw introspection JSON. The result is cached per request and refetched after you edit the URL, switch requests, or a send fails — just click the tab again. Servers with introspection disabled show the error as a toast.
 
 ![GraphQL](assets/images/graphql.png)
@@ -487,7 +534,62 @@ Deed fetches the **latest** schema registered for the subject `<topic>-value` (T
 
 **Consumer** — add the same `schemaRegistry` block to the consumer's Kafka tab and decoding is automatic: any record whose value carries the Confluent framing is decoded and shown as JSON, annotated with `"valueEncoding": "avro (id N)"`. Records that aren't Avro-framed display verbatim as before. If the registry is unreachable or the schema can't decode the bytes, the record still streams — verbatim, marked `undecoded` — and Deed retries the registry at most once per schema id every 30 seconds.
 
-> Registry credentials are stored in the request file as plain text (like every other secret today) — prefer `{{vars}}` from an environment you don't commit.
+> Registry credentials are stored in the request file as plain text — prefer `{{vars}}` from an environment, and mark them **Enc** (see [Secrets at rest](#secrets-at-rest)).
+
+## LDAP
+
+**URL field** — `ldap://host:389` or `ldaps://host:636`. No method dropdown; there are no headers and no Auth tab, because LDAP credentials are the bind DN and password, which live in **Params**.
+
+**Tabs** — just **Params** and **Config**. Everything the request does is one JSON object:
+
+```json
+{
+  "startTls": false,
+  "bindDn": "cn=admin,dc=example,dc=com",
+  "bindPassword": "{{ldapPassword}}",
+  "baseDn": "dc=example,dc=com",
+  "scope": "sub",
+  "filter": "(uid=bob)",
+  "attributes": [],
+  "group": "",
+  "testPassword": "",
+  "sizeLimit": 100,
+  "timeLimit": 10,
+  "pageSize": 500
+}
+```
+
+- `bindDn` empty = anonymous bind. `attributes` empty = ask for everything.
+- `scope` — `base`, `one`, or `sub`. `filter` accepts a bare `uid=bob`; Deed wraps it in parentheses. Empty = `(objectClass=*)`.
+- `startTls` upgrades a plain `ldap://` connection to TLS (ignored for `ldaps://`, which is already encrypted). Certificate verification follows the `tls` flag in **Config**.
+- `sizeLimit` / `timeLimit` — server-side caps, `0` = no client limit. `pageSize` sends an RFC 2696 paged-results control, marked non-critical so servers that don't page still answer in one go; `0` turns it off.
+
+Two optional helpers turn a search into a check:
+
+- `group` — a group DN. It's ANDed into the filter as `memberOf`, and if nothing matches Deed re-runs the plain filter to tell "no such user" apart from "user exists, not in the group".
+- `testPassword` — after the search finds **exactly one** entry, Deed binds again as that entry's DN with this password on a fresh connection. That's the search-then-bind an app does when a user logs in.
+
+**Response** — one JSON verdict:
+
+```json
+{
+  "verdict": "MATCH",
+  "matched": 1,
+  "resultCode": 0,
+  "diagnostic": "",
+  "pages": 1,
+  "entries": [
+    { "dn": "uid=bob,dc=example,dc=com",
+      "attributes": { "cn": ["Bob"], "mail": ["bob@example.com"] } }
+  ]
+}
+```
+
+`verdict` is one of `MATCH`, `NO_MATCH`, `NOT_IN_GROUP`, `CREDENTIALS_OK`, `INVALID_CREDENTIALS`, or `AMBIGUOUS` (more than one entry matched, so Deed refuses to guess whose password to test). Binary attributes such as `jpegPhoto` come back base64 with a `;base64` suffix on the key. The status bar shows the LDAP result code, not an HTTP one — `rc=0 · MATCH (1)` — and only `MATCH` / `CREDENTIALS_OK` count as green, since `rc=49` (invalid credentials) is a perfectly valid answer that still means "no".
+
+Paste an `ldapsearch` command or an RFC 4516 URL (`ldap://host/base?attrs?scope?filter`) into the URL field and Deed imports it as a new request; `-Z`/`-ZZ` map to `startTls` and `-E pr=<n>` to `pageSize`. Flags Deed doesn't know are reported as skipped instead of failing the import.
+
+> The group check relies on the `memberOf` attribute. Active Directory has it out of the box; OpenLDAP needs the `memberof` overlay enabled, and without it a real member is reported as `NOT_IN_GROUP`.
 
 # Releases
 

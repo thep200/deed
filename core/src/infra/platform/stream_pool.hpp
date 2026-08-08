@@ -1,17 +1,6 @@
-// stream_pool.hpp — one dedicated OS thread per long-lived streaming session (WS / gRPC server-stream+bidi /
-// Kafka consumer), so a slow or indefinite stream never occupies a worker of the bounded unary ThreadPool
-// behind it. This is exactly what ThreadPool's own doc comment always assumed ("Streams/sessions no longer
-// run here (they get dedicated threads)") — RequestOrchestrator just wasn't actually routing them there.
-//
-// Unlike ThreadPool there's no fixed worker count: submit() spawns a fresh detached thread per task.
-// maxConcurrent is a safety net (H1a-style) against a runaway caller opening unbounded sessions — past the
-// cap, submit() returns false and the caller falls back (same contract as ThreadPool::submit).
-//
-// Shutdown semantics deliberately mirror ThreadPool: the destructor blocks until every in-flight thread has
-// finished, so a caller (CoreApiClient) can't destroy the senders/saga deps a live thread still references.
-// This means destruction can block if a stream is still open when the pool is torn down — the exact same
-// pre-existing behavior ThreadPool already has today (its destructor joins each worker's current task before
-// returning); splitting the pool does not make this better or worse, only isolates it from unary requests.
+// One fresh detached OS thread per long-lived stream, so an indefinite stream never occupies the bounded
+// unary ThreadPool; maxConcurrent is only a runaway-caller safety net. The destructor blocks until every
+// in-flight thread finishes, so deps a live stream references can't be destroyed under it.
 #pragma once
 
 #include <condition_variable>

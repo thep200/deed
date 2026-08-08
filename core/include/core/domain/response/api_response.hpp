@@ -1,4 +1,3 @@
-// core/domain/response/api_response.hpp — unary (or final aggregated) result (REFACTOR_SPEC §5.9).
 #pragma once
 
 #include <chrono>

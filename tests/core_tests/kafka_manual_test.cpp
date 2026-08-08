@@ -1,6 +1,5 @@
-// kafka_manual_test.cpp — MANUAL integration check of the consumer cancel/timeout contract (SPEC_kafka
-// §5/§7/§11's integration layer — needs a real broker, so NOT registered as a ctest). Drives KafkaSender
-// directly against localhost:9092 (devdok up -d kafka).
+// MANUAL integration check of the consumer cancel/timeout contract — needs a real broker, so NOT
+// registered as a ctest. Drives KafkaSender directly against localhost:9092 (devdok up -d kafka).
 // Usage: kafka_manual off   (run with the broker STOPPED)
 //        kafka_manual on    (run with the broker UP; needs topic demo-topic)
 // Contract (phase-based outcome):
@@ -9,7 +8,7 @@
 //   on  3: connected, session timeout     -> EvClosed{"timeout"}    (SUCCESS)
 //   on  4: cancel while consuming         -> EvClosed{"cancelled"}  (SUCCESS)
 //
-// AVRO (SPEC_kafka Avro v1) — manual flow, needs Schema Registry beside the broker:
+// AVRO — manual flow, needs Schema Registry beside the broker:
 //   docker compose: confluentinc/cp-kafka + confluentinc/cp-schema-registry (SR on :8081)
 //   1. register a schema:
 //      curl -X POST -H 'Content-Type: application/vnd.schemaregistry.v1+json' \
@@ -52,8 +51,7 @@ struct RecordingSink final : IResponseSink {
 
 RequestModel makeConsumer(long long timeoutMs, const std::string &broker = "localhost:9092") {
   auto brokers = BrokerList::parse(broker).take();
-  // assign(partition 0) + Earliest: records flow immediately, no group-join delay — the point here is
-  // the cancel/timeout contract, not group semantics.
+  // assign(partition 0) + Earliest: records flow immediately (no group-join delay) — the point is the cancel/timeout contract.
   KafkaConsumeConfig cfg{{KafkaTopic::create("demo-topic").take()}, KafkaPartition{0},
                         ConsumerGroup::create("deed-manual-test").take()};
   cfg.offsetReset = OffsetReset::Earliest;
@@ -63,8 +61,7 @@ RequestModel makeConsumer(long long timeoutMs, const std::string &broker = "loca
   return RequestModel::create(RequestId("req_manual"), "M", 0, rc, req).take();
 }
 
-// Run one scenario: execute the consumer with `timeoutMs`; optionally cancel after `cancelAfterMs`.
-// Prints the terminal event and elapsed wall time.
+// Run one scenario: execute the consumer with timeoutMs, optionally cancel after cancelAfterMs; print terminal + elapsed.
 void run(const char *name, long long timeoutMs, long long cancelAfterMs, const char *expect,
          const std::string &broker = "localhost:9092") {
   core::infra::KafkaSender sender;
@@ -95,8 +92,7 @@ void run(const char *name, long long timeoutMs, long long cancelAfterMs, const c
 int main(int argc, char **argv) {
   const std::string phase = argc > 1 ? argv[1] : "";
   if (phase == "off") {
-    // Broker DOWN. 1a: port closed -> refused -> immediate Network failure. 1b: blackhole (unroutable
-    // IP, SYN never answered) -> connect hangs -> Network failure only after the full timeout.
+    // Broker DOWN: 1a port closed -> immediate refusal; 1b blackhole (SYN never answered) -> fails only after the timeout.
     run("1a: broker refused", 2000, -1, "failed:network");
     run("1b: blackhole timeout", 2000, -1, "failed:network", "10.255.255.1:9092");
     // 2: cancel wins mid-connect (blackhole keeps the connect phase alive long enough to press Cancel).

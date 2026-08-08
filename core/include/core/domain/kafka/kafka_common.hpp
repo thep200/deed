@@ -1,5 +1,3 @@
-// core/domain/kafka/kafka_common.hpp — shared value objects for both Kafka client kinds (SPEC_kafka §3).
-// Broker list (thanh URL), topic, partition, header/extra passthrough rows, security (Plaintext-only today).
 #pragma once
 
 #include <cstdint>
@@ -27,7 +25,6 @@ public:
     std::stringstream ss(csv);
     std::string item;
     while (std::getline(ss, item, ',')) {
-      // trim
       auto b = item.find_first_not_of(" \t");
       auto e = item.find_last_not_of(" \t");
       if (b == std::string::npos) continue;
@@ -102,8 +99,7 @@ struct KafkaPartition {
   bool operator==(const KafkaPartition &o) const { return value == o.value; }
 };
 
-// Passthrough rows — no validation (librdkafka accepts arbitrary bytes for message headers; extra[] is a
-// raw property-name/value escape hatch), unlike the HTTP `Header` VO which enforces RFC 7230 tokens.
+// Passthrough, no validation: librdkafka accepts arbitrary bytes (unlike the HTTP Header VO's RFC 7230 tokens).
 struct KafkaHeader {
   std::string key;
   std::string value;
@@ -121,8 +117,6 @@ struct KafkaExtra {
   }
 };
 
-// Confluent Schema Registry pointer (SPEC_kafka Avro v1) — plain aggregate like KafkaExtra, no
-// validation: an empty url just means "not configured" (feature off). Credentials optional (Basic).
 struct SchemaRegistryRef {
   std::string url;      // e.g. "http://localhost:8081"; empty = Avro handling off
   std::string username; // optional basic auth
@@ -133,7 +127,7 @@ struct SchemaRegistryRef {
   }
 };
 
-// Security — sum type; only Plaintext today (SSL/SASL are a seam, spec §8).
+// Only Plaintext today; SSL/SASL are a future seam.
 struct KafkaPlaintext {
   bool operator==(const KafkaPlaintext &) const { return true; }
 };

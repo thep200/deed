@@ -2,7 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "infra/serialization/json_codec.hpp" // core::codec::parseGuarded (H5 depth guard) + safe getters
+#include "infra/serialization/json_codec.hpp"
 
 namespace core::cachecodec {
 
@@ -82,7 +82,7 @@ std::string toJson(const ResponseRecord& rec) {
 }
 
 ResponseRecord fromJson(const std::string& text) {
-    json j = core::codec::parseGuarded(text); // H5: depth-guarded — cache files are on-disk/tamperable
+    json j = core::codec::parseGuarded(text); // depth-guarded — cache files are on-disk/tamperable
     ResponseRecord rec;
     if (!j.is_object()) return rec;
     rec.isError = getBool(j, "isError", false);

@@ -1,6 +1,3 @@
-// core/app/cancellation_token.hpp — concrete cooperative cancel token (REFACTOR_SPEC §7.4). Pure STL.
-// Flag + abort hooks: cancel() trips the flag AND fires every hook a sender registered for its live
-// connection, so Cancel kills a hung transfer instead of waiting for a poll that never comes.
 #pragma once
 
 #include <atomic>

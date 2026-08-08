@@ -1,6 +1,4 @@
-// schema_registry_client.hpp — Confluent Schema Registry REST client (SPEC_kafka Avro v1).
-// INTERNAL (core/src). Thread-safe: one instance lives in KafkaSender and is shared by concurrent
-// StreamPool tails. nlohmann stays in the .cpp.
+// Thread-safe: one instance in KafkaSender is shared by concurrent StreamPool tails; nlohmann stays in the .cpp.
 #pragma once
 
 #include <chrono>
@@ -16,7 +14,7 @@
 
 namespace core::infra {
 
-// Pure response parsers, exposed for unit tests (bodies per the v1 REST API):
+// Pure response parsers, exposed for unit tests.
 struct RegisteredSchema {
   std::int32_t id = 0;
   std::string schemaJson;
@@ -28,14 +26,12 @@ core::domain::Result<std::string> parseSchemaByIdResponse(const std::string &bod
 
 class SchemaRegistryClient {
 public:
-  // GET {url}/subjects/{subject}/versions/latest. NO cache — a produce is one user click and
-  // freshness wins (the subject's latest schema may have just changed).
+  // GET {url}/subjects/{subject}/versions/latest. NO cache — freshness wins (the latest schema may have just changed).
   core::domain::Result<RegisteredSchema>
   latestForSubject(const core::domain::SchemaRegistryRef &ref, const std::string &subject,
                    const core::domain::ICancellationToken &cancel);
 
-  // GET {url}/schemas/ids/{id}. Positive cache forever (ids are immutable); negative cache 30s so a
-  // down registry costs at most one fetch per id per 30s while records keep flowing.
+  // GET {url}/schemas/ids/{id}. Positive cache forever (ids are immutable); negative cache 30s bounds a down registry.
   core::domain::Result<std::string> schemaById(const core::domain::SchemaRegistryRef &ref,
                                                std::int32_t id,
                                                const core::domain::ICancellationToken &cancel);

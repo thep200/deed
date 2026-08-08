@@ -1,6 +1,3 @@
-// core/domain/common/enabled_flag.hpp — EnabledFlag (REFACTOR_SPEC §5.1): a tiny VO over a bool that
-// also knows the JSON 0/1 convention used by collection files (mapping itself lives in infra, but the
-// 0/1 <-> bool helpers are pure and handy to share).
 #pragma once
 
 namespace core::domain {

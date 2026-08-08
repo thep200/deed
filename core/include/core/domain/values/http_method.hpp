@@ -1,4 +1,3 @@
-// core/domain/values/http_method.hpp — HttpMethod enum + parse/format (REFACTOR_SPEC §5.1).
 #pragma once
 
 #include <algorithm>
@@ -24,7 +23,7 @@ inline std::string toString(HttpMethod m) {
   return "GET";
 }
 
-// Case-insensitive parse. Unknown verb -> Validation error (field "method").
+// Case-insensitive.
 inline Result<HttpMethod> parseHttpMethod(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(),
                  [](unsigned char c) { return (char)std::toupper(c); });

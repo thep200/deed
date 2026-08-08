@@ -6,19 +6,19 @@
 #include <variant>
 #include <vector>
 
-#include "infra/transport/graphql/gql_ws_protocol.hpp" // GraphQlWsProtocol (graphql-transport-ws / graphql-ws)
+#include "infra/transport/graphql/gql_ws_protocol.hpp"
 #include "infra/transport/shared/cancel_token.hpp"
 #include "infra/transport/shared/i_stream_channel.hpp"
 #include "infra/transport/shared/i_stream_sink.hpp"
-#include "infra/transport/graphql/graphql.hpp"               // gql::effectiveOperation / gql::buildHttpModel (domain)
-#include "infra/transport/ws/ws_sender.hpp"             // wsMakeSession/wsMakeChannel/wsRunProtocol (shared WS pump)
+#include "infra/transport/graphql/graphql.hpp"
+#include "infra/transport/ws/ws_sender.hpp"
 
 namespace core::infra {
 namespace d = core::domain;
 
 namespace {
 
-// Legacy IStreamSink -> domain ResponseEvent (the translation the retired LegacySenderAdapter used).
+// IStreamSink -> domain ResponseEvent translation.
 struct GqlStreamSink final : core::IStreamSink {
   d::IResponseSink *sink;
   void onStreamOpen(const core::StreamMeta &m) override {
@@ -52,25 +52,22 @@ struct GqlStreamSink final : core::IStreamSink {
 
 } // namespace
 
-d::Status NativeGraphQlSender::execute(const d::RequestModel &resolved, d::IResponseSink &sink,
-                                       const d::ICancellationToken &cancel) {
-  const d::GraphQlRequest &dg = std::get<d::GraphQlRequest>(resolved.payload());
+d::Status NativeGraphQlSender::executeTyped(const d::RequestModel &resolved,
+                                            const d::GraphQlRequest &dg, d::IResponseSink &sink,
+                                            const d::ICancellationToken &cancel) {
   // Subscription over WebSocket -> native graphql-transport-ws path; everything else is HTTP.
   const bool isSubscription = gql::effectiveOperation(dg) == d::GqlOperationType::Subscription &&
                               dg.subTransport() == d::GqlSubTransport::Ws;
-  if (isSubscription) return runSubscription(resolved, sink, cancel);
+  if (isSubscription) return runSubscription(resolved, dg, sink, cancel);
 
-  // query/mutation: repackage as an HTTP request (proven helper) and run it natively (cpr on domain types).
   return http_.execute(gql::buildHttpModel(resolved), sink, cancel);
 }
 
-// Subscription over WebSocket: open a WS with the graphql-ws subprotocol, drive GraphQlWsProtocol on the raw
-// frames (it owns the §3 open/close contract on its sink), and translate to domain events. Ported from the
-// retired core::GraphQlSender::openStream — same ws_sender pump + protocol, now Engine/adapter-free.
-d::Status NativeGraphQlSender::runSubscription(const d::RequestModel &resolved, d::IResponseSink &sink,
+// Opens a WS with the graphql-ws subprotocol and drives GraphQlWsProtocol on the raw frames (the
+// protocol owns the open/close contract on its sink).
+d::Status NativeGraphQlSender::runSubscription(const d::RequestModel &resolved,
+                                               const d::GraphQlRequest &dg, d::IResponseSink &sink,
                                                const d::ICancellationToken &cancel) {
-  const d::GraphQlRequest &dg = std::get<d::GraphQlRequest>(resolved.payload());
-
   core::WsConfig cfg;
   cfg.verifyTls = resolved.config().tlsEnabledDefault; // wss:// cert verification from the per-request Config
   auto session = core::wsMakeSession(cfg);
@@ -100,8 +97,7 @@ d::Status NativeGraphQlSender::runSubscription(const d::RequestModel &resolved, 
     proto.onClose(st, code, m); // idempotent -> at most one close on the sink
   };
 
-  // Synthesized domain WebSocket request (url + headers + auth + the graphql-ws subprotocol) for the shared
-  // WS pump — built from the DOMAIN graphql payload (url/headers/auth carried as domain VOs already).
+  // Synthesize a domain WebSocket request (url + headers + auth + the graphql-ws subprotocol) for the shared WS pump.
   auto wurl = d::Url::createWithSchemes(dg.url().raw(), {"ws", "wss"});
   if (!wurl) {
     sink.emit(d::ResponseEvent(d::EvFailed{{d::ErrorKind::Parse, wurl.error().message, {}}}));
@@ -110,8 +106,7 @@ d::Status NativeGraphQlSender::runSubscription(const d::RequestModel &resolved, 
     wsToken_.reset();
     return d::ok();
   }
-  // Parts holds a Url (no default ctor) -> brace-init in member order: url, subprotocols, headers, auth,
-  // onOpenSend, defaultSendKind.
+  // Parts holds a Url (no default ctor) -> brace-init in member order.
   d::WebSocketRequest::Parts wp{
       wurl.take(),
       {proto.legacy() ? std::string("graphql-ws") : std::string("graphql-transport-ws")},

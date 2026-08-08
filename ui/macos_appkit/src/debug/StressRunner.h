@@ -1,7 +1,5 @@
-// StressRunner — in-app stress driver (STRESS_TEST.md §5). DEBUG only, NOT shipped in release.
-// Gate: build flag DEED_DEBUG_TOOLS + env DEED_STRESS=1. Runs on the MAIN THREAD via a timer,
-// looping N iterations (seed + small delay); each iteration randomly picks a controller op that
-// exercises the first-responder/Scintilla/window lifecycle path that caused crashes; logs RAM per iteration + idle checkpoint.
+// Debug-only stress driver (DEED_DEBUG_TOOLS + env DEED_STRESS=1): runs on the MAIN thread via a timer,
+// randomly exercising the first-responder/Scintilla/window lifecycle paths that caused crashes.
 #import <Cocoa/Cocoa.h>
 
 #if DEED_DEBUG_TOOLS

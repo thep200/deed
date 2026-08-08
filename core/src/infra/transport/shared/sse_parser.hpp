@@ -1,6 +1,5 @@
-// infra/transport/shared/sse_parser.hpp — pure text/event-stream parser (SPEC_sse §3, WHATWG EventSource).
-// A buffered state machine: feed it arbitrary byte chunks, it emits completed events. It depends on
-// NOTHING transport-related (no libcurl) — that keeps INV-1 and lets it be unit-tested directly (AC-7).
+// Pure text/event-stream parser (WHATWG EventSource): feed arbitrary byte chunks, it emits completed
+// events. No transport deps (no libcurl), so it unit-tests directly.
 #pragma once
 
 #include <functional>
@@ -21,13 +20,11 @@ class SseParser {
 public:
     using Emit = std::function<void(const SseEvent&)>;
 
-    // Feed a chunk; calls `emit` once per completed event. A chunk may cut across lines/events — the
-    // remainder is buffered for the next feed. Also processes `: comments`, id:, retry:.
+    // A chunk may cut across lines/events — the remainder is buffered. Also processes `: comments`, id:, retry:.
     void feed(const char* data, std::size_t n, const Emit& emit);
     void feed(const std::string& s, const Emit& emit) { feed(s.data(), s.size(), emit); }
 
-    // Flush on clean EOF (M12): the transport calls this when the server closes so a final line/event left
-    // in the buffer (no trailing newline, or ending on a lone '\r') is still processed and dispatched.
+    // Flush on clean EOF: a final line/event left in the buffer (no trailing newline / lone '\r') still dispatches.
     void finish(const Emit& emit);
 
     const std::string& lastEventId() const { return lastEventId_; }   // for Last-Event-ID on reconnect

@@ -4,10 +4,7 @@
 
 namespace core::app { class IEnvironmentRepository; class ISessionRepository; }
 
-// ENV matrix (row=alias, col=env; col 0 = base shown as "Local"). SPEC §T1–T5.
-// Self-drawn via OS9EnvGrid (no NSTableView). Inline actions in the table (no
-// bottom button strip). Embedded in the Config screen: vends an NSView.
-// REFACTOR_SPEC P6: driven by repository ports (env + session) — no longer holds an Engine.
+// ENV matrix (row=alias, col=env; col 0 = base shown as "Local"); embedded in the Config screen — vends an NSView.
 @interface EnvWindowController : NSObject <OS9EnvGridDelegate>
 - (instancetype)initWithEnvRepo:(core::app::IEnvironmentRepository *)envRepo
                         session:(core::app::ISessionRepository *)sessionRepo;

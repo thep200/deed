@@ -4,7 +4,7 @@
 
 #include "core/infra/import/importer.hpp"
 #include "infra/import/shell_tokenize.hpp"
-#include "infra/transport/shared/dto_common.hpp" // surviving KeyValue DTO (parse scratch only)
+#include "infra/transport/shared/dto_common.hpp"
 
 namespace core {
 
@@ -12,7 +12,7 @@ namespace d = core::domain;
 
 namespace {
 
-// ---- mutable parse scratch (decoupled from any persisted type) ------------------------------------------
+// Mutable parse scratch only — not the persisted model.
 struct SProtoSource {
     std::string mode = "reflection"; // reflection|protoFiles|descriptorSet
     std::vector<std::string> importPaths, files;
@@ -38,15 +38,11 @@ struct Acc {
 } // namespace
 
 bool GrpcImporter::canHandle(const std::string& input) const {
-    std::string t = lower(trim(input.substr(0, 16)));   // prefix only; avoid copying a huge paste (L8)
-    if (t.rfind("grpcurl", 0) == 0) return true;                         // grpcurl command
-    if (t.rfind("grpc://", 0) == 0 || t.rfind("grpcs://", 0) == 0) return true;  // explicit scheme
+    std::string t = lower(trim(input.substr(0, 16)));   // prefix only; avoid copying a huge paste
+    if (t.rfind("grpcurl", 0) == 0) return true;
+    if (t.rfind("grpc://", 0) == 0 || t.rfind("grpcs://", 0) == 0) return true;
 
-    // Shorthand host:port/pkg.Service/Method — STRICT so it isn't mistaken for an HTTP URL:
-    //   - no whitespace,
-    //   - host must have ':' (host:port),
-    //   - path = "Service/Method" exactly 2 segments, Service has a '.' (namespace),
-    //     Method starts with an UPPERCASE letter (PascalCase).
+    // Shorthand host:port/pkg.Service/Method — strict so it isn't mistaken for a plain HTTP URL.
     std::string s = trim(input);
     if (s.empty() || s.find(' ') != std::string::npos) return false;
     size_t slash = s.find('/');
@@ -65,7 +61,6 @@ bool GrpcImporter::canHandle(const std::string& input) const {
 
 namespace {
 
-// Push a "key: value" header token onto g.metadata (value may be empty / colon-less).
 void addGrpcMetadata(SGrpc& g, const std::string& hv) {
     size_t colon = hv.find(':');
     KeyValue kv;
@@ -85,9 +80,7 @@ void applyGrpcurlValueFlag(const std::string& flag, const std::string& v, SGrpc&
     else if (flag == "-proto") { g.protoSource.files.push_back(v); g.protoSource.mode = "protoFiles"; }
 }
 
-// (a) grpcurl [-plaintext] -d '{...}' -H 'k: v' host:port pkg.Service/Method
-// Parses flags into g; unknown flags go to acc.unknown. The RPC (Service/Method) is INTENTIONALLY
-// skipped on import — we only take target/message/metadata/tls; the user picks the RPC from the dropdown.
+// Service/Method is intentionally skipped on import — the user picks the RPC from the dropdown.
 void parseGrpcurl(const std::vector<std::string>& tokens, SGrpc& g, Acc& acc) {
     bool plaintext = false;
     bool tlsSeen = false;
@@ -105,7 +98,7 @@ void parseGrpcurl(const std::vector<std::string>& tokens, SGrpc& g, Acc& acc) {
     if (g.message.empty()) g.message = "{}";
 }
 
-// (b) [grpc://|grpcs://]host:port/pkg.Service/Method. Sets g.target/tls, or acc.error on a bad format.
+// [grpc://|grpcs://]host:port/pkg.Service/Method
 void parseGrpcShorthand(const std::string& trimmed, SGrpc& g, Acc& acc) {
     std::string s = trimmed;
     bool secure = true;
@@ -113,7 +106,7 @@ void parseGrpcShorthand(const std::string& trimmed, SGrpc& g, Acc& acc) {
     else if (lower(s).rfind("grpc://", 0) == 0) { secure = false; s = s.substr(7); }
     g.tls.enabled = secure;
 
-    size_t slash = s.find('/'); // host:port is the part before the first '/'
+    size_t slash = s.find('/');
     if (slash == std::string::npos) {
         acc.error = "missing Service/Method (format host:port/pkg.Service/Method)";
         return;
@@ -122,7 +115,6 @@ void parseGrpcShorthand(const std::string& trimmed, SGrpc& g, Acc& acc) {
     g.message = "{}";
 }
 
-// scratch -> immutable domain RequestModel (no legacy RequestModel, no request_bridge).
 d::RequestModel buildGrpcDomain(const SGrpc& g) {
     std::vector<d::MetadataEntry> md;
     for (const auto& kv : g.metadata) md.push_back({kv.key, kv.value, kv.enabled});
@@ -154,7 +146,7 @@ d::RequestModel buildGrpcDomain(const SGrpc& g) {
 } // namespace
 
 ImportParseResult GrpcImporter::parse(const std::string& input) const {
-    Acc acc; // local accumulator for unknown/error
+    Acc acc;
     SGrpc g;
 
     std::string trimmed = trim(input);

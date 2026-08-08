@@ -24,34 +24,37 @@ d::ErrorKind toErrorKind(d::ErrorCode c) {
   }
 }
 
-// The JSON payload (if any) that must be valid before sending: HTTP Raw{Json} body or a gRPC message.
-std::optional<d::JsonText> jsonToValidate(const d::RequestModel &m) {
+// One overload per JSON-carrying type; the template fallback is the deliberate "nothing to validate" default.
+std::optional<d::JsonText> validatableJson(const d::HttpRequest &p) {
   std::optional<d::JsonText> out;
-  m.match([&](auto &&p) {
-    using T = std::decay_t<decltype(p)>;
-    if constexpr (std::is_same_v<T, d::HttpRequest>) {
-      p.body().match([&](auto &&b) {
-        using B = std::decay_t<decltype(b)>;
-        if constexpr (std::is_same_v<B, d::BodyRaw>)
-          if (b.subtype == d::RawSubtype::Json) out = d::JsonText::of(b.text);
-      });
-    } else if constexpr (std::is_same_v<T, d::GrpcRequest>) {
-      if (!p.message().empty()) out = p.message();
-    } else if constexpr (std::is_same_v<T, d::KafkaRequest>) {
-      // Producer value is always JSON now (no raw/binary mode); an empty (draft) value skips validation.
-      p.match([&](auto &&spec) {
-        using S = std::decay_t<decltype(spec)>;
-        if constexpr (std::is_same_v<S, d::KafkaProduceSpec>) {
-          if (!spec.message.value.value.empty())
-            out = d::JsonText::of(spec.message.value.value);
-        }
-      });
+  p.body().match([&](auto &&b) {
+    using B = std::decay_t<decltype(b)>;
+    if constexpr (std::is_same_v<B, d::BodyRaw>)
+      if (b.subtype == d::RawSubtype::Json) out = d::JsonText::of(b.text);
+  });
+  return out;
+}
+std::optional<d::JsonText> validatableJson(const d::GrpcRequest &p) {
+  if (!p.message().empty()) return p.message();
+  return std::nullopt;
+}
+std::optional<d::JsonText> validatableJson(const d::KafkaRequest &p) {
+  // Producer value is always JSON; an empty (draft) value skips validation.
+  std::optional<d::JsonText> out;
+  p.match([&](auto &&spec) {
+    using S = std::decay_t<decltype(spec)>;
+    if constexpr (std::is_same_v<S, d::KafkaProduceSpec>) {
+      if (!spec.message.value.value.empty()) out = d::JsonText::of(spec.message.value.value);
     }
   });
   return out;
 }
+template <class T> std::optional<d::JsonText> validatableJson(const T &) { return std::nullopt; }
 
-// Adapts a std::function into the IResponseSink port so a sender can push events back to the saga.
+std::optional<d::JsonText> jsonToValidate(const d::RequestModel &m) {
+  return m.match([](const auto &p) { return validatableJson(p); });
+}
+
 struct FnSink final : d::IResponseSink {
   std::function<void(const d::ResponseEvent &)> fn;
   void emit(const d::ResponseEvent &ev) override { fn(ev); }
@@ -83,7 +86,6 @@ void SendRequestSaga::run(d::IRequestObserver &observer) {
     return;
   }
 
-  // 1. validate JSON payload (port; skipped if no validator / no JSON body).
   state_ = SagaState::Validating;
   if (deps_.jsonValidator) {
     if (auto jt = jsonToValidate(request_)) {
@@ -95,8 +97,8 @@ void SendRequestSaga::run(d::IRequestObserver &observer) {
     }
   }
 
-  // 2. materialize OAuth2 -> Bearer (port; senders only ever see none/basic/bearer). The token POST
-  // blocks THIS worker thread bounded by the request's own config timeout; Cancel aborts it via token_.
+  // Senders only ever see none/basic/bearer; the token POST blocks this worker bounded by the
+  // request's own timeout, and Cancel aborts it via token_.
   state_ = SagaState::Preparing;
   if (const auto *oauth = d::oauth2Of(request_)) {
     if (!deps_.tokenProvider) {
@@ -114,7 +116,6 @@ void SendRequestSaga::run(d::IRequestObserver &observer) {
     request_ = d::withAuth(request_, bearer.take());
   }
 
-  // 3. pick a sender for this request type.
   domain::IRequestSender *picked = nullptr;
   for (auto *s : deps_.senders)
     if (s && s->supports(request_.type())) { picked = s; break; }
@@ -124,7 +125,6 @@ void SendRequestSaga::run(d::IRequestObserver &observer) {
     return;
   }
 
-  // 4. start.
   state_ = SagaState::Active;
   long long atMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                        (deps_.clock ? deps_.clock->now() : std::chrono::steady_clock::now())
@@ -136,15 +136,13 @@ void SendRequestSaga::run(d::IRequestObserver &observer) {
     return;
   }
 
-  // 5. execute (sender emits EvMetadata/EvMessage/EvCompleted/EvFailed via the sink). For a duplex/stream
-  // session (WebSocket) execute BLOCKS until the session closes, keeping this saga alive so push/cancel
+  // For duplex/stream sessions execute() blocks until close, keeping the saga alive so push/cancel
   // from other threads reach the bound sender.
   FnSink sink;
   sink.fn = emit;
   d::Status s = picked->execute(request_, sink, token_);
   sender_.store(nullptr, std::memory_order_release); // session ended -> no more push/close routing
-  // If the sender reported failure WITHOUT emitting a terminal event, synthesize one so the observer
-  // always sees a terminal (state machine guarantee).
+  // Sender failed without emitting a terminal event -> synthesize one so the observer always sees a terminal.
   if (!s && !terminal())
     emit(d::ResponseEvent(d::EvFailed{{toErrorKind(s.error().code), s.error().message, {}}}));
 }

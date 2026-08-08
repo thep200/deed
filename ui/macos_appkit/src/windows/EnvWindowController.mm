@@ -251,7 +251,7 @@ static NSString *GlobalEnvName(void) { return @(core::kGlobalEnvName); }
                            icon:OS9AlertStop parent:_grid.window];
 }
 
-// SPEC §T3: renaming an alias does NOT auto-fix {{old}} in saved requests -> warn.
+// Renaming an alias does NOT auto-fix {{old}} in saved requests -> warn.
 - (void)warnVarRename:(NSString *)oldAlias {
     [self showToast:[NSString stringWithFormat:StrFmtVarRenamed, oldAlias] kind:0];
 }
@@ -260,7 +260,7 @@ static NSString *GlobalEnvName(void) { return @(core::kGlobalEnvName); }
     NSWindow *win = _grid.window;
     if (!win) return;
     NSView *cv = win.contentView;
-    // L4: cap the toast stack — drop any existing toast before adding a new one (rapid alias renames must
+    // Cap the toast stack — drop any existing toast before adding a new one (rapid alias renames must
     // not pile up dozens of overlapping subviews).
     for (NSView *sub in [cv.subviews copy])
         if ([sub isKindOfClass:[OS9Toast class]]) [sub removeFromSuperview];

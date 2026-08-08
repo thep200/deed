@@ -1,6 +1,4 @@
-// DeedConfig — UI configuration. Values come from .env (repo root) but are EMBEDDED into
-// the binary at build time (compile-time constant), so the app does NOT need a .env at runtime.
-// To change config: edit .env and rebuild. Lines are KEY=VALUE; blank lines and '#' are ignored.
+// .env values are EMBEDDED at build time — no .env needed at runtime; edit .env + rebuild to change.
 #import <Cocoa/Cocoa.h>
 
 @interface DeedConfig : NSObject

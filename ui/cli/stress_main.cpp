@@ -1,8 +1,3 @@
-// ui/cli/stress_main.cpp — target `deed_stress` (STRESS_TEST.md §4).
-// Deterministic (seeded) loop mixing Core operations: collection CRUD, load/release,
-// import cURL/grpcurl (including garbage), resolve {{var}}, ResponseCache put/get/remove with cap
-// checks, ThreadPool flood. Each iteration logs RAM (phys_footprint) + cache size to CSV.
-//
 // Run under ASan / TSan / `leaks` (see scripts/stress.sh) to catch UAF / race / RAM leak.
 // Built ONLY when -DDEED_BUILD_STRESS=ON (not shipped in release).
 #include <atomic>
@@ -254,8 +249,7 @@ int main(int argc, char** argv) {
                 }
             }
         } catch (const std::exception& e) {
-            // Data-driven errors (e.g. duplicate rename) are acceptable — MUST NOT crash/leak.
-            // Sanitizer/leaks will catch the real problems; here we just acknowledge it.
+            // Data-driven errors (e.g. duplicate rename) are acceptable — must not crash/leak; sanitizers catch real problems.
         }
 
         logRow(iter, opName, false);
